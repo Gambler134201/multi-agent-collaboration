@@ -1,0 +1,14 @@
+# Direct Python dependencies of the workbench service, worker and MCP server.
+# Pinned to the versions this build was actually verified with on Windows.
+#
+# Not listed here on purpose:
+#   - DSH and Pi: the user's own applications, never bundled or installed here.
+#   - Aider: an optional historical path that is not verified as a first-release
+#     path, so it is not part of the core install.
+# tiktoken is only used as a fallback tokenizer (token_meter.py); the workbench
+# still starts without it, but the pinned version is what was verified.
+anyio==4.12.1
+mcp==1.30.0
+psutil==7.2.2
+tiktoken==0.12.0
+PyYAML==6.0.3

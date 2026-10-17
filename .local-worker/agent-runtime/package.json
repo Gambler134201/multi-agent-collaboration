@@ -1,0 +1,7 @@
+{
+  "name": "model-desk-agent-runtime",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "dependencies": { "acpx": "0.19.5" }
+}

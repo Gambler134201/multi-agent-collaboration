@@ -1,0 +1,760 @@
+{
+  "schema": 1,
+  "note": "只读验收档案。命令是数据，工作流助手只打印、从不执行，也不记录验收结论。命令默认在 .local-worker 目录下运行；argv 数组不经 shell，避免解释注入的字符串。worker_tests 是执行器自测（声明），independent_commands 才是独立验收候选。",
+  "fallback_profile": "general",
+  "profiles": [
+    {
+      "id": "execution-recovery",
+      "title": "执行故障与显式恢复",
+      "subsystem": "execution/recovery",
+      "match": {
+        "files": [
+          "recovery_retry.py",
+          "thinking_config.py",
+          "dsh_worker.py",
+          "budget_relay.py",
+          "panel_server.py"
+        ],
+        "keywords": [
+          "recovery_pending",
+          "安全重试",
+          "故障恢复"
+        ]
+      },
+      "worker_tests": [
+        {
+          "purpose": "恢复、探测、重试与重复执行边界",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_recovery_reliability.py"
+          ]
+        }
+      ],
+      "independent_commands": [
+        {
+          "purpose": "恢复、探测、重试与重复执行边界",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_recovery_reliability.py"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "涉及费用不明或流中断时，复核不重放并补充账本/结算检查。",
+        "涉及恢复入队与阶段时，补充同项目身份、并发、取消、依赖交接检查。",
+        "涉及插件恢复入口时，补充 test_recovery_mcp_route.py 与项目视图检查。"
+      ]
+    },
+    {
+      "id": "routing-budgets",
+      "title": "路由、失败分类与预算/费用",
+      "subsystem": "routing/budgets",
+      "match": {
+        "files": [
+          "model_router.py",
+          "failure_classification.py",
+          "budget_relay.py",
+          "token_meter.py",
+          "model_capabilities.py",
+          "preset_runtime.py",
+          "deepseek_billing.py",
+          "model_registry.py"
+        ],
+        "keywords": [
+          "路由",
+          "routing",
+          "rework_risk",
+          "返工风险",
+          "预算",
+          "budget",
+          "费用",
+          "cost",
+          "token",
+          "价格",
+          "price",
+          "配额",
+          "quota"
+        ]
+      },
+      "worker_tests": [
+        {
+          "purpose": "路由与返工风险自测",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_router.py"
+          ]
+        }
+      ],
+      "independent_commands": [
+        {
+          "purpose": "最小独立：路由/返工风险回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_router.py"
+          ]
+        },
+        {
+          "purpose": "最小独立：失败归因回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_failure_classification.py"
+          ]
+        },
+        {
+          "purpose": "预算/结算与用量回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_billing.py"
+          ]
+        },
+        {
+          "purpose": "token 计量回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_token_meter.py"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "改动触及金额/次数上限、付费回退、未知价格或余额分支，需加跑 test_presets.py",
+        "样本 <5 或含系统/取消故障时，不得据此宣称质量或节省结论",
+        "改动路由选择本身时，需人工确认未静默更换模型或放宽授权"
+      ]
+    },
+    {
+      "id": "delegation-review",
+      "title": "委派与独立验收",
+      "subsystem": "delegation/review",
+      "match": {
+        "files": [
+          "delegation_policy.py",
+          "review_task.py"
+        ],
+        "keywords": [
+          "委派",
+          "delegation",
+          "验收",
+          "acceptance",
+          "review",
+          "整改",
+          "rework",
+          "final-accept"
+        ]
+      },
+      "worker_tests": [
+        {
+          "purpose": "委派/验收自测（声明，不是验收证据）",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_delegation_policy.py"
+          ]
+        }
+      ],
+      "independent_commands": [
+        {
+          "purpose": "最小独立：委派/验收状态机",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_delegation_policy.py"
+          ]
+        },
+        {
+          "purpose": "验收数组与最终验收不字符串化",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_workflow.py"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "改动验收证据来源或独立/自报边界时，需逐条确认执行器自报仍不能通过",
+        "涉及 final-accept 或整改计数时，需确认主脑接管保留原失败且不重置次数"
+      ]
+    },
+    {
+      "id": "stage-handover",
+      "title": "目标阶段与成果交接",
+      "subsystem": "stage/handover",
+      "match": {
+        "files": [
+          "stage_store.py",
+          "task_handover.py"
+        ],
+        "keywords": [
+          "阶段",
+          "stage",
+          "目标",
+          "goal",
+          "交接",
+          "handover",
+          "依赖",
+          "dependency",
+          "stale",
+          "哈希",
+          "hash"
+        ]
+      },
+      "worker_tests": [
+        {
+          "purpose": "阶段/交接自测（声明）",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_stage_workflow.py"
+          ]
+        }
+      ],
+      "independent_commands": [
+        {
+          "purpose": "最小独立：阶段状态、依赖、交接校验",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_stage_workflow.py"
+          ]
+        },
+        {
+          "purpose": "任务历史/记录回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_task_history.py"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "改动哈希或身份校验时，必须验证失效/缺失/跨项目/跨目标引用仍被拒绝",
+        "改动阶段存储 schema 时，需验证旧库前向迁移与重启恢复"
+      ]
+    },
+    {
+      "id": "plugin-binding",
+      "title": "插件/原生入口的项目绑定",
+      "subsystem": "plugin binding",
+      "match": {
+        "files": [
+          "codex_mcp_server.py",
+          "project_scope.py",
+          "project_storage.py",
+          "project_views.py"
+        ],
+        "keywords": [
+          "插件",
+          "plugin",
+          "绑定",
+          "binding",
+          "thread",
+          "roots",
+          "项目范围",
+          "project scope",
+          "隔离",
+          "isolation"
+        ]
+      },
+      "worker_tests": [
+        {
+          "purpose": "绑定契约自测（声明）",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_plugin_project_binding.py"
+          ]
+        }
+      ],
+      "independent_commands": [
+        {
+          "purpose": "最小独立：原生入口项目绑定契约",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_plugin_project_binding.py"
+          ]
+        },
+        {
+          "purpose": "项目范围身份比较",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_project_scope.py"
+          ]
+        },
+        {
+          "purpose": "项目存储归属/迁移回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_project_storage.py"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "涉及线程/roots/工作区回退时，需确认不把 cwd 或最近项目当作绑定依据",
+        "若还改动 Node 侧协议，需加跑 test_plugin_project_binding.mjs（不在此工具内自动执行）"
+      ]
+    },
+    {
+      "id": "panel-binding",
+      "title": "面板前端与原生桥接绑定",
+      "subsystem": "panel/binding",
+      "match": {
+        "files": [
+          "panel/codex-bridge.js",
+          "panel/app.js",
+          "panel/index.html",
+          "panel/style.css",
+          "panel_server.py"
+        ],
+        "keywords": [
+          "面板",
+          "panel",
+          "桥接",
+          "bridge",
+          "codex-bridge",
+          "前端",
+          "frontend",
+          "apps bridge"
+        ]
+      },
+      "worker_tests": [
+        {
+          "purpose": "前端桥接自测（声明，不是验收证据）",
+          "argv": [
+            "node",
+            "tests/test_plugin_project_binding.mjs"
+          ]
+        }
+      ],
+      "independent_commands": [
+        {
+          "purpose": "最小独立：codex-bridge 前端协议与项目上下文",
+          "argv": [
+            "node",
+            "tests/test_plugin_project_binding.mjs"
+          ]
+        },
+        {
+          "purpose": "MCP/agent 绑定回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_codex_mcp_server.py"
+          ]
+        },
+        {
+          "purpose": "浏览器内桥接契约（需要本机 Edge/Playwright 与运行中的面板，人工确认后执行）",
+          "argv": [
+            "node",
+            "tests/check_codex_bridge.cjs"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "改动 panel/codex-bridge.js 时，必须先跑 Node 侧 test_plugin_project_binding.mjs，再人工确认原生入口可见性",
+        "check_codex_bridge.cjs 依赖运行中的面板与浏览器运行时，不能当作无环境依赖的自动检查"
+      ]
+    },
+    {
+      "id": "completion-notifications",
+      "title": "后台完成监听与单次唤醒",
+      "subsystem": "completion/notification",
+      "match": {
+        "files": [
+          "completion_wait.py",
+          "desktop_notify.py"
+        ],
+        "keywords": [
+          "notify-on-completion",
+          "后台完成通知"
+        ]
+      },
+      "worker_tests": [
+        {
+          "purpose": "后台通知、项目/聊天绑定、单次投递与真实隐藏进程（模拟宿主）",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_completion_*.py"
+          ]
+        }
+      ],
+      "independent_commands": [
+        {
+          "purpose": "后台通知、项目/聊天绑定、单次投递与真实隐藏进程（模拟宿主）",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_completion_*.py"
+          ]
+        },
+        {
+          "purpose": "等待、验收与未知状态的界面提示",
+          "argv": [
+            "node",
+            "tests/test_completion_status.mjs"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "生命周期或原生桥接改动时，显式设置 MODEL_DESK_LONG_WAIT_TEST=1 运行 test_completion_process.py，真实模型与真实宿主回归调用必须为零。",
+        "原聊天单次实测不等于宿主崩溃后的必达且恰好一次；结果未知不自动重发。",
+        "保持原项目/聊天/任务批次绑定、独立验收、任务总时限默认不限，不重派或取消执行任务。"
+      ]
+    },
+    {
+      "id": "waiter",
+      "title": "集中等待与派发回执",
+      "subsystem": "waiter",
+      "match": {
+        "files": [
+          "dispatch_task.py"
+        ],
+        "keywords": [
+          "等待",
+          "wait",
+          "wait-task",
+          "progress",
+          "派发",
+          "dispatch",
+          "超时",
+          "timeout",
+          "安静",
+          "quiet"
+        ]
+      },
+      "worker_tests": [
+        {
+          "purpose": "等待行为自测（声明）",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_dispatch_wait.py"
+          ]
+        }
+      ],
+      "independent_commands": [
+        {
+          "purpose": "最小独立：等待/附着/不重派",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_dispatch_wait.py"
+          ]
+        },
+        {
+          "purpose": "工作流可靠性回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_workflow_reliability.py"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "改动等待循环时，确认不重复派发、不伪造失败、timeout=0 仍为不限时",
+        "改动输出字段时，确认 --progress 仍为显式 opt-in 且默认安静"
+      ]
+    },
+    {
+      "id": "integration",
+      "title": "跨子系统集成检查（风险扩大时加入）",
+      "subsystem": "integration",
+      "match": {},
+      "worker_tests": [],
+      "independent_commands": [
+        {
+          "purpose": "扩大：完整工作流回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_workflow*.py"
+          ]
+        },
+        {
+          "purpose": "扩大：项目存储与视图",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_project_*.py"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "多子系统改动或共享持久层改动时，需人工决定是否加跑全量套件",
+        "全量命令：venv/Scripts/python.exe -W ignore::ResourceWarning -m unittest discover -s tests -t tests -p \"test_*.py\""
+      ]
+    },
+    {
+      "id": "general",
+      "title": "通用回退（文件范围未知时）",
+      "subsystem": "general",
+      "match": {},
+      "worker_tests": [],
+      "independent_commands": [
+        {
+          "purpose": "保守回退：全量回归",
+          "argv": [
+            "venv/Scripts/python.exe",
+            "-W",
+            "ignore::ResourceWarning",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-t",
+            "tests",
+            "-p",
+            "test_*.py"
+          ]
+        }
+      ],
+      "risk_triggers": [
+        "文件范围未知：先确认改动文件，再缩小到对应子系统的最小独立命令",
+        "只读/无 shell 文本：命令必须由人/GPT 显式运行，本工具不执行"
+      ]
+    }
+  ],
+  "triggers": [
+    {
+      "id": "multi-subsystem",
+      "when_min_profiles": 2,
+      "add_profile": "integration",
+      "reason": "风险扩大：同时命中多个子系统，加入跨子系统集成检查"
+    }
+  ]
+}

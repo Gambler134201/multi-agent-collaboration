@@ -1,0 +1,6 @@
+# Keep dependency install scripts denied. The locked esbuild package supplies
+# the Windows executable through its optional platform package; it needs no
+# postinstall build here. Unknown build scripts must continue to fail closed.
+allowBuilds:
+  'esbuild@0.28.2': false
+strictDepBuilds: true

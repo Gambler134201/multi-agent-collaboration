@@ -1,0 +1,47 @@
+# Local configuration, secrets and generated workflow/account data
+.env
+.env.*
+!.env.example
+.npmrc
+.pypirc
+**/.model-desk/
+.local-worker/models.json
+.local-worker/settings.json
+.local-worker/workflow.json
+.local-worker/budget-ledger.json
+.local-worker/project-index.json
+.local-worker/project-bookmarks.json
+.local-worker/panel-runtime.json
+.local-worker/*.lock
+.local-worker/*.db*
+.local-worker/runs/
+.local-worker/tasks/
+.local-worker/backups/
+.local-worker/project-migration-backups/
+.local-worker/dsh-home/
+.local-worker/workflow-guides-runtime/
+.local-worker/agent-runtime/state/
+.local-worker/agent-runtime/node_modules/
+.codex/
+
+# Environments, caches and generated test evidence
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+.pytest_cache/
+.local-worker/tests/*-report.json
+.local-worker/tests/*.png
+.local-worker/tests/native-codex-probe/
+
+# Local development and export artifacts
+.idea/
+.vscode/
+dist/
+build/
+*.zip
+Thumbs.db
+.DS_Store

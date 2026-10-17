@@ -1,0 +1,9 @@
+# Model Desk project
+
+Use the global Optional Model Desk collaboration rules. This file adds project-specific context; operation guides live in `.local-worker/workflow-guides/`. If global rules are unavailable, read `.local-worker/workflow-guides/core.md` and resolve @ROOT@ to this directory before working. Check the workflow switch at the start of every turn.
+
+This repository contains the local workbench service and global `model_desk` MCP server. UI resource: `ui://model-desk/workbench-v1`; `panel_request` proxies whitelisted API calls and keeps the session token inside the MCP process. Importing/listing MCP tools must not start the panel. Native UI visibility requires human verification. `.codex/environments/environment.toml` defines this project's launcher action; never initialize Git to enable it.
+
+Keep project/thread binding, per-project records, independent acceptance and hash-checked stage handovers intact. Model/account/budget settings stay global. Exclude `.model-desk` from default searches. Preserve user-disabled money/call limits and unlimited task runtime. Never expose keys or change model presets as an incidental optimization.
+
+Before editing a subsystem, select relevant checks from `.local-worker/tests/`; use isolated temporary records and mocked providers, never live inference for regression tests. Detailed user instructions are in `README.md`. Historical instruction backups under `.local-worker/tasks/workflow-optimization-before/` are reference snapshots, not additional active instructions.
