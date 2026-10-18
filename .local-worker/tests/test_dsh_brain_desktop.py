@@ -34,7 +34,7 @@ class DesktopTests(unittest.TestCase):
         self.base = Path(self.temp.name).resolve()
         self.root = self.base / 'workbench'
         (self.root / '.local-worker').mkdir(parents=True)
-        for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py', 'workflow_settings.py'):
+        for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py', 'workflow_settings.py', 'host_balance.py'):
             (self.root / '.local-worker' / name).write_bytes(b'# temporary fixture\n')
         self.home = self.base / 'dsh-home'
         self.profile = self.home / 'profiles' / 'desktop'
@@ -104,10 +104,12 @@ class DesktopTests(unittest.TestCase):
         with tarfile.open(self.folder / 'plugin.tgz') as archive:
             manifest = json.loads(archive.extractfile('package/package.json').read())
             client = archive.extractfile('package/client.mjs').read()
-        self.assertEqual(manifest['version'], '0.2.0')
+        self.assertEqual(manifest['version'], '0.2.1')
         self.assertEqual(set(manifest['files']), set(setup.FILES) - {'package.json'})
         self.assertEqual(manifest['exports']['./client'], './client.mjs')
+        self.assertEqual(manifest['exports']['./account'], './account.cjs')
         self.assertIn('client.mjs', manifest['files'])
+        self.assertIn('account.cjs', manifest['files'])
         self.assertEqual(manifest['dsh']['client']['platform'], 'web')
         self.assertEqual(manifest['dsh']['client']['immediately'], True)
         self.assertIn('@deepseek-ai/dsh-client-ui-sidebar-right', manifest['dsh']['client']['inject'])
@@ -496,6 +498,7 @@ class DesktopTests(unittest.TestCase):
         context = setup.brain_context.build_context(str(self.root), 'dsh-setup', 'desktop-installer',
                 session_binding='unknown', launcher='dsh-desktop-check')
         transport.call.return_value = {'context': context.public()}
+        transport._request.return_value = (200, {'schema': 1, 'source': 'dsh-account-controller', 'refresh': 'snapshot-only'})
         with mock.patch.object(setup.brain_transport, 'BrainTransport', return_value=transport):
             result = ORIGINAL_CONTROLLER_CHECK({'workbench': str(self.root), 'panel_url': 'http://127.0.0.1:8765'})
         self.assertFalse(result['task_mutation_authority'])
@@ -519,10 +522,12 @@ class DesktopTests(unittest.TestCase):
             if route == '/api/brain/call':
                 self.assertEqual(body, {'operation': 'describe', 'payload': {}})
                 return 200, {'context': context.public()}
+            if route == '/api/host-account':
+                return 200, {'schema': 1, 'source': 'dsh-account-controller', 'refresh': 'snapshot-only'}
             raise AssertionError('unexpected route')
         with mock.patch.object(setup.brain_transport.BrainTransport, '_request', side_effect=request):
             result = ORIGINAL_CONTROLLER_CHECK({'workbench': str(self.root), 'panel_url': 'http://127.0.0.1:8765'})
-        self.assertEqual(calls, ['/api/session', '/api/brain/connect', '/api/brain/call'])
+        self.assertEqual(calls, ['/api/session', '/api/brain/connect', '/api/brain/call', '/api/host-account'])
         self.assertFalse(result['task_mutation_authority'])
         self.assertNotIn('fixture-', json.dumps(result))
 
@@ -531,6 +536,17 @@ class DesktopTests(unittest.TestCase):
         transport.call.return_value = {'context': {'owner': 'bad shape', 'session': {}, 'mutations_allowed': True}}
         with mock.patch.object(setup.brain_transport, 'BrainTransport', return_value=transport):
             with self.assertRaises(setup.SetupError):
+                ORIGINAL_CONTROLLER_CHECK({'workbench': str(self.root), 'panel_url': 'http://127.0.0.1:8765'})
+        transport.disconnect.assert_called_once()
+
+    def test_old_controller_without_account_endpoint_is_not_install_ready(self):
+        context = setup.brain_context.build_context(str(self.root), 'dsh-setup', 'desktop-installer',
+            session_binding='unknown', launcher='dsh-desktop-check')
+        transport = mock.Mock()
+        transport.call.return_value = {'context': context.public()}
+        transport._request.return_value = (404, {})
+        with mock.patch.object(setup.brain_transport, 'BrainTransport', return_value=transport):
+            with self.assertRaisesRegex(setup.SetupError, '余额接口'):
                 ORIGINAL_CONTROLLER_CHECK({'workbench': str(self.root), 'panel_url': 'http://127.0.0.1:8765'})
         transport.disconnect.assert_called_once()
 

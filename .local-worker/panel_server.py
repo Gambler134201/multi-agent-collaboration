@@ -29,6 +29,7 @@ import budget_relay
 import recovery_retry
 import thinking_config
 import codex_usage
+import host_balance
 import delegation_policy
 import stage_store
 import task_handover
@@ -2130,6 +2131,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "execution_agents": execution_engines.public_agents(),
                                       'execution_activity':execution_activity(),
                                       'workflow': {**settings, 'daily': public_daily_cost(settings)}, 'codex_usage': codex_usage.usage_state(),
+                                      'host_account': host_balance.state(),
                                       'delegation': delegation_policy.aggregate(),
                                       'executor_capabilities': subagent_capabilities(),
                                       'stages': {'stats': stage_store.stats(), 'recovery': stage_store.pending_recovery()}})
@@ -2169,6 +2171,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({**settings, 'daily': public_daily_cost(settings)})
             if path == '/api/codex-usage':
                 return self.send_json(codex_usage.usage_state())
+            if path == '/api/host-account':
+                return self.send_json(host_balance.state())
             if path.startswith("/api/tasks/"):
                 parts = path.split("/")
                 run = registry.task_dir(parts[3], project_views.explicit_project(self.project_view))
@@ -2270,6 +2274,16 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("请求大小不正确")
             body = json.loads(self.rfile.read(length))
             project_views.check_request(path,self.project_view,body)
+            if path == '/api/host-account/snapshot':
+                # The optional DSH main-brain plugin pushes one display-only
+                # public snapshot here through the existing panel session token.
+                # This is not a model tool, budget write or account credential
+                # route; the loopback/origin/CSRF guard above is unchanged.
+                try:
+                    host_balance.record(body)
+                except host_balance.SnapshotError as error:
+                    raise ValueError(str(error)) from None
+                return self.send_json({'ok': True})
             if path == '/api/brain/connect':
                 import brain_gateway
                 return self.send_json(brain_gateway.register_connection(body), 201)

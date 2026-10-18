@@ -300,6 +300,49 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(self.submitted, [])
 
 
+    def test_paid_scope_keeps_deepseek_and_explains_out_of_scope_default(self):
+        data = registry.read_json(registry.REGISTRY)
+        data['models'].append({
+            'id': 'ds', 'name': 'DeepSeek', 'provider': 'deepseek',
+            'model': 'deepseek-v4-flash', 'api_base': 'https://example.test/v1',
+            'secret': 'fixture-secret', 'enabled': True, 'api_key_set': True,
+            'max_input_tokens': 65536, 'max_output_tokens': 8192,
+            'preferred_tasks': ['analysis'], 'max_task_complexity': 'complex',
+            'pricing_cny': {'cache_hit_input': '0.1', 'cache_miss_input': '1', 'output': '2'},
+        })
+        registry.write_json(registry.REGISTRY, data)
+        registry.write_json(registry.HERE / 'workflow.json', {
+            'enabled': True, 'paid_allowed': True, 'model_scope': 'paid_only',
+            'enforce_paid_budget': False,
+        })
+        cap = self.capability()
+        result = brain_gateway.handle('candidates', {}, cap)
+        rows = {row['model_id']: row for row in result['models']}
+        self.assertFalse(rows['mock']['scope_ok'])
+        self.assertTrue(rows['ds']['scope_ok'])
+        self.assertTrue(rows['ds']['selectable'])
+        self.assertIn('ds', result['selectable_model_ids'])
+        self.assertIn('ds', result['in_scope_model_ids'])
+        self.assertFalse(result['default_model_scope_ok'])
+        self.assertIn('手动默认模型', result['default_model_note'])
+        self.assertIn('不按同名或同 provider', result['note'])
+
+        with self.assertRaises(brain_gateway.BrokerError) as caught:
+            self.dispatch(cap)
+        message = str(caught.exception)
+        self.assertIn('手动默认模型', message)
+        self.assertIn('ds', message)
+        self.assertIn('不会自动更换模型', message)
+        self.assertNotIn('没有可用模型', message)
+        self.assertEqual(self.submitted, [])
+
+        preview = brain_gateway.handle('route_preview', {
+            'model_id': 'ds', 'prompt': 'Preview only', 'kind': 'chat',
+        }, cap)
+        self.assertEqual(preview['preview']['model_id'], 'ds')
+        self.assertEqual(preview['preview']['excluded'], [])
+        self.assertEqual(preview['preview']['model_scope']['value'], 'paid_only')
+
     def test_trusted_dispatch_uses_local_models_saved_pi_agent(self):
         import pi_worker
         data = registry.read_json(registry.REGISTRY)

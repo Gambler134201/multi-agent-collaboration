@@ -26,7 +26,7 @@ import dsh_brain_plugin
 
 PACKAGE = 'model-desk-dsh-brain'
 ENV_NAME = 'MODEL_DESK_DSH_BRAIN_CONFIG'
-FILES = ('index.cjs', 'client.mjs', 'package.json', 'cordis.patch.yml', 'README.md', 'LICENSE')
+FILES = ('index.cjs', 'account.cjs', 'client.mjs', 'package.json', 'cordis.patch.yml', 'README.md', 'LICENSE')
 CLIENT_ORIGIN_MARKER = b'"__MODEL_DESK_PANEL_ORIGIN__"'
 CLI_RELATIVE = 'dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js'
 SUPPORTED_DSH = '0.2.1-rc.2'
@@ -156,16 +156,22 @@ def controller_check(plan):
                 or session.get('binding') != 'unknown'
                 or public.get('mutations_allowed') is not False):
             raise SetupError('主脑控制器返回了不匹配的安装预检身份')
+        status, account = transport._request('GET', '/api/host-account')
+        if (status != 200 or not isinstance(account, dict) or account.get('schema') != 1
+                or account.get('source') != 'dsh-account-controller'
+                or account.get('refresh') != 'snapshot-only'):
+            raise SetupError('目标工作台尚未提供匹配的 DSH 余额接口；请先升级工作台')
     except brain_transport.TransportError:
         raise SetupError('目标工作台没有可用的新主脑接口；先升级/启动匹配的工作台，未安装插件') from None
     finally:
         transport.disconnect()
-    return {'brain_interface': True, 'task_mutation_authority': False}
+    return {'brain_interface': True, 'host_account_interface': True, 'task_mutation_authority': False}
 
 
 def installation_files(root):
     return {name: digest((Path(root) / '.local-worker' / name).read_bytes()) for name in (
-        'brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py', 'workflow_settings.py')}
+        'brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py',
+        'workflow_settings.py', 'host_balance.py')}
 
 
 def client_bundle(data, panel_url):

@@ -312,6 +312,7 @@ def _candidates(context, payload):
         return ready[engine]
 
     rows = []
+    paid_allowed = bool(settings.get('paid_allowed'))
     for model in data.get('models') or []:
         try:
             engine, source = execution_engines.resolution({}, settings, model=model)
@@ -322,11 +323,20 @@ def _candidates(context, payload):
             agent = agent_ready(engine) if engine in execution_engines.AGENTS else {'ready': False, 'message': '不是 Agent 执行器'}
         paid = model.get('provider') != 'local'
         scope_ok = model_scope.matches(scope, paid)
+        enabled = bool(model.get('enabled', True))
         default_agent = model_agent_defaults.describe(model, settings)
+        selectable = bool(enabled and scope_ok and agent.get('ready'))
+        reasons = []
+        if not enabled:
+            reasons.append('模型已停用')
+        if not scope_ok:
+            reasons.append(model_scope.reason(scope, paid))
+        if not agent.get('ready'):
+            reasons.append(_text(agent.get('message'), 300) or '执行 Agent 未就绪')
         rows.append({
             'model_id': model.get('id'), 'name': model.get('name'),
             'provider': model.get('provider'), 'model': model.get('model'),
-            'paid': paid, 'enabled': bool(model.get('enabled', True)),
+            'paid': paid, 'enabled': enabled,
             'api_key_set': bool(model.get('api_key_set')),
             'engine': engine, 'agent_source': source,
             'agent_label': execution_engines.LABELS.get(engine, engine),
@@ -334,6 +344,15 @@ def _candidates(context, payload):
             'agent_message': _text(agent.get('message'), 300),
             'default_agent': default_agent,
             'scope_ok': scope_ok,
+            # Selectability is about the model/Agent/scope, not about provider
+            # or name deduplication.  paid_allowed is a separate authorization
+            # and must not make an in-scope model look absent.
+            'selectable': selectable,
+            'selectable_reason': '；'.join(reasons),
+            'paid_allowed': paid_allowed,
+            'dispatch_ready': bool(selectable and (not paid or paid_allowed)),
+            'authorization_note': ('付费执行未开启；这是独立授权，不是范围或候选排除。'
+                                   if paid and not paid_allowed else ''),
             'max_input_tokens': model.get('max_input_tokens'),
             'max_output_tokens': model.get('max_output_tokens'),
             'model_version': model.get('model_version') or '',
@@ -343,10 +362,38 @@ def _candidates(context, payload):
             'cost_preference': model.get('cost_preference'),
             'identity_state': 'declared',
         })
-    return {'models': rows, 'default_model': data.get('default_model'),
+    default_model = data.get('default_model')
+    default_row = next((row for row in rows if row['model_id'] == default_model), None)
+    in_scope_ids = [row['model_id'] for row in rows if row['scope_ok']]
+    selectable_ids = [row['model_id'] for row in rows if row['selectable']]
+    dispatch_ready_ids = [row['model_id'] for row in rows if row['dispatch_ready']]
+    if not default_model:
+        default_note = '尚未配置手动默认模型；省略 model_id 时无法派发。'
+    elif default_row is None:
+        default_note = '手动默认模型不在已配置模型列表中；省略 model_id 时不会自动换模型。'
+    elif not default_row['scope_ok']:
+        hint = ('；范围内已配置候选：' + '、'.join(in_scope_ids)) if in_scope_ids else '；范围内当前没有已配置候选'
+        default_note = ('手动默认模型 %s 在执行模型范围“%s”之外；省略 model_id 时不会自动换模型。'
+                        '请显式提供范围内的 model_id（见 selectable_model_ids）或调整默认/范围%s。'
+                        % (default_model, model_scope.LABELS[scope], hint))
+    elif not default_row['selectable']:
+        default_note = ('手动默认模型 %s 在范围内，但当前不可选择：%s'
+                        % (default_model, default_row['selectable_reason'] or '状态未就绪'))
+    else:
+        default_note = '手动默认模型在范围内；省略 model_id 时仍使用该默认模型。'
+    return {'models': rows, 'default_model': default_model,
+            'default_model_scope_ok': bool(default_row and default_row['scope_ok']),
+            'default_model_note': default_note,
+            'paid_allowed': paid_allowed,
+            'in_scope_model_ids': in_scope_ids,
+            'selectable_model_ids': selectable_ids,
+            'dispatch_ready_model_ids': dispatch_ready_ids,
             'execution_agent': settings.get('execution_agent'),
             'scope': model_scope.describe(scope),
-            'note': '候选模型按已保存默认执行 Agent 解析；这里不启动服务、不调用模型、不派发。'}
+            'note': ('候选按已保存默认执行 Agent 解析；这里不启动服务、不调用模型、不派发。'
+                     '不按同名或同 provider 去重/排除，subagent deny 不影响普通候选；'
+                     '默认模型在范围外不等于范围内没有候选。历史提示无法复现时保留未知，'
+                     '请以真实候选和 brain_route_preview 为准。')}
 
 
 def _route_body(context, payload, require_model):
@@ -373,6 +420,25 @@ def _route_body(context, payload, require_model):
     return body, acceptance
 
 
+def _default_scope_error(models, settings, default_model):
+    """Explain an out-of-scope manual default without claiming the scope is empty."""
+    import model_scope
+    scope = model_scope.normalize(settings.get('model_scope', model_scope.DEFAULT_SCOPE))
+    row = next((model for model in models if model.get('id') == default_model), None)
+    if row is None:
+        return None
+    if model_scope.matches(scope, row.get('provider') != 'local'):
+        return None
+    ids = [model.get('id') for model in models
+           if model.get('enabled', True)
+           and model_scope.matches(scope, model.get('provider') != 'local')]
+    hint = ('；范围内已配置候选：' + '、'.join(ids)) if ids else '；范围内当前没有已配置候选'
+    return ('省略 model_id 时使用手动默认模型 %s，但它在执行模型范围“%s”之外；不会自动更换模型。'
+            '请显式提供范围内的 model_id（候选见 brain_candidates/selectable_model_ids）'
+            '或调整手动默认模型/执行模型范围%s。'
+            % (default_model, model_scope.LABELS[scope], hint))
+
+
 def _choose_route(context, body):
     import budget_relay
     import deepseek_billing
@@ -382,9 +448,13 @@ def _choose_route(context, body):
     settings = _settings()
     data = deepseek_billing.enrich_models(registry.list_models())
     if not body.get('model_id'):
-        body = {**body, 'model_id': data.get('default_model')}
-        if not body['model_id']:
-            raise BrokerError('还没有配置默认执行模型；请在面板新增模型后重试')
+        default_model = data.get('default_model')
+        if not default_model:
+            raise BrokerError('尚未配置手动默认模型；请显式提供 model_id（可先调用 brain_candidates 查看候选）或设置默认模型')
+        scope_error = _default_scope_error(data.get('models') or [], settings, default_model)
+        if scope_error:
+            raise BrokerError(scope_error)
+        body = {**body, 'model_id': default_model}
     daily = budget_relay.daily_state(settings)
     return model_router.choose(body, data['models'], settings, panel.public_tasks(),
                                daily['remaining_cny'], daily_uncertain=daily.get('unresolved', False))

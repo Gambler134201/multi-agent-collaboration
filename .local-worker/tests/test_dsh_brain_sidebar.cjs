@@ -122,7 +122,7 @@ function bodyProps(definition, sessionId, snapshot, calls, throws = false) {
 test('package manifest exposes the client half beside the Host bundle', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(PACKAGE, 'package.json'), 'utf8'));
   assert.equal(manifest.name, 'model-desk-dsh-brain');
-  assert.equal(manifest.version, '0.2.0');
+  assert.equal(manifest.version, '0.2.1');
   assert.equal(manifest.exports['./client'], './client.mjs');
   assert.equal(manifest.exports['.'], './index.cjs');
   assert.ok(manifest.files.includes('client.mjs'));
@@ -200,10 +200,11 @@ test('only an absolute native session cwd becomes an encoded project URL', () =>
   assert.equal(target.status, 'ready');
   const parsed = new URL(target.url);
   assert.equal(parsed.origin, 'http://127.0.0.1:8765');
-  assert.deepEqual([...parsed.searchParams.keys()], ['project']);
+  assert.deepEqual([...parsed.searchParams.keys()], ['host', 'project']);
+  assert.equal(parsed.searchParams.get('host'), 'dsh');
   assert.equal(parsed.searchParams.get('project'), row.cwd);
   assert.match(target.url, /%5C/, 'backslashes are URL-encoded');
-  assert.equal(plugin._test.buildWorkbenchUrl(), 'http://127.0.0.1:8765/?view=unbound');
+  assert.equal(plugin._test.buildWorkbenchUrl(), 'http://127.0.0.1:8765/?host=dsh&view=unbound');
 
   for (const cwd of ['relative/path', 'C:relative', '', 'E:\\line\nbreak', undefined, null, 42]) {
     assert.equal(resolve({ cwd }, 'session-1', 'ready').status, 'unbound', String(cwd));
@@ -258,6 +259,7 @@ test('unknown identity stays unbound and offers an explicit unselected action', 
   const opened = new URL(calls[0][1].params.url);
   assert.equal(opened.searchParams.has('project'), false);
   assert.equal(opened.searchParams.get('view'), 'unbound', 'do not inherit a remembered project');
+  assert.equal(opened.searchParams.get('host'), 'dsh', 'the DSH display context is explicit');
   assert.equal(opened.origin, 'http://127.0.0.1:8765');
 });
 

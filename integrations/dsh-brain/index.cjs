@@ -20,6 +20,7 @@ const crypto = require('node:crypto');
 const { spawnSync, execFile } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { pathToFileURL, fileURLToPath } = require('node:url');
+const hostAccount = require('./account.cjs');
 
 const PLUGIN_NAME = 'model-desk-dsh-brain';
 const RULE_SECTION = 'model-desk-brain-rules';
@@ -565,6 +566,8 @@ function buildRules(config, identity) {
     '### 派发',
     `- 首次使用先调用 ${prefix}brain_connect；工作台未运行就明确报告“不可用”，不要自动启动服务，也不要伪造连接。`,
     `- 需要核对时先用 ${prefix}brain_candidates 和 ${prefix}brain_route_preview；不会调用模型。`,
+    '- 新任务选型以真实候选的 scope_ok、selectable_model_ids 与 default_model_note 为准；默认模型在范围外，不代表范围内没有模型。派发时明确填写已核对的 model_id，不能自行换模型或修改全局默认。',
+    '- 主脑和执行模型可以同名、同 provider，例如 DeepSeek 主脑派给独立 DeepSeek 执行会话；这不是执行器嵌套子代理，subagent deny 不排除普通执行候选。',
     `- 派发时使用稳定 request_id，并通过 ${prefix}brain_dispatch 快速取得原任务 ID。工具参数不能修改项目、角色、拥有者或会话。`,
     '- 同一 request_id 同内容会取回原任务，不同内容会被拒绝。结果未知或重复时保持原 request/task，不要换 ID 重发。',
     '- 当前插件尚未接通自动唤醒或后台续接。派发后不要承诺“完成会自动回来”，也不要周期性轮询主脑模型；需要时由用户或后续聊天轮次读取 status/delivery。',
@@ -989,6 +992,7 @@ function createInstance(ctx, config) {
     disposedDisposer: null,
     cleanupDisposer: null,
     modulePromise: null,
+    account: null,
     log: (level, message) => logWith(ctx, level, message),
   };
 
@@ -1001,6 +1005,18 @@ function createInstance(ctx, config) {
     state.disposed = true;
     state.disposePromise = (async () => {
       let teardownFailed = false;
+      if (state.account) {
+        // Account display is independent of MCP ownership.  Clearing it first
+        // makes the workbench mark the old amount unavailable even if an MCP
+        // shutdown below is not confirmed.
+        try {
+          await state.account.dispose();
+        } catch {
+          // The panel freshness limit still prevents an old amount from being
+          // rendered as current after the adapter is gone.
+        }
+        state.account = null;
+      }
       for (const binding of [...state.bindings.values()]) {
         try {
           await disposeBinding(binding);
@@ -1054,6 +1070,23 @@ function createInstance(ctx, config) {
       // Existing chats are bound too, so enabling the plugin in an open desktop
       // session does not require a new Agent. Concurrent created events dedupe.
       for (const agent of roots) await onCreated(state, { agent, source: 'plugin-load' });
+
+      // This reads only the official host account controller's public balance
+      // projection and pushes it to the already-running local workbench.  It
+      // never blocks startup, starts a service or wakes a model.
+      try {
+        state.account = hostAccount.createAccountAdapter({
+          ctx,
+          panelUrl: config.panelUrl,
+          log: state.log,
+        });
+        state.account.start().catch((error) => {
+          state.log('warn', `DSH 账户余额适配器未启动：${safeMessage(error)}`);
+        });
+      } catch (error) {
+        state.account = null;
+        state.log('warn', `DSH 账户余额适配器不可用：${safeMessage(error)}`);
+      }
     },
     dispose() {
       return disposeInstance(false);

@@ -18,7 +18,7 @@
     <p class="project-path" id="project-path-row" hidden><code id="project-view-path"></code></p>
     <span id="project-view-status" class="sr-only" role="status">尚未选择项目</span>
     <span id="project-storage-state" class="project-storage" role="status" hidden></span>
-    <small class="project-global-note">模型、余额、GPT 额度与每日预算总账全局共享</small>
+    <small class="project-global-note" id="project-global-note">模型、余额、GPT 额度与每日预算总账全局共享</small>
     <div class="project-menu" id="project-view-menu" role="menu" aria-label="切换项目" hidden>
       <p class="project-menu-heading">已知 / 最近项目</p>
       <div id="project-view-known" class="project-menu-list"></div>
@@ -28,7 +28,7 @@
     </div>
   </section>
   <section id="execution-activity" class="execution-activity" aria-label="全局执行状态" hidden></section>
-  <section class="usage-bar" aria-label="GPT Codex 额度"><div class="usage-heading"><strong title="当前 Codex 登录账号的共享额度，不是 API 余额或当前聊天的 token 数">GPT / Codex 额度</strong><span id="usage-status" class="subtle">正在读取…</span><button id="usage-refresh" class="text-button">刷新</button></div><div id="usage-windows" class="usage-windows"></div><p id="usage-error" class="field-hint" hidden></p></section>
+  <section id="usage-bar" class="usage-bar" aria-label="GPT Codex 额度"><div class="usage-heading"><strong id="usage-title" title="当前 Codex 登录账号的共享额度，不是 API 余额或当前聊天的 token 数">GPT / Codex 额度</strong><span id="usage-status" class="subtle">正在读取…</span><button id="usage-refresh" class="text-button">刷新</button></div><div id="usage-windows" class="usage-windows"></div><p id="usage-error" class="field-hint" hidden></p><p id="usage-source" class="field-hint usage-source" hidden></p></section>
   <section class="workflow-bar" aria-label="协作总开关"><div><label class="workflow-switch"><input type="checkbox" id="workflow-toggle" role="switch"><span>多 Agent 协作</span><strong id="workflow-mode">正在读取…</strong></label><p id="workflow-description">关闭时按 Codex 默认方式工作。</p></div><div class="workflow-budget"><span id="budget-summary"></span><span id="workflow-scope-summary" class="subtle" title="全局执行模型范围"></span><button class="button secondary" id="workflow-settings">模型范围与预算</button></div><div class="workflow-context"><span id="delegation-stats" hidden></span><span>默认：<strong id="default-name">正在读取…</strong></span><div class="agent-entry" id="model-agent-entry" role="group" aria-label="各模型的默认执行 Agent"><span class="agent-entry-title">模型默认执行 Agent</span><label>模型<select id="agent-entry-model" class="agent-entry-select" aria-label="要设置默认执行 Agent 的模型" title="选择任一已配置模型；只修改这一个模型"></select></label><label>执行 Agent<select id="agent-entry-agent" class="agent-entry-select" aria-label="该模型的默认执行 Agent" title="该模型新任务的默认执行 Agent；本次分派显式指定仍然优先，已有任务保持原 Agent"></select></label><button class="button secondary" id="agent-entry-save" type="button" title="只保存这个模型的默认执行 Agent，不修改模型连接、密钥、参数或全局设置">保存</button><span id="agent-entry-status" class="subtle" role="status">正在读取…</span></div><button class="button secondary" id="agent-settings-open" type="button">各执行 Agent 参数设置</button><span id="agent-state" class="subtle">正在读取执行器…</span><span id="delegation-summary" class="subtle"></span></div><p id="workflow-error" class="form-error" role="alert" hidden></p></section>
   <section class="goals-panel" id="goals-panel" aria-label="当前需求进度" hidden>
     <div class="goals-row">

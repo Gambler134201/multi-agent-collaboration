@@ -5,6 +5,7 @@ registry.  Only the executor submission is mocked; no model, provider or desktop
 notification is touched.
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import socket
@@ -13,12 +14,15 @@ import tempfile
 import threading
 import unittest
 from unittest import mock
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import brain_context
 import brain_gateway
 import brain_transport
 import delegation_policy as policy
+import host_balance
 import model_registry as registry
 import panel_server as panel
 import project_storage
@@ -81,6 +85,7 @@ class BrainHttpTests(unittest.TestCase):
             'preferred_tasks': [], 'max_task_complexity': 'simple',
         }]})
         brain_gateway._CAPABILITIES.clear()
+        host_balance._reset_for_tests()
         self.submitted = []
         self.patches = [
             mock.patch.object(panel.dsh_worker, 'availability',
@@ -106,6 +111,7 @@ class BrainHttpTests(unittest.TestCase):
         for patch in reversed(self.patches):
             patch.stop()
         brain_gateway._CAPABILITIES.clear()
+        host_balance._reset_for_tests()
         registry.HERE, registry.REGISTRY, registry.RUNS = self.saved
         self.tmp.cleanup()
 
@@ -201,6 +207,35 @@ class BrainHttpTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+    def test_host_account_snapshot_reuses_panel_session_token(self):
+        fetched = datetime.now(timezone.utc)
+        payload = {
+            'schema': 1, 'host': 'dsh', 'status': 'ready',
+            'source': 'dsh-account-controller', 'source_api': 'account.getBalance',
+            'fetched_at': fetched.isoformat().replace('+00:00', 'Z'),
+            'expires_at': (fetched + timedelta(minutes=5)).isoformat().replace('+00:00', 'Z'),
+            'wallets': [{'kind': 'normal', 'currency': 'CNY', 'balance': '12.34'}],
+            'error': '',
+        }
+        request = Request(
+            self.url + '/api/host-account/snapshot',
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with self.assertRaises(HTTPError) as unauthorized:
+            urlopen(request)
+        self.assertEqual(unauthorized.exception.code, 403)
+        request.add_header('X-Panel-Token', panel.TOKEN)
+        with urlopen(request) as response:
+            self.assertEqual(json.loads(response.read()), {'ok': True})
+        with urlopen(self.url + '/api/host-account') as response:
+            state = json.loads(response.read())
+        self.assertEqual(state['status'], 'ready')
+        self.assertEqual(state['source_label'], 'DSH 官方登录账户')
+        self.assertEqual(state['wallets'][0]['balance'], '12.34')
+        self.assertEqual(state['refresh'], 'snapshot-only')
 
     def test_base_url_is_strictly_loopback_and_path_free(self):
         for value in ('https://127.0.0.1:8765', 'http://example.com:8765',

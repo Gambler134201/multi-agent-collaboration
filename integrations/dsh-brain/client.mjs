@@ -7,6 +7,7 @@ window.__ModuleLoader__.load({
     const KIND = 'model-desk-workbench';
     const TITLE = '模型工作台';
     const DESCRIPTION = '按当前原生会话的项目打开本机模型工作台';
+    const HOST_CONTEXT = 'dsh';
     const FALLBACK_PANEL_ORIGIN = 'http://127.0.0.1:8765';
 
     // The desktop installer replaces this quoted marker while preparing the
@@ -40,6 +41,10 @@ window.__ModuleLoader__.load({
 
     function buildWorkbenchUrl(project) {
       const url = originUrl();
+      // Display-only host context: it tells the already-running workbench to
+      // render the official DSH login-account balance instead of the Codex/GPT
+      // quota. It is not an identity, capability or authorization credential.
+      url.searchParams.set('host', HOST_CONTEXT);
       if (project !== undefined) url.searchParams.set('project', project);
       else url.searchParams.set('view', 'unbound');
       return url.toString();
@@ -216,6 +221,7 @@ window.__ModuleLoader__.load({
         TYPE_ID,
         KIND,
         TITLE,
+        HOST_CONTEXT,
         PANEL_ORIGIN,
         isAbsoluteProjectPath,
         buildWorkbenchUrl,

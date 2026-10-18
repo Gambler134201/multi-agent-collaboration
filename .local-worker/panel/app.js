@@ -71,6 +71,11 @@ let historyLoading=false, historySubmitting=false,historyGeneration=0;
 let recordsGoals=[],recordsGoalsError='',recordsGoalsLoading=false,recordsGoalsGeneration=0;
 // Per-document context. Never inherit a different tab's last selected project.
 const viewQuery=new URLSearchParams(window.location.search);
+// The DSH native right-sidebar entry adds host=dsh as a display-only context.
+// It never authorizes a mutation, selects a project or proves an identity.
+const isDshHost=viewQuery.get('host')==='dsh';
+const hostName=()=>isDshHost?'DSH':'Codex';
+const mainBrainName=()=>isDshHost?'DSH 主脑':'GPT';
 let rememberedPanelView=null;
 // Session storage belongs to this HTTP panel tab, never a global last-project.
 // A new MCP entry without trustworthy context stays unbound and offers explicit recovery.
@@ -78,6 +83,11 @@ if(!window.modelDeskHost&&!viewQuery.has('project')&&!viewQuery.has('view')){
   try{const saved=JSON.parse(sessionStorage.getItem('model-desk.panel-view'));if(saved?.mode==='project'&&typeof saved.project==='string')rememberedPanelView=saved;}catch{}
 }
 let projectView=window.modelDeskInitialView|| (viewQuery.get('project')?{mode:'project',project:viewQuery.get('project')}:viewQuery.get('view')==='all'?{mode:'all',project:null}:rememberedPanelView||{mode:'unbound',project:null});
+if(isDshHost){
+  document.title='模型工作台 · DSH';
+  const note=$('project-global-note');
+  if(note)note.textContent='模型、DSH 登录账户余额与每日预算总账全局共享';
+}
 let viewEpoch=0;
 let recentProjects=[];
 let knownProjects=[];
@@ -322,7 +332,7 @@ async function api(path, body, view=projectView) {
     response=await send(credential);data=await response.json();checkView();
   }
   if (!response.ok) throw new Error(window.modelDeskHost&&sessionRejected(response,data)?
-    '插件连接认证尚未恢复，请重启 Codex 后重新打开模型工作台。':data.error||`请求失败：${response.status}`);
+    `插件连接认证尚未恢复，请重启 ${hostName()} 后重新打开模型工作台。`:data.error||`请求失败：${response.status}`);
   return data;
 }
 function toast(message, error=false) {
@@ -481,7 +491,9 @@ function renderModels() {
   for(const [id,info] of Object.entries(agents))engineNames[id]=info.name||id;
   renderModelAgentEntry();
   $('model-count').textContent=state.models.length;
-  $('default-name').textContent=state.models.find(m=>m.id===state.default_model)?.name || '尚未选择';
+  const manualDefault=state.models.find(m=>m.id===state.default_model);
+  $('default-name').textContent=manualDefault?
+    manualDefault.name+(modelInScope(manualDefault)?'':'（当前范围外）'):'尚未选择';
   $('stat-models').textContent=state.models.filter(m=>m.enabled).length;
   $('model-caption').textContent=`/ ${state.models.length} 个执行端`;
   setMarkup($('models'),state.models.length ? state.models.map(model=>{
@@ -531,8 +543,79 @@ function usageResetTime(seconds){
   const today=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit'}).format(new Date());
   return `${day===today?'今天':day} ${clock} 重置`;
 }
+function hostAccountTime(value){
+  if(!value)return '';
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime()))return '';
+  try{return new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(date);}catch{return '';}
+}
+// Pure presentation of the panel's public DSH host-account snapshot. It never
+// falls back to codex_usage, and an unknown/errored account stays unknown.
+function hostAccountPresentation(account){
+  const value=account&&typeof account==='object'?account:{};
+  const status=typeof value.status==='string'?value.status:'unavailable';
+  const wallets=Array.isArray(value.wallets)?value.wallets:[];
+  const rows=status==='ready'?wallets.filter(wallet=>wallet&&typeof wallet.balance==='string'&&
+    ['CNY','USD'].includes(wallet.currency)&&['normal','bonus'].includes(wallet.kind)).map(wallet=>({
+      label:(wallet.kind==='bonus'?'赠送余额':'账户余额')+'（'+(wallet.currency==='USD'?'美元':'人民币')+'）',
+      value:(wallet.currency==='USD'?'$':'¥')+wallet.balance,
+    })):[];
+  const at=hostAccountTime(value.fetched_at);
+  const stale=!!value.stale||!!value.expired||status==='expired';
+  let statusText='未知';
+  if(status==='updating')statusText='正在读取…';
+  else if(status==='signed-out')statusText='未登录';
+  else if(status==='unavailable')statusText='不可用';
+  else if(status==='expired')statusText=at?`已过期 · 上次 ${at} 更新`:'已过期';
+  else if(status==='error')statusText=at?`读取失败 · ${at}`:'读取失败';
+  else if(at)statusText=(stale?'上次数据 · ':'')+at+' 更新';
+  let message='';
+  if(status==='updating')message='正在读取 DSH 官方登录账户余额…';
+  else if(status==='signed-out')message='DSH 当前未登录，未显示余额。';
+  else if(status==='expired')message=value.message||'账户状态已过期，请重新同步。';
+  else if(status==='unavailable')message='余额暂不可用，请确认 DSH 已登录并启用工作台插件。';
+  else if(status==='error')message='DSH 账户余额读取失败；未显示旧余额。';
+  else if(status==='ready')message=rows.length?'':'官方接口已返回，但没有钱包金额。';
+  else message='DSH 账户余额未知。';
+  return {
+    title:'DSH 登录账户余额',
+    statusText,
+    rows,
+    message,
+    error:typeof value.error==='string'?value.error:'',
+    stale,
+    sourceText:'来源：DSH 官方登录账户 · 与执行模型 API 账户分开',
+    refreshNote:'更新显示只读取最近同步的余额；账户约每 2 分钟自动同步。',
+  };
+}
+function renderHostAccount(){
+  const shown=hostAccountPresentation(state.host_account);
+  const bar=$('usage-bar');
+  if(bar)bar.setAttribute('aria-label','DSH 登录账户余额');
+  $('usage-title').textContent=shown.title;
+  $('usage-title').title='DSH 登录账户的官方余额；不是模型 API Key 余额或 GPT / Codex 额度';
+  $('usage-refresh').disabled=false;
+  $('usage-refresh').textContent='更新显示';
+  $('usage-refresh').title=shown.refreshNote;
+  $('usage-status').textContent=shown.statusText;
+  setMarkup($('usage-windows'),shown.rows.length?shown.rows.map(row=>
+    `<div class="usage-item"><div class="usage-values"><span class="usage-label">${escapeText(row.label)}</span><strong>${escapeText(row.value)}</strong></div></div>`).join('')
+    :`<span class="subtle">${escapeText(shown.message||'DSH 账户余额未知')}</span>`);
+  $('usage-error').hidden=!shown.error;
+  $('usage-error').textContent=shown.error||'';
+  const source=$('usage-source');
+  if(source){source.hidden=false;source.textContent=shown.sourceText+' '+shown.refreshNote;}
+}
 function renderUsage(){
+  if(isDshHost){renderHostAccount();return;}
   const usage=state.codex_usage;
+  const bar=$('usage-bar');
+  if(bar)bar.setAttribute('aria-label','GPT Codex 额度');
+  $('usage-title').textContent='GPT / Codex 额度';
+  $('usage-title').title='当前 Codex 登录账号的共享额度，不是 API 余额或当前聊天的 token 数';
+  $('usage-refresh').title='';
+  $('usage-source').hidden=true;
+  $('usage-source').textContent='';
   $('usage-refresh').disabled=!!usage?.refreshing;
   $('usage-refresh').textContent=usage?.refreshing?'读取中…':'刷新';
   $('usage-status').textContent=usage?.updated_at?`${usage.stale?'上次数据 · ':''}${beijingClock(usage.updated_at)} 更新${usage.refreshing?' · 同步中':''}`:usage?.status==='error'?'暂不可用':'正在读取…';
@@ -563,8 +646,8 @@ function scopeHintText(value=scopeValue()){
 function renderWorkflow(){
   const w=state.workflow||{enabled:false,paid_allowed:false};
   if(!$('workflow-toggle').disabled)$('workflow-toggle').checked=!!w.enabled;
-  $('workflow-mode').textContent=w.enabled?'已开启 · 自动路由':'已关闭 · Codex 默认';
-  $('workflow-description').textContent=w.enabled?'GPT 定目标与独立验收，执行 Agent 自主调查、设计、实现和测试。':'Codex 按默认方式工作；手动分派仍可使用。';
+  $('workflow-mode').textContent=w.enabled?'已开启 · 自动路由':`已关闭 · ${hostName()} 默认`;
+  $('workflow-description').textContent=w.enabled?`${mainBrainName()} 定目标与独立验收，执行 Agent 自主调查、设计、实现和测试。`:`${hostName()} 按默认方式工作；手动分派仍可使用。`;
   const d=w.daily||{};
   const settled=settledCost(d.settled_cny,!!d.has_actual);
   const extra=[];
@@ -821,8 +904,8 @@ function completionWaitText(task, nowMs=Date.now()) {
   if(wait.listener_status==='stopped')return '自动通知已暂停 · 执行任务未被取消';
   const heartbeat=Date.parse(wait.heartbeat_at||'');
   if(['starting','listening','waiting_chat_idle'].includes(wait.listener_status)&&(!Number.isFinite(heartbeat)||nowMs-heartbeat>30000))return task.status==='completed'?'执行已结束 · 通知状态未确认':'等待状态未确认 · 请检查后台监听';
-  if(wait.phase==='reviewing')return '执行已结束 · GPT 正在独立验收';
-  if(task.status==='completed')return wait.phase==='waiting_chat_idle'?'执行已结束 · 等待通知':'执行已结束 · 待 GPT 独立验收';
+  if(wait.phase==='reviewing')return `执行已结束 · ${mainBrainName()} 正在独立验收`;
+  if(task.status==='completed')return wait.phase==='waiting_chat_idle'?'执行已结束 · 等待通知':`执行已结束 · 待 ${mainBrainName()} 独立验收`;
   if(wait.phase==='needs_attention')return '需要处理 · 请检查原任务';
   return '正在等待执行模型完成';
 }
@@ -834,7 +917,7 @@ function renderTasks() {
   const scroll=$('task-list').scrollTop;
   setMarkup($('task-list'),tasks.length ? tasks.map(task=>`<button class="task-row ${escapeText(taskDisplayStatus(task))} ${selectedTask===task.id?'selected':''}" data-task-id="${escapeText(task.id)}">
     <span class="task-icon" aria-hidden="true">${({completed:'✓',running:'↗',queued:'◷',failed:'!',cancelled:'−',recovery_pending:'◷'})[taskDisplayStatus(task)]||'·'}</span>
-    <div><div class="task-title">${escapeText(task.title)}</div><div class="task-meta"><span>${escapeText(task.model_name||task.model)}</span><span>·</span><span>${task.source==='codex'?'Codex 分派':task.source==='panel'?'手动分派':'命令行'}</span><span>·</span><span>${escapeText(taskDisplayPhase(task))}</span>${task.completion_wait?`<span>· ${escapeText(completionWaitText(task))}</span>`:''}</div></div>
+    <div><div class="task-title">${escapeText(task.title)}</div><div class="task-meta"><span>${escapeText(task.model_name||task.model)}</span><span>·</span><span>${task.source==='codex'?'Codex 分派':task.source==='brain'?'主脑分派':task.source==='panel'?'手动分派':'命令行'}</span><span>·</span><span>${escapeText(taskDisplayPhase(task))}</span>${task.completion_wait?`<span>· ${escapeText(completionWaitText(task))}</span>`:''}</div></div>
     <span class="task-right">${badge(taskDisplayStatus(task),taskAccepted(task)&&taskDisplayStatus(task)==='completed'?'已完成':undefined)}${task.review?badge(reviewStatusClass(task.review.state),task.review.label):''}<small>${escapeText(duration(task))}</small></span></button>`).join('') : (()=>{const empty=projectEmptyState();return `<div class="empty"><div class="empty-symbol">✧</div><strong>${escapeText(empty.title)}</strong><p>${escapeText(empty.body)}</p></div>`;})());
   $('task-list').scrollTop=scroll;
 }
@@ -1154,9 +1237,19 @@ $('agent-entry-save').onclick=async()=>{
 };
 $('usage-refresh').onclick=async()=>{
   const button=$('usage-refresh');button.disabled=true;
-  try{state.codex_usage=await api('/api/codex-usage/refresh',{});renderUsage();if(!state.codex_usage.refreshing)toast('刚刚已查询，请稍后刷新。');}
+  try{
+    if(isDshHost){
+      state.host_account=await api('/api/host-account',undefined);
+      renderUsage();
+      toast('已更新显示；账户余额约每 2 分钟自动同步。');
+    }else{
+      state.codex_usage=await api('/api/codex-usage/refresh',{});
+      renderUsage();
+      if(!state.codex_usage.refreshing)toast('刚刚已查询，请稍后刷新。');
+    }
+  }
   catch(error){toast(error.message,true);}
-  finally{button.disabled=!!state.codex_usage?.refreshing;}
+  finally{button.disabled=isDshHost?false:!!state.codex_usage?.refreshing;}
 };
 document.querySelectorAll('.close-dialog').forEach(button=>button.onclick=()=>button.closest('dialog').close());
 document.querySelectorAll('[data-filter]').forEach(button=>button.onclick=()=>{taskFilter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b===button));renderTasks();});

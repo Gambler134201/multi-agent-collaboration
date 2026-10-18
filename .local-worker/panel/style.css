@@ -624,7 +624,8 @@ h1{font-size:18px}
 .usage-item progress::-webkit-progress-bar{background:var(--line-strong);border-radius:2px}
 .usage-item progress::-webkit-progress-value{background:var(--accent);border-radius:2px}
 .usage-item progress::-moz-progress-bar{background:var(--accent);border-radius:2px}
-.usage-bar .field-hint,#usage-error{margin:4px 0 0;color:var(--red);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
+.usage-bar #usage-error{margin:4px 0 0;color:var(--red);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
+.usage-bar .usage-source{margin:2px 0 0;color:var(--faint);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
 
 /* ---------- workflow context row (default model + agent state) ---------- */
 .workflow-bar{padding:12px 16px;row-gap:10px}

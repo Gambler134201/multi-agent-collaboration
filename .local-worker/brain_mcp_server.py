@@ -101,15 +101,18 @@ def tool_definitions():
         ),
         types.Tool(
             name=TOOL_CANDIDATES, title='列出候选执行模型',
-            description='列出已配置模型及其已保存默认执行 Agent、范围和就绪状态；不调用模型、不派发。',
+            description=('列出已配置模型、默认执行 Agent、范围/可选择性/付费授权和就绪状态；'
+                         'scope_ok 与 selectable_model_ids 只反映真实范围，不按同名/同 provider 排除，'
+                         'subagent deny 不影响普通候选。不调用模型、不派发。'),
             inputSchema=_object({}),
             annotations=types.ToolAnnotations(title='列出候选执行模型', destructiveHint=False,
                                               idempotentHint=True, openWorldHint=False),
         ),
         types.Tool(
             name=TOOL_PREVIEW, title='按模型预览路由',
-            description=('对指定 model_id 做一次与实际派发相同的路由预览（显式模型 -> 已保存默认 Agent），'
-                         '返回执行器、原因、警告和预算预测；不派发、不等待模型。'),
+            description=('对显式 model_id 做一次与实际派发相同的路由预览（显式模型 -> 已保存默认 Agent），'
+                         '返回执行器、原因、警告和预算预测；不派发、不等待模型。'
+                         '不会用默认模型替代缺失的 model_id。'),
             inputSchema=_object({
                 'model_id': {'type': 'string', 'maxLength': 80},
                 'prompt': {'type': 'string', 'maxLength': 50000},
@@ -125,7 +128,8 @@ def tool_definitions():
             name=TOOL_DISPATCH, title='快速派发执行任务',
             description=('按调用方明确给出的 request_id 异步派发一个执行任务，快速返回原任务 ID。'
                          '项目/拥有者/角色固定来自受信启动上下文；不能在此指定它们或执行器。'
-                         '同一 request_id 同内容返回原结果，不同内容拒绝；响应丢失不自动重派。'),
+                         '省略 model_id 时使用已保存的手动默认模型；默认在范围外会明确拒绝并提示范围候选，'
+                         '不会静默换模型。同一 request_id 同内容返回原结果，不同内容拒绝；响应丢失不自动重派。'),
             inputSchema=_object({
                 'request_id': {'type': 'string', 'pattern': '^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'},
                 'prompt': {'type': 'string', 'maxLength': 50000},
@@ -229,7 +233,8 @@ def _describe():
                        'arbitrary_http_command_file_config_tool': False,
                        'getters_wait': False},
             'note': ('身份、角色、项目与拥有者来自受信启动配置；工具参数不能修改。'
-                     '声明值不是宿主核实值。')}
+                     '声明值不是宿主核实值。若历史提示与当前真实候选/路由预览不一致，'
+                     '保留历史原因为未知，不要据此声称整个范围没有模型。')}
 
 
 def _strict(arguments, allowed, label):
@@ -287,10 +292,13 @@ def _run(name, arguments):
         return _ok(_describe(), '已返回受信启动上下文与连接状态。')
     if name == TOOL_CANDIDATES:
         _strict(arguments, (), 'candidates')
-        return _ok(_call('candidates', {}), '已返回候选模型；未调用模型。')
+        result = _call('candidates', {})
+        return _ok(result, ('已返回候选模型；未调用模型。请检查 models[].scope_ok/selectable、'
+                            'selectable_model_ids 和 default_model_note；默认模型在范围外'
+                            '不代表范围内没有候选，历史提示无法复现时保留未知。'))
     if name == TOOL_PREVIEW:
         _strict(arguments, ('model_id', 'prompt', 'kind', 'files', 'acceptance'), 'route_preview')
-        return _ok(_call('route_preview', arguments), '已返回路由预览；未派发任务。')
+        return _ok(_call('route_preview', arguments), '已返回路由预览；未派发任务，未替换 model_id。')
     if name == TOOL_DISPATCH:
         _strict(arguments, ('request_id', 'prompt', 'model_id', 'kind', 'files',
                             'acceptance', 'title'), 'dispatch')
