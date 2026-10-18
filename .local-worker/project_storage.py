@@ -443,9 +443,27 @@ def ensure_schema(conn):
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        -- Project-owned controller request journal for the host-neutral main
+        -- brain.  It stores a canonical payload fingerprint and the original
+        -- receipt, never a capability, panel token or model key.  The primary
+        -- key makes one owner/request_id an at-most-once mutation identity.
+        CREATE TABLE IF NOT EXISTS brain_requests (
+            request_id TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            payload_digest TEXT NOT NULL,
+            state TEXT NOT NULL,
+            task_id TEXT NOT NULL DEFAULT '',
+            receipt TEXT NOT NULL DEFAULT '{}',
+            detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (owner, request_id)
+        );
         CREATE INDEX IF NOT EXISTS stages_goal ON stages (goal_id, ordinal);
         CREATE INDEX IF NOT EXISTS stage_log_stage ON stage_log (stage_id, seq);
         CREATE INDEX IF NOT EXISTS tasks_stage ON tasks (stage_id);
+        CREATE INDEX IF NOT EXISTS brain_requests_owner ON brain_requests (owner, kind);
     ''')
     conn.execute('INSERT INTO meta (key, value) VALUES ("schema", ?) '
                  'ON CONFLICT(key) DO NOTHING', (str(INDEX_SCHEMA),))

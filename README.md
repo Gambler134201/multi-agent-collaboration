@@ -6,7 +6,7 @@
 
 项目源码采用 [MIT 许可证](LICENSE)，维护者为 [Gambler134201](https://github.com/Gambler134201)。
 
-开发流程见 [Git 工作流](docs/GIT_WORKFLOW.md)，日常操作与测试见 [使用说明](docs/USAGE.md)，当前开发与公开源码的整合事项见 [源码整合清单](docs/SOURCE_RECONCILIATION.md)。功能路线见 [后续待更新功能](后续待更新功能/README.md)。
+开发流程见 [Git 工作流](docs/GIT_WORKFLOW.md)，日常操作与测试见 [使用说明](docs/USAGE.md)，当前开发与公开源码的整合事项见 [源码整合清单](docs/SOURCE_RECONCILIATION.md)，主脑接口边界与阶段 A 状态见 [多主脑通用接口](docs/MAIN_BRAIN_CORE.md)。功能路线见 [后续待更新功能](后续待更新功能/README.md)。
 
 ## 你会得到什么
 
@@ -14,6 +14,7 @@
 - 两个执行 Agent 适配：**DSH（DeepSeek Harness）** 走 ACP/acpx，**Pi Agent** 走 Pi RPC。每个模型可保存自己的 `default_agent`（DSH / Pi / 跟随全局）；新任务按「本次显式指定 > 模型默认 > 全局默认」解析，自动路由对每个最终候选分别解析。已有任务、续接、整改与会话复用保留原 Agent。选中的 Agent 不可用时直接报错，不会改用另一个。
 - 任务记录、日志、验收与阶段交接写在每个项目自己的 `.model-desk/records.db` 与 `.model-desk/runs/<id>/task.json`；阶段交接带文件哈希校验。
 - 可选的 Codex MCP（全局服务名 `model_desk`）与可选的全局协作规则，两者都只在显式命令下安装。
+- 阶段 A 主脑 stdio MCP（`brain_mcp_server.py`）：独立入口，不替换 Codex 面板 MCP，默认不注册；提供显式连接、候选、按模型预览、快速派发、状态、交付、逐条证据验收和一次整改。未接入任何原生宿主，也不会自动启动服务。用法见 [docs/INSTALL.md](docs/INSTALL.md#51-可选主脑-stdio-mcp阶段-a未默认注册)。
 - 记录写入防护：DSH 与 Pi 侧都带工具参数防护（应用层防护，不是操作系统沙箱）。
 
 ## 支持边界（先读这段）

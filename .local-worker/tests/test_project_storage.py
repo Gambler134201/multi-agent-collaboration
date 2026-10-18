@@ -771,5 +771,39 @@ class MigrationRollbackTests(StorageCase, unittest.TestCase):
         self.assertIn('goal-wal', ids)
 
 
+class BrainRequestJournalStorageTests(StorageCase, unittest.TestCase):
+    def setUp(self):
+        self.make_workspace()
+
+    def test_project_database_owns_the_brain_request_journal(self):
+        project_storage.ensure_project(self.project_a)
+        conn = project_storage.connect(project_storage.records_db(self.project_a), create=False)
+        try:
+            columns = {row['name']: row for row in conn.execute('PRAGMA table_info(brain_requests)')}
+            self.assertTrue({'request_id', 'owner', 'kind', 'payload_digest', 'state',
+                             'task_id', 'receipt', 'detail', 'created_at',
+                             'updated_at'} <= set(columns))
+            # The primary key is (owner, request_id): one owner's request id is
+            # one mutation identity and cannot be silently re-pointed.
+            self.assertEqual({name for name, row in columns.items() if row['pk']},
+                             {'owner', 'request_id'})
+            now = registry.now()
+            conn.execute('INSERT INTO brain_requests '
+                         '(request_id, owner, kind, payload_digest, state, created_at, updated_at) '
+                         'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                         ('req-1', 'main-a', 'dispatch', 'f' * 64, 'reserved', now, now))
+            row = conn.execute('SELECT owner, kind, state FROM brain_requests').fetchone()
+            self.assertEqual(tuple(row), ('main-a', 'dispatch', 'reserved'))
+        finally:
+            conn.close()
+        # The other project has its own database identity and no such row.
+        project_storage.ensure_project(self.project_b)
+        other = project_storage.connect(project_storage.records_db(self.project_b), create=False)
+        try:
+            self.assertEqual(other.execute('SELECT COUNT(*) FROM brain_requests').fetchone()[0], 0)
+        finally:
+            other.close()
+
+
 if __name__ == '__main__':
     unittest.main()

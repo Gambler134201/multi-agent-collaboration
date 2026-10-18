@@ -108,6 +108,33 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -RegisterMcp
 - 注册后**已打开的 Codex 会话不会自动出现新工具**：需要新建会话或重载客户端。原生侧栏/按钮是否可见必须由你本人确认。
 - 撤销：用你的 Codex 客户端移除该 MCP（例如 `codex mcp remove model_desk`，具体命令名以你的 Codex 版本为准，本候选未验证）。
 
+### 5.1 可选：主脑 stdio MCP（阶段 A，未默认注册）
+
+多主脑通用入口是**独立**的 `brain_mcp_server.py`，不会替换或修改上面的 Codex 面板 MCP。`setup.ps1 -RegisterMcp` 不会注册它；需要由宿主/本机配置显式添加，且不要挂到 DSH/Pi 执行器。
+
+先显式启动面板，再让宿主配置以下命令（路径替换成你自己的安装目录与项目绝对目录）：
+
+```powershell
+.\.local-worker\venv\Scripts\python.exe .\.local-worker\brain_mcp_server.py `
+  --project "D:\dev\my-project" `
+  --host dsh `
+  --owner main-a `
+  --role brain `
+  --session-binding user_bound `
+  --session-id "main-a-user-session-1" `
+  --panel-url http://127.0.0.1:8765
+```
+
+- `--project` 必须是已存在的本机绝对目录；不从 cwd、安装目录或最近项目推断。
+- `--role brain` 才允许变更；`executor` 只能读取且变更会被拒绝。
+- `--session-id` 是用户显式绑定的专用会话标识，不是宿主原生会话核实；阶段 A 不接受 `host_verified`。省略时责任归属为 `unknown`，变更工具会被拒绝。
+- 工具提供连接、说明、候选模型、按模型路由预览、快速派发、状态、交付、验收/退回和一次整改；不提供任意 HTTP、命令、文件、配置或授权接口。
+- 首次必须显式调用 `brain_connect`；服务未运行只返回「不可用」，不会自动启动。面板重启后需要重新连接。
+- 控制器能力只保存在 MCP 传输进程内，不写入任务、提示、日志、结果或执行器环境。普通面板/CLI 的 `actor=main` 不能验收主脑任务。
+- 该入口是应用层权限边界，不是 OS 沙箱；同一 Windows 用户下的恶意脚本不在防护承诺内。
+
+详细边界与自测范围见 `docs/MAIN_BRAIN_CORE.md`。
+
 ## 6. 可选：安装全局协作规则
 
 规则是可选的，只影响当前 Windows 用户的规则目录（默认 `CODEX_HOME`，否则用户目录下的 `.codex`）。

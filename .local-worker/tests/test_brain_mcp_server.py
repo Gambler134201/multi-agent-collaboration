@@ -1,0 +1,393 @@
+"""Real JSON-RPC stdio MCP handshake tests plus a full mock protocol loop.
+
+The MCP server runs in a separate process over real stdio.  In the loop test the
+brain MCP talks real HTTP to the real panel Handler on an ephemeral loopback
+port with a temporary project registry.  Only executor submission is mocked; no
+provider, desktop message, account or native host is touched.
+"""
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+from pathlib import Path
+import queue
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+HERE = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HERE))
+import brain_gateway
+import brain_mcp_server as brain
+import delegation_policy as policy
+import model_registry as registry
+import panel_server as panel
+
+SERVER = str(HERE / 'brain_mcp_server.py')
+
+
+class CountingHandler(BaseHTTPRequestHandler):
+    hits = []
+
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        type(self).hits.append(('GET', self.path))
+        self._json(503, {'error': 'not used by listing tests'})
+
+    def do_POST(self):
+        type(self).hits.append(('POST', self.path))
+        self._json(503, {'error': 'not used by listing tests'})
+
+    def _json(self, code, data):
+        raw = json.dumps(data).encode('utf-8')
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+
+class StdioClient:
+    """Minimal real JSON-RPC 2.0 client over the MCP process's stdio."""
+
+    def __init__(self, args, timeout=15):
+        self.proc = subprocess.Popen(
+            [sys.executable, SERVER, *args], cwd=str(HERE),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding='utf-8', errors='replace', bufsize=1)
+        self.messages = queue.Queue()
+        self.stderr = []
+        self.timeout = timeout
+        self.next_id = 1
+        threading.Thread(target=self._read_stdout, daemon=True).start()
+        threading.Thread(target=self._read_stderr, daemon=True).start()
+
+    def _read_stdout(self):
+        try:
+            for line in self.proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    self.messages.put(json.loads(line))
+                except ValueError:
+                    continue
+        finally:
+            self.messages.put(None)
+
+    def _read_stderr(self):
+        try:
+            for line in self.proc.stderr:
+                self.stderr.append(line.rstrip())
+        except (OSError, ValueError):
+            pass
+
+    def send(self, message):
+        self.proc.stdin.write(json.dumps(message, ensure_ascii=False) + '\n')
+        self.proc.stdin.flush()
+
+    def notify(self, method, params=None):
+        message = {'jsonrpc': '2.0', 'method': method}
+        if params is not None:
+            message['params'] = params
+        self.send(message)
+
+    def request(self, method, params=None):
+        request_id = self.next_id
+        self.next_id += 1
+        self.send({'jsonrpc': '2.0', 'id': request_id, 'method': method,
+                   'params': params if params is not None else {}})
+        while True:
+            try:
+                message = self.messages.get(timeout=self.timeout)
+            except queue.Empty:
+                raise AssertionError('MCP stdio timeout; stderr=%r' % self.stderr[-5:])
+            if message is None:
+                raise AssertionError('MCP server exited; stderr=%r' % self.stderr[-10:])
+            if message.get('id') == request_id:
+                return message
+
+    def initialize(self):
+        result = self.request('initialize', {
+            'protocolVersion': '2024-11-05',
+            'capabilities': {},
+            'clientInfo': {'name': 'brain-stdio-test', 'version': '1'},
+        })
+        self.notify('notifications/initialized')
+        return result
+
+    def list_tools(self):
+        return self.request('tools/list')['result']['tools']
+
+    def call(self, name, arguments=None):
+        response = self.request('tools/call', {'name': name, 'arguments': arguments or {}})
+        if 'error' in response:
+            raise AssertionError('JSON-RPC error: %r' % response['error'])
+        return response['result']
+
+    def close(self):
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=4)
+        except subprocess.TimeoutExpired:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=4)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=4)
+        for stream in (self.proc.stdout, self.proc.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+
+def payload(result):
+    return result.get('structuredContent') or {}
+
+
+def text(result):
+    return ' '.join(part.get('text', '') for part in result.get('content') or [])
+
+
+class StdioProtocolTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.project = Path(self.tmp.name) / 'project'
+        self.project.mkdir()
+        self.clients = []
+
+    def tearDown(self):
+        for client in self.clients:
+            client.close()
+        self.tmp.cleanup()
+
+    def start(self, panel_url, extra=()):
+        args = ['--project', str(self.project), '--host', 'test-host',
+                '--owner', 'main-a', '--role', 'brain',
+                '--session-binding', 'user_bound', '--session-id', 's-a',
+                '--panel-url', panel_url, *extra]
+        client = StdioClient(args)
+        self.clients.append(client)
+        return client
+
+    def test_initialize_and_listing_do_no_io_and_expose_fixed_tools(self):
+        CountingHandler.hits = []
+        server = ThreadingHTTPServer(('127.0.0.1', 0), CountingHandler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = self.start('http://127.0.0.1:%d' % server.server_address[1])
+            initialized = client.initialize()
+            self.assertEqual(initialized['result']['serverInfo']['name'], 'model-desk-brain')
+            tools = {tool['name']: tool for tool in client.list_tools()}
+            self.assertEqual(set(tools), set(brain.TOOLS))
+            self.assertEqual(len(tools), 9)
+            for name, tool in tools.items():
+                self.assertFalse(tool['inputSchema'].get('additionalProperties', True),
+                                 name)
+                for forbidden in ('project', 'owner', 'role', 'actor', 'engine', 'session'):
+                    self.assertNotIn(forbidden, tool['inputSchema']['properties'], (name, forbidden))
+            self.assertEqual(CountingHandler.hits, [])
+            described = client.call('brain_describe')
+            self.assertFalse(payload(described)['connected'])
+            self.assertEqual(payload(described)['context']['owner']['id'], 'main-a')
+            self.assertEqual(CountingHandler.hits, [])
+            refused = client.call('brain_candidates')
+            self.assertTrue(refused['isError'])
+            self.assertIn('brain_connect', text(refused))
+            self.assertEqual(CountingHandler.hits, [])
+            extra = client.call('brain_dispatch', {
+                'request_id': 'x', 'prompt': 'p', 'acceptance': ['a'], 'project': '/tmp/x'})
+            self.assertTrue(extra['isError'])
+            self.assertIn('project', text(extra))
+            self.assertEqual(CountingHandler.hits, [])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_connect_to_missing_service_is_clear_and_never_starts_one(self):
+        probe = socket.socket()
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        client = self.start('http://127.0.0.1:%d' % port)
+        client.initialize()
+        result = client.call('brain_connect')
+        self.assertTrue(result['isError'])
+        self.assertIn('未自动启动服务', text(result))
+
+    def test_invalid_launch_context_fails_closed_without_protocol_output(self):
+        for args in (
+            ['--project', 'relative', '--host', 'h', '--owner', 'o', '--role', 'brain'],
+            ['--project', str(self.project), '--host', 'h', '--owner', 'o', '--role', 'brain',
+             '--session-binding', 'host_verified'],
+        ):
+            process = subprocess.run([sys.executable, SERVER, *args], cwd=str(HERE),
+                                     stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                     encoding='utf-8', errors='replace', timeout=30)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertTrue(process.stderr.strip())
+            self.assertEqual(process.stdout.strip(), '')
+
+
+class EndToEndLoopTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = registry.HERE, registry.REGISTRY, registry.RUNS
+        registry.HERE = Path(self.tmp.name)
+        registry.REGISTRY = registry.HERE / 'models.json'
+        registry.RUNS = registry.HERE / 'runs'
+        registry.write_json(registry.HERE / 'workflow.json', {'enabled': True})
+        self.project = registry.HERE / 'project'
+        self.project.mkdir()
+        registry.write_json(registry.REGISTRY, {'default_model': 'mock', 'models': [{
+            'id': 'mock', 'name': 'Mock', 'provider': 'local', 'model': 'mock',
+            'enabled': True, 'max_input_tokens': 32768, 'max_output_tokens': 4096,
+            'preferred_tasks': [], 'max_task_complexity': 'simple',
+        }]})
+        brain_gateway._CAPABILITIES.clear()
+        self.submitted = []
+        self.patches = [
+            mock.patch.object(panel.dsh_worker, 'availability',
+                              return_value={'ready': True, 'message': ''}),
+            mock.patch.object(panel.EXECUTOR, 'submit',
+                              side_effect=lambda fn, task_id: self.submitted.append(task_id)),
+        ]
+        for patch in self.patches:
+            patch.start()
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), panel.Handler)
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.client = StdioClient([
+            '--project', str(self.project), '--host', 'test-host', '--owner', 'main-a',
+            '--role', 'brain', '--session-binding', 'user_bound', '--session-id', 's-a',
+            '--panel-url', 'http://127.0.0.1:%d' % self.server.server_address[1],
+        ])
+        self.client.initialize()
+
+    def tearDown(self):
+        self.client.close()
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        for patch in reversed(self.patches):
+            patch.stop()
+        brain_gateway._CAPABILITIES.clear()
+        registry.HERE, registry.REGISTRY, registry.RUNS = self.saved
+        self.tmp.cleanup()
+
+    def complete(self, task_id, answer='mock deliverable'):
+        run = registry.task_dir(task_id, str(self.project))
+        registry.patch_task(run, status='completed', phase='已完成', ended_at=registry.now())
+        (run / 'answer.txt').write_text(answer, encoding='utf-8')
+        policy.record_executor(run, {'completed': True, 'changed_files': ['a.py'],
+                                     'test': {'exit_code': 0, 'output': 'ok'}})
+        return run
+
+    def evidence(self):
+        return [{'id': 'c1', 'status': 'pass',
+                 'evidence': [{'source': 'reviewer_test', 'detail': 'reran the test',
+                               'exit_code': 0}]}]
+
+    def test_full_mock_loop_connect_preview_dispatch_deliver_return_rework_accept(self):
+        connected = self.client.call('brain_connect')
+        self.assertFalse(connected['isError'])
+        self.assertTrue(payload(connected)['connected'])
+        self.assertNotIn('capability', json.dumps(payload(connected)).lower())
+
+        candidates = payload(self.client.call('brain_candidates'))
+        self.assertEqual(candidates['models'][0]['model_id'], 'mock')
+        self.assertEqual(candidates['models'][0]['engine'], 'dsh')
+
+        preview = payload(self.client.call('brain_route_preview', {
+            'model_id': 'mock', 'prompt': 'work', 'kind': 'edit',
+            'files': ['a.py'], 'acceptance': ['criterion one']}))
+        self.assertEqual(preview['preview']['engine'], 'dsh')
+        self.assertEqual(self.submitted, [])
+
+        dispatched = self.client.call('brain_dispatch', {
+            'request_id': 'loop-dispatch', 'prompt': 'Do the work', 'kind': 'edit',
+            'model_id': 'mock', 'files': ['a.py'], 'acceptance': ['criterion one']})
+        self.assertFalse(dispatched['isError'])
+        task_id = payload(dispatched)['task']['task_id']
+        self.assertEqual(self.submitted, [task_id])
+        duplicate = self.client.call('brain_dispatch', {
+            'request_id': 'loop-dispatch', 'prompt': 'Do the work', 'kind': 'edit',
+            'model_id': 'mock', 'files': ['a.py'], 'acceptance': ['criterion one']})
+        self.assertEqual(payload(duplicate)['task']['task_id'], task_id)
+        self.assertEqual(self.submitted, [task_id])
+
+        status = payload(self.client.call('brain_status', {'task_id': task_id}))
+        self.assertEqual(status['status'], 'queued')
+        self.assertEqual(self.submitted, [task_id])
+        registry.patch_task(registry.task_dir(task_id, str(self.project)), status='running',
+                            phase='执行中', started_at=registry.now())
+        running = payload(self.client.call('brain_status', {'task_id': task_id}))
+        self.assertEqual(running['status'], 'running')
+        self.assertEqual(self.submitted, [task_id])
+
+        self.complete(task_id, 'defective deliverable')
+        delivery = payload(self.client.call('brain_delivery', {'task_id': task_id}))
+        self.assertEqual(delivery['delivery_state'], 'executor_completed_unaccepted')
+        self.assertFalse(delivery['accepted'])
+        self.assertIn('defective deliverable', delivery['answer'])
+
+        returned = self.client.call('brain_review', {
+            'request_id': 'loop-return', 'task_id': task_id, 'action': 'return',
+            'failed_criteria': ['c1'], 'problems': 'observed defective result',
+            'boundaries': 'a.py only'})
+        self.assertFalse(returned['isError'], text(returned))
+        self.assertEqual(payload(returned)['receipt']['summary']['state'], policy.RETURNED)
+
+        rework = self.client.call('brain_rework', {
+            'request_id': 'loop-rework', 'parent_task_id': task_id})
+        self.assertFalse(rework['isError'], text(rework))
+        child_id = payload(rework)['task']['task_id']
+        self.assertNotEqual(child_id, task_id)
+        self.assertEqual(self.submitted, [task_id, child_id])
+        same = self.client.call('brain_rework', {
+            'request_id': 'loop-rework', 'parent_task_id': task_id})
+        self.assertEqual(payload(same)['task']['task_id'], child_id)
+        self.assertEqual(self.submitted, [task_id, child_id])
+        second_slot = self.client.call('brain_rework', {
+            'request_id': 'loop-rework-2', 'parent_task_id': task_id})
+        self.assertTrue(second_slot['isError'])
+        self.assertEqual(self.submitted, [task_id, child_id])
+
+        self.complete(child_id, 'corrected deliverable')
+        accepted = self.client.call('brain_review', {
+            'request_id': 'loop-accept', 'task_id': child_id, 'action': 'accept',
+            'criteria': self.evidence()})
+        self.assertFalse(accepted['isError'], text(accepted))
+        self.assertEqual(payload(accepted)['receipt']['summary']['state'], policy.ACCEPTED)
+        repeat = self.client.call('brain_review', {
+            'request_id': 'loop-accept', 'task_id': child_id, 'action': 'accept',
+            'criteria': self.evidence()})
+        self.assertTrue(payload(repeat)['reused'])
+        final = payload(self.client.call('brain_delivery', {'task_id': child_id}))
+        self.assertTrue(final['accepted'])
+        self.assertEqual(final['delivery_state'], 'accepted')
+        # No dispatch happened on status/delivery/review reads beyond the two rounds.
+        self.assertEqual(len(self.submitted), 2)
+        # Controller capability/panel token never leak into the protocol payload.
+        everything = json.dumps([payload(dispatch) for dispatch in
+                                 (connected, preview, dispatched, status, delivery, returned,
+                                  rework, accepted, final)], ensure_ascii=False)
+        self.assertNotIn('X-Brain-Capability', everything)
+        self.assertNotIn('panel_token', everything.lower())
+
+
+if __name__ == '__main__':
+    unittest.main()

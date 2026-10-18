@@ -52,6 +52,15 @@ MAX_AUTO_REWORK = 1
 MAX_CRITERIA = 20
 MAX_TEXT = 1000
 
+
+class ReworkClaimRefused(ValueError):
+    """A rework claim was refused by validation before any record was written.
+
+    The brain request journal may treat this specific refusal as a proven
+    rejection (no effect), instead of an uncertain outcome.
+    """
+
+
 MAIN_ACTORS = {'main', 'codex', 'human', 'user'}
 EXECUTOR_ACTORS = {'executor', 'worker', 'dsh', 'pi', 'agent', 'self', 'panel'}
 INDEPENDENT_SOURCES = {'reviewer_file', 'reviewer_test', 'reviewer_inspection'}
@@ -104,6 +113,65 @@ def delegation_marker(task):
 
 def is_delegated(task):
     return delegation_marker(task) is not None
+
+
+# ------------------------------------------------------------- brain ownership
+
+def _brain_identity(task):
+    """(owned, owner, project) read from the persisted task, never from a tool arg."""
+    brain = task.get('brain') if isinstance(task.get('brain'), dict) else {}
+    owner = str(brain.get('owner') or task.get('owner') or '').strip()
+    project = str(brain.get('project') or task.get('project') or '').strip()
+    owned = bool(brain) or bool(owner) or str(task.get('source') or '') == 'brain'
+    return owned, owner, project
+
+
+def is_brain_owned(task):
+    return _brain_identity(task)[0]
+
+
+def brain_identity(task):
+    """Public (owned, owner, project) view used by the panel link guards."""
+    return _brain_identity(task)
+
+
+def _require_brain_authority(task, authority):
+    """Privileged changes to a brain-owned task need controller authority.
+
+    Legacy/non-brain tasks keep their historical behaviour.  A plain
+    ``actor='main'`` string (CLI or ordinary panel route) can never approve a
+    brain-owned task; the broker passes a signed authority for the connection's
+    immutable owner/project.
+    """
+    owned, owner, project = _brain_identity(task)
+    if not owned:
+        return None
+    if not owner:
+        raise ValueError('主脑任务的归属记录不完整，拒绝变更；不会自动收养该任务')
+    import brain_context
+    binding_key = (task.get('brain') or {}).get('binding_key')
+    if (not binding_key or
+            not brain_context.authority_matches(authority, owner, project or None, binding_key)):
+        raise ValueError('该任务属于主脑 ' + owner + '；仅填写 actor 或普通面板请求不能验收、退回、'
+                         '受阻或整改，需要经本机控制器验证的同一拥有者连接')
+    return authority
+
+
+def find_request(run, request_id):
+    """Return the review record only when it actually carries this request id."""
+    if not isinstance(request_id, str) or not request_id:
+        return None
+    record = load(run)
+    if record is None:
+        return None
+    if record.get('last_request_id') == request_id:
+        return record
+    if str((record.get('rework') or {}).get('request_id') or '') == request_id:
+        return record
+    for row in record.get('decisions') or []:
+        if isinstance(row, dict) and row.get('request_id') == request_id:
+            return record
+    return None
 
 
 def load(run):
@@ -195,6 +263,7 @@ def _criteria_from_acceptance(task):
 
 def _blank(run, task):
     marker = delegation_marker(task) or {}
+    owned, owner, _project = _brain_identity(task)
     try:
         base = max(0, int(marker.get('inherited_rework_count', marker.get('rework_count', 0)) or 0))
     except (TypeError, ValueError):
@@ -204,7 +273,10 @@ def _blank(run, task):
             'state': DISPATCHED, 'rework_count': base, 'executor': None,
             'criteria': _build_criteria(_criteria_from_acceptance(task)),
             'rework': None, 'blocked_reason': '', 'reviewer_notes': '', 'decisions': [],
-            'stage_id': task.get('stage_id'), 'goal_id': task.get('goal_id')}
+            'stage_id': task.get('stage_id'), 'goal_id': task.get('goal_id'),
+            'brain_owner': owner if owned and owner else None,
+            'dispatch_request_id': task.get('request_id') if owned else None,
+            'last_request_id': None}
 
 
 def _require_record(run):
@@ -215,8 +287,14 @@ def _require_record(run):
     return (record or _blank(run, task)), task
 
 
-def _require_main(actor):
-    value = _clean_text(actor, 40).lower()
+def _require_main(actor, authority=None):
+    value = _clean_text(actor, 160).lower()
+    if value.startswith('brain:') and len(value) > len('brain:'):
+        import brain_context
+        if (brain_context.verify_authority(authority)
+                and value == ('brain:' + authority.owner).lower()):
+            return value
+        raise ValueError('主脑 actor 名称需要经控制器验证的授权，不能自行声明')
     if value in EXECUTOR_ACTORS or value not in MAIN_ACTORS:
         raise ValueError('只有主脑可以记录验收结论；执行器或自报结果不能批准自己的成果。')
     return value
@@ -361,10 +439,11 @@ def _store_acceptance(record, resolved):
 
 
 @serialized
-def initialize(run, criteria=None, actor='main'):
+def initialize(run, criteria=None, actor='main', authority=None, request_id=''):
     """Create or update the decidable acceptance conditions (main mind only)."""
-    _require_main(actor)
+    actor = _require_main(actor, authority)
     task = task_state(run)
+    _require_brain_authority(task, authority)
     if not is_delegated(task):
         raise ValueError('这不是成果委派任务（旧任务或手动任务），不能创建可追认的验收记录。')
     record = load(run) or _blank(run, task)
@@ -373,8 +452,11 @@ def initialize(run, criteria=None, actor='main'):
     if criteria:
         texts = [criteria] if isinstance(criteria, str) else list(criteria)
         record['criteria'] = _build_criteria(texts)
-    record['decisions'].append({'at': registry.now(), 'actor': _clean_text(actor, 40).lower(),
-                                'action': 'init', 'notes': '记录验收条件'})
+    record['decisions'].append({'at': registry.now(), 'actor': actor,
+                                'action': 'init', 'notes': '记录验收条件',
+                                'request_id': _clean_text(request_id, 80) or None})
+    if request_id:
+        record['last_request_id'] = _clean_text(request_id, 80)
     record['decisions'] = record['decisions'][-50:]
     save(run, record)
     _mark_task(run, record)
@@ -415,10 +497,11 @@ def record_executor(run, executor):
 
 
 @serialized
-def accept(run, actor, criteria, notes=''):
+def accept(run, actor, criteria, notes='', authority=None, request_id=''):
     """Independently accept a completed executor result with per-condition evidence."""
-    actor = _require_main(actor)
-    record, _task = _require_record(run)
+    actor = _require_main(actor, authority)
+    record, task = _require_record(run)
+    _require_brain_authority(task, authority)
     if record['state'] in ACCEPTED_STATES:
         raise ValueError('这个成果已经验收通过，不能重复追认。')
     if record['state'] == EXECUTOR_FAILED:
@@ -437,7 +520,10 @@ def accept(run, actor, criteria, notes=''):
     record['blocked_reason'] = ''
     record['reviewer_notes'] = _clean_text(notes, MAX_TEXT)
     record['decisions'].append({'at': registry.now(), 'actor': actor, 'action': 'accept',
-                                'notes': record['reviewer_notes']})
+                                'notes': record['reviewer_notes'],
+                                'request_id': _clean_text(request_id, 80) or None})
+    if request_id:
+        record['last_request_id'] = _clean_text(request_id, 80)
     record['decisions'] = record['decisions'][-50:]
     save(run, record)
     _mark_task(run, record)
@@ -445,7 +531,7 @@ def accept(run, actor, criteria, notes=''):
 
 
 @serialized
-def final_accept(run, actor, criteria, notes=''):
+def final_accept(run, actor, criteria, notes='', authority=None, request_id=''):
     """Main-mind final acceptance after taking over failed/blocked work.
 
     This is a separate state from ordinary acceptance: the executor's failure
@@ -453,8 +539,9 @@ def final_accept(run, actor, criteria, notes=''):
     and the intervention is stored under ``final`` so a panel or an auditor can
     see that the executor did not complete the work.
     """
-    actor = _require_main(actor)
-    record, _task = _require_record(run)
+    actor = _require_main(actor, authority)
+    record, task = _require_record(run)
+    _require_brain_authority(task, authority)
     if record['state'] in ACCEPTED_STATES:
         raise ValueError('这个成果已经验收通过，不能重复追认。')
     if record['state'] not in {EXECUTOR_FAILED, BLOCKED, RETURNED}:
@@ -482,7 +569,10 @@ def final_accept(run, actor, criteria, notes=''):
     record['blocked_reason'] = ''
     record['reviewer_notes'] = _clean_text(notes, MAX_TEXT)
     record['decisions'].append({'at': registry.now(), 'actor': actor, 'action': 'final_accept',
-                                'notes': record['reviewer_notes']})
+                                'notes': record['reviewer_notes'],
+                                'request_id': _clean_text(request_id, 80) or None})
+    if request_id:
+        record['last_request_id'] = _clean_text(request_id, 80)
     record['decisions'] = record['decisions'][-50:]
     save(run, record)
     _mark_task(run, record)
@@ -490,10 +580,12 @@ def final_accept(run, actor, criteria, notes=''):
 
 
 @serialized
-def request_rework(run, actor, failed_criteria, problems, boundaries, notes=''):
+def request_rework(run, actor, failed_criteria, problems, boundaries, notes='',
+                   authority=None, request_id=''):
     """Return the work with the failed conditions, the real problem and the boundary."""
-    actor = _require_main(actor)
+    actor = _require_main(actor, authority)
     record, task = _require_record(run)
+    _require_brain_authority(task, authority)
     if record['state'] in DECIDED:
         raise ValueError('验收结论已经结束（验收通过或受阻），不能再次退回。')
     if record['state'] == RETURNED:
@@ -528,8 +620,13 @@ def request_rework(run, actor, failed_criteria, problems, boundaries, notes=''):
                         'problems': problems, 'boundaries': boundaries,
                         'notes': _clean_text(notes, MAX_TEXT),
                         'attempts_left': MAX_AUTO_REWORK - record['rework_count'],
-                        'at': registry.now(), 'dispatched_task_id': None, 'dispatched_at': None}
-    record['decisions'].append({'at': registry.now(), 'actor': actor, 'action': 'return', 'notes': problems})
+                        'at': registry.now(), 'dispatched_task_id': None, 'dispatched_at': None,
+                        'request_id': _clean_text(request_id, 80) or None}
+    record['decisions'].append({'at': registry.now(), 'actor': actor, 'action': 'return',
+                                'notes': problems,
+                                'request_id': _clean_text(request_id, 80) or None})
+    if request_id:
+        record['last_request_id'] = _clean_text(request_id, 80)
     record['decisions'] = record['decisions'][-50:]
     save(run, record)
     marker = {**(delegation_marker(task) or {}), 'rework_count': record['rework_count']}
@@ -538,10 +635,11 @@ def request_rework(run, actor, failed_criteria, problems, boundaries, notes=''):
 
 
 @serialized
-def block(run, actor, reason):
+def block(run, actor, reason, authority=None, request_id=''):
     """Record a blocked/escalated outcome instead of looping rework forever."""
-    actor = _require_main(actor)
-    record, _task = _require_record(run)
+    actor = _require_main(actor, authority)
+    record, task = _require_record(run)
+    _require_brain_authority(task, authority)
     if record['state'] in ACCEPTED_STATES:
         raise ValueError('成果已验收通过，不能追认为受阻。')
     if record['state'] == BLOCKED:
@@ -551,7 +649,11 @@ def block(run, actor, reason):
         raise ValueError('请写明受阻原因或需要主脑判断的问题')
     record['state'] = BLOCKED
     record['blocked_reason'] = reason
-    record['decisions'].append({'at': registry.now(), 'actor': actor, 'action': 'block', 'notes': reason})
+    record['decisions'].append({'at': registry.now(), 'actor': actor, 'action': 'block',
+                                'notes': reason,
+                                'request_id': _clean_text(request_id, 80) or None})
+    if request_id:
+        record['last_request_id'] = _clean_text(request_id, 80)
     record['decisions'] = record['decisions'][-50:]
     save(run, record)
     _mark_task(run, record)
@@ -559,24 +661,30 @@ def block(run, actor, reason):
 
 
 @serialized
-def mark_rework_dispatched(run, child_id):
+def mark_rework_dispatched(run, child_id, authority=None, request_id=''):
     """Record that the single allowed rework has been dispatched as a continuation."""
+    task = task_state(run)
+    if task:
+        _require_brain_authority(task, authority)
     record = load(run)
     if record is None or record.get('state') != RETURNED:
-        raise ValueError('只有处于退回整改状态的任务才能派发整改')
+        raise ReworkClaimRefused('只有处于退回整改状态的任务才能派发整改')
     rework = record.get('rework') or {}
     if rework.get('dispatched_task_id'):
         if rework['dispatched_task_id'] == str(child_id):
             return record
-        raise ValueError('整改已经派发为任务 ' + str(rework['dispatched_task_id']))
+        raise ReworkClaimRefused('整改已经派发为任务 ' + str(rework['dispatched_task_id']))
     rework['dispatched_task_id'] = str(child_id)
     rework['dispatched_at'] = registry.now()
+    if request_id:
+        rework['request_id'] = _clean_text(request_id, 80)
+        record['last_request_id'] = _clean_text(request_id, 80)
     record['rework'] = rework
     return save(run, record)
 
 
 @serialized
-def release_rework_dispatch(run, child_id, reason=''):
+def release_rework_dispatch(run, child_id, reason='', authority=None):
     """Release only a dispatch marker whose worker never started.
 
     Used when the pipeline refuses the claim *after* the atomic rework marker
@@ -585,6 +693,9 @@ def release_rework_dispatch(run, child_id, reason=''):
     binding is cleared, with a durable decision row so the release is auditable
     and can never be mistaken for a fresh rework slot.
     """
+    task = task_state(run)
+    if task:
+        _require_brain_authority(task, authority)
     record = load(run)
     if record is None:
         return None
@@ -659,6 +770,7 @@ def panel_summary(record):
     return {'task_id': record.get('task_id'),
             'state': record.get('state'),
             'label': STATE_LABELS.get(record.get('state'), record.get('state') or ''),
+            'owner': record.get('brain_owner'),
             'rework_count': record.get('rework_count', 0),
             'max_auto_rework': MAX_AUTO_REWORK,
             'updated_at': record.get('updated_at'),

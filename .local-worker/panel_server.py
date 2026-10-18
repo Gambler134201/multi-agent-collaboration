@@ -53,6 +53,14 @@ class PanelSessionExpired(PermissionError):
     """Authentication guard refusal: the mutation handler has not run."""
 
 
+class ReviewRefused(ValueError):
+    """A delegation-policy validation refusal of a review/return/block request.
+
+    These checks run before the policy writes the review record, so the brain
+    journal may treat this as a proven rejection instead of an unknown outcome.
+    """
+
+
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="model-task")
 ACTIVE = {}
 ACTIVE_LOCK = threading.Lock()
@@ -1042,7 +1050,7 @@ def _clean_readonly_files(project_path, requested):
 
 
 @task_history.serialized
-def submit_task(body):
+def submit_task(body, trusted=None, authority=None, request_id=''):
     prompt = str(body.get("prompt", "")).strip()
     if not prompt or len(prompt) > 50000:
         raise ValueError("请填写任务，最多 50000 个字符")
@@ -1051,6 +1059,39 @@ def submit_task(body):
         raise ValueError("任务类型不正确")
     settings = workflow_settings.snapshot()
     body = dict(body)
+    # The main-brain broker passes its immutable context internally.  A model
+    # tool body can never provide this argument, and the trusted branch refuses
+    # any attempt to override project/owner/role/executor here.
+    trusted_context = None
+    brain_request_id = ''
+    brain_authority = authority
+    if trusted is not None:
+        if not settings.get('enabled') or not settings.get('readable', True):
+            raise ValueError('协作总开关已关闭，主脑接口不会派发新任务或整改')
+        import brain_context
+        try:
+            brain_context.require_operation(trusted, 'dispatch')
+            brain_request_id = brain_context.clean_request_id(request_id or '')
+        except brain_context.ContextError as error:
+            raise ValueError(str(error)) from None
+        trusted_context = trusted
+        if body.get('project') and project_scope.project_key(body['project']) != trusted.project_key:
+            raise ValueError('主脑接口不能通过任务参数切换项目')
+        for field in ('owner', 'actor', 'role', 'host', 'session', 'brain',
+                      'brain_owner', 'session_binding'):
+            if field in body:
+                raise ValueError('主脑接口不能通过任务参数覆盖受信身份：' + field)
+        if execution_engines.requested_engine(body) is not None:
+            raise ValueError('主脑接口不能指定执行器；请使用模型已保存的默认 Agent')
+        if body.get('stage_id') or body.get('goal_id'):
+            raise ValueError('阶段 A 主脑接口不提供阶段/目标派发')
+        body['project'] = trusted.project
+        body['source'] = 'brain'
+        if brain_authority is None:
+            brain_authority = brain_context.issue_authority(trusted)
+        if not brain_context.authority_matches(brain_authority, trusted.owner,
+                                                trusted.project, trusted.binding_key):
+            raise ValueError('连接授权与主脑责任会话不匹配')
     # Only a real task override is explicit.  The global default is never copied
     # into the body here; otherwise a form/CLI would turn inheritance into a
     # permanent per-task override and hide the model preference.
@@ -1079,6 +1120,19 @@ def submit_task(body):
         if body.get("route_mode") == "auto":
             raise ValueError("整改保持原模型，不能自动重新路由")
         rework_parent = json.loads((rework_run / "task.json").read_text(encoding="utf-8"))
+        owned, owner, parent_project = delegation_policy.brain_identity(rework_parent)
+        if trusted_context is not None and not owned:
+            raise ValueError('主脑接口不能收养没有主脑归属的旧任务；请创建新的主脑任务')
+        if owned:
+            # Phase A: a brain-owned parent may only be reworked by a trusted
+            # same-owner/same-project connection.  A plain panel/CLI request must
+            # not adopt it, even if it knows the task id.
+            if trusted_context is None:
+                raise ValueError('这是主脑任务；普通面板/CLI 不能续接或整改，也不会自动收养。请使用主脑接口')
+            if (not owner or owner != trusted_context.owner or
+                    (rework_parent.get('brain') or {}).get('binding_key') != trusted_context.binding_key or
+                    (parent_project and project_scope.project_key(parent_project) != trusted_context.project_key)):
+                raise ValueError('主脑任务属于另一个拥有者或项目；拒绝跨拥有者整改')
         if explicit_engine is not None and explicit_engine != rework_parent.get('engine'):
             raise ValueError('整改保持原执行 Agent；切换 Agent 请创建新任务')
         for field in ('stage_id', 'goal_id'):
@@ -1103,6 +1157,16 @@ def submit_task(body):
     routing_body = dict(body)
     if continue_id:
         original = json.loads((registry.task_dir(continue_id) / 'task.json').read_text(encoding='utf-8'))
+        owned, owner, parent_project = delegation_policy.brain_identity(original)
+        if trusted_context is not None and not owned:
+            raise ValueError('主脑接口不能收养没有主脑归属的旧任务；请创建新的主脑任务')
+        if owned:
+            if trusted_context is None:
+                raise ValueError('这是主脑任务；普通面板/CLI 不能续接，也不会自动收养。请使用主脑接口')
+            if (not owner or owner != trusted_context.owner or
+                    (original.get('brain') or {}).get('binding_key') != trusted_context.binding_key or
+                    (parent_project and project_scope.project_key(parent_project) != trusted_context.project_key)):
+                raise ValueError('主脑任务属于另一个拥有者或项目；拒绝跨拥有者续接')
         if explicit_engine is not None and explicit_engine != original.get('engine'):
             raise ValueError('继续会话不能切换执行 Agent；请创建新任务')
         engine = original.get('engine') or 'dsh'
@@ -1251,7 +1315,8 @@ def submit_task(body):
             claim_run = parent_run
     marked_rework = False
     if claim_run is not None:
-        delegation_policy.mark_rework_dispatched(claim_run, task_id)
+        delegation_policy.mark_rework_dispatched(claim_run, task_id, authority=brain_authority,
+                                                request_id=brain_request_id or None)
         marked_rework = True
     try:
         # Stage claim is also atomic and enforces prerequisite acceptance.
@@ -1270,30 +1335,64 @@ def submit_task(body):
         # the review state and every acceptance/cancel guard stay untouched).
         if marked_rework:
             try:
-                delegation_policy.release_rework_dispatch(claim_run, task_id, reason=str(error))
+                delegation_policy.release_rework_dispatch(claim_run, task_id, reason=str(error),
+                                                          authority=brain_authority)
             except (OSError, ValueError):
                 pass
         raise
     (run / "prompt.txt").write_text(prompt, encoding="utf-8")
-    row = registry.patch_task(run, id=task_id, title=str(body.get("title") or prompt.splitlines()[0])[:100],
-          kind=kind, engine=engine, model_id=model["id"], model_name=model["name"], model=model["model"], status="queued",
-          phase="等待执行", source="codex" if body.get("source") == "codex" else "panel", project=project, files=files, created_at=registry.now(),
-          readonly_files=(readonly_files or None), files_readonly=bool(readonly_files),
-          timeout=timeout, test_command=str(body.get("test_command", "")).strip() or None,
-          stage_id=stage_id or None, goal_id=goal_id or None,
-          request_output_tokens=request_output_tokens,
-          connectivity_check={'source': 'pre_dispatch',
-                              'rechecked': bool(connectivity['checked']),
-                              'blocked': bool(connectivity['blocked']),
-                              'message': connectivity['message'],
-                              'verdict': connectivity['verdict'],
-                              'check': connectivity['check']})
+    brain_meta = None
+    if trusted_context is not None:
+        brain_meta = {
+            'schema': 1,
+            'owner': trusted_context.owner,
+            'binding_key': trusted_context.binding_key,
+            'project': trusted_context.project,
+            'host': trusted_context.host,
+            'role': trusted_context.role,
+            'session': {
+                'binding': trusted_context.session_binding,
+                'reference': trusted_context.session_reference,
+                'operator_bound': bool(trusted_context.operator_session),
+                'native': trusted_context.native_session.public(),
+            },
+            'request_id': brain_request_id,
+            'adopted': False,
+            'declared_at': trusted_context.declared_at,
+            'host_version': trusted_context.host_version.public(),
+            'model_identity': trusted_context.model.public(),
+        }
+    first_fields = {
+        'id': task_id, 'title': str(body.get("title") or prompt.splitlines()[0])[:100],
+        'kind': kind, 'engine': engine, 'model_id': model["id"], 'model_name': model["name"],
+        'model': model["model"], 'status': "queued", 'phase': "等待执行",
+        'source': 'brain' if trusted_context is not None else (
+            "codex" if body.get("source") == "codex" else "panel"),
+        'project': project, 'files': files, 'created_at': registry.now(),
+        'readonly_files': (readonly_files or None), 'files_readonly': bool(readonly_files),
+        'timeout': timeout, 'test_command': str(body.get("test_command", "")).strip() or None,
+        'stage_id': stage_id or None, 'goal_id': goal_id or None,
+        'request_output_tokens': request_output_tokens,
+        'connectivity_check': {'source': 'pre_dispatch',
+                               'rechecked': bool(connectivity['checked']),
+                               'blocked': bool(connectivity['blocked']),
+                               'message': connectivity['message'],
+                               'verdict': connectivity['verdict'],
+                               'check': connectivity['check']},
+    }
+    if brain_meta is not None:
+        # Public owner/request metadata is persisted before the task is queued.
+        first_fields.update({'owner': trusted_context.owner,
+                             'request_id': brain_request_id, 'brain': brain_meta})
+    row = registry.patch_task(run, **first_fields)
     row = registry.patch_task(run, route=route, model_calls=0, budget_reserved_cny=0,
                               cost_settled_cny=0, cost_settled_calls=0, cost_unsettled_cny=0,
                               cost_unknown_calls=0, cost_legacy_unsettled_cny=0, cost_requests={}, cost_schema=2)
     delegation = None
     link_delegated = bool(link_parent and isinstance(link_parent.get("delegation"), dict))
-    if engine in execution_engines.AGENTS and (route.get("mode") == "auto" or link_delegated or body.get('source') == 'codex'):
+    if engine in execution_engines.AGENTS and (route.get("mode") == "auto" or link_delegated
+                                               or body.get('source') == 'codex'
+                                               or trusted_context is not None):
         inherited = 0
         if link_delegated:
             try:
@@ -1304,7 +1403,8 @@ def submit_task(body):
                       "created_at": registry.now(),
                       "max_auto_rework": delegation_policy.MAX_AUTO_REWORK,
                       "rework_count": inherited, "inherited_rework_count": inherited,
-                      "parent_task_id": link_parent["id"] if link_parent else None}
+                      "parent_task_id": link_parent["id"] if link_parent else None,
+                      "brain_owner": trusted_context.owner if trusted_context is not None else None}
     row = registry.patch_task(run, delegation=delegation)
     if parent:
         row = registry.patch_task(run, parent_task_id=parent['id'], **execution_engines.session_fields(parent))
@@ -1350,32 +1450,54 @@ def cancel_task(task_id, reason="", actor="main"):
     return {"ok": True, "cancel_record": registry.read_task(run).get("cancel_record")}
 
 
-def update_review(task_id, body):
+def update_review(task_id, body, authority=None, request_id=''):
     """Record or update an acceptance decision through the delegated policy.
 
     Executor completion and independent acceptance stay separate; this path
     requires main-mind evidence for acceptance and enforces the rework cap.
+    A brain-owned task additionally needs the broker's signed owner authority;
+    a plain panel request carrying only ``actor`` is refused by the policy.
     """
     run = registry.task_dir(task_id)
     if not run.is_dir():
         raise ValueError("任务不存在")
     action = str(body.get("action", "")).strip()
     actor = body.get("actor") or "main"
-    if action == "init":
-        record = delegation_policy.initialize(run, body.get("criteria"), actor)
-    elif action == "accept":
-        record = delegation_policy.accept(run, actor, body.get("criteria") or [], body.get("notes", ""))
-    elif action == "final_accept":
-        # Independent main-mind intervention result; the executor failure stays.
-        record = delegation_policy.final_accept(run, actor, body.get("criteria") or [], body.get("notes", ""))
-    elif action in {"return", "rework"}:
-        record = delegation_policy.request_rework(run, actor, body.get("failed_criteria") or [],
-                                                  body.get("problems", ""), body.get("boundaries", ""),
-                                                  body.get("notes", ""))
-    elif action == "block":
-        record = delegation_policy.block(run, actor, body.get("reason", ""))
-    else:
-        raise ValueError("验收操作不正确")
+    if authority is not None and getattr(authority, 'owner', None):
+        # The broker-validated owner is the audit actor; a model-supplied actor
+        # string can never impersonate it.
+        actor = 'brain:' + str(authority.owner)
+    review_before = [(run / name).read_bytes() if (run / name).exists() else None
+                     for name in ('review.json', 'task.json')]
+    try:
+        if action == "init":
+            record = delegation_policy.initialize(run, body.get("criteria"), actor,
+                                                 authority=authority, request_id=request_id)
+        elif action == "accept":
+            record = delegation_policy.accept(run, actor, body.get("criteria") or [], body.get("notes", ""),
+                                             authority=authority, request_id=request_id)
+        elif action == "final_accept":
+            # Independent main-mind intervention result; the executor failure stays.
+            record = delegation_policy.final_accept(run, actor, body.get("criteria") or [], body.get("notes", ""),
+                                                   authority=authority, request_id=request_id)
+        elif action in {"return", "rework"}:
+            record = delegation_policy.request_rework(run, actor, body.get("failed_criteria") or [],
+                                                      body.get("problems", ""), body.get("boundaries", ""),
+                                                      body.get("notes", ""),
+                                                      authority=authority, request_id=request_id)
+        elif action == "block":
+            record = delegation_policy.block(run, actor, body.get("reason", ""),
+                                            authority=authority, request_id=request_id)
+        else:
+            raise ValueError("验收操作不正确")
+    except ValueError as error:
+        # Only unchanged durable records prove that this was a validation
+        # refusal. A later failure may follow a successful write.
+        review_after = [(run / name).read_bytes() if (run / name).exists() else None
+                        for name in ('review.json', 'task.json')]
+        if review_after == review_before:
+            raise ReviewRefused(str(error)) from None
+        raise
     return {"task_id": task_id, "review": record, "summary": delegation_policy.panel_summary(record)}
 
 
@@ -2138,13 +2260,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            self.guard(mutation=True)
+            path = urlparse(self.path).path
+            # The capability-authenticated broker call is the one POST route that
+            # does not reuse the panel session token; it carries its own private
+            # connection capability and is still loopback/origin guarded.
+            self.guard(mutation=path != '/api/brain/call')
             length = int(self.headers.get("Content-Length", 0))
             if not 0 < length <= 200000:
                 raise ValueError("请求大小不正确")
             body = json.loads(self.rfile.read(length))
-            path = urlparse(self.path).path
             project_views.check_request(path,self.project_view,body)
+            if path == '/api/brain/connect':
+                import brain_gateway
+                return self.send_json(brain_gateway.register_connection(body), 201)
+            if path == '/api/brain/call':
+                import brain_gateway
+                if not isinstance(body, dict):
+                    raise ValueError('主脑调用参数需要是对象')
+                unknown = set(body) - {'operation', 'payload'}
+                if unknown:
+                    raise ValueError('主脑调用含未知字段')
+                try:
+                    result = brain_gateway.handle(
+                        body.get('operation'), body.get('payload'),
+                        self.headers.get(brain_gateway.CAPABILITY_HEADER, ''))
+                except brain_gateway.AuthError as error:
+                    return self.send_json({'error': str(error)}, 401)
+                except Exception as error:
+                    import brain_requests
+                    if isinstance(error, brain_requests.UnknownOutcome):
+                        return self.send_json({'outcome': 'unknown', 'error': str(error),
+                                               'request_reference': error.reference}, 409)
+                    raise
+                return self.send_json(result)
             if path == '/api/projects/remember':
                 return self.send_json(project_views.remember_project(self.project_view))
             if path in {'/api/task-records/preview','/api/task-records/delete'}:

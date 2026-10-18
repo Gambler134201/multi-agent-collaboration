@@ -236,7 +236,7 @@ class SetupScriptTests(unittest.TestCase):
 
     def test_default_run_never_starts_a_service_or_a_worker(self):
         for forbidden in ('Start-Process', 'start_panel.py', 'panel_server.py', 'dispatch_task.py',
-                          'run_worker.py', 'setx ', 'Invoke-RestMethod'):
+                          'brain_mcp_server.py', 'run_worker.py', 'setx ', 'Invoke-RestMethod'):
             self.assertNotIn(forbidden, self.text, forbidden)
 
     def test_it_installs_only_declared_dependencies_in_this_directory(self):
@@ -251,8 +251,11 @@ class NoAuthorLocationTests(unittest.TestCase):
     """Nothing shipped may hard-code one machine's layout."""
 
     PORTABLE = ('.local-worker/runtime_paths.py', '.local-worker/dsh_worker.py', '.local-worker/pi_worker.py',
-                '.local-worker/executor_adapter.py', '.local-worker/install_workflow_rules.py', 'setup.ps1',
-                'README.md', 'docs/INSTALL.md', 'requirements.txt')
+                '.local-worker/executor_adapter.py', '.local-worker/install_workflow_rules.py',
+                '.local-worker/brain_context.py', '.local-worker/brain_gateway.py',
+                '.local-worker/brain_requests.py', '.local-worker/brain_transport.py',
+                '.local-worker/brain_mcp_server.py',
+                'setup.ps1', 'README.md', 'docs/INSTALL.md', 'requirements.txt')
     FORBIDDEN = ('E:/dsh', 'E:\\dsh', 'E:/pi', 'E:\\pi', 'C:/Users', 'C:\\Users', 'codex-runtimes',
                  '.cache/codex', 'AIjob')
 
