@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import execution_engines as engines
 import dispatch_task
 import executor_adapter
+import model_agent_defaults as model_defaults
 import model_registry as registry
 import panel_server as panel
 import pi_worker
@@ -78,6 +79,20 @@ class EngineTests(Base):
 
     def test_existing_queue_is_pinned_after_default_switch(self):
         task = self.submit(engine='pi')
+        settings.save_settings({'execution_agent': 'dsh'})
+        with patch.object(panel.subprocess, 'Popen') as process:
+            process.return_value.pid = 4242
+            process.return_value.wait.return_value = 0
+            panel.execute_task(task['id'])
+        argv = process.call_args.args[0]
+        self.assertTrue(argv[1].endswith('pi_worker.py'), argv)
+        self.assertEqual(registry.read_task(registry.task_dir(task['id']))['engine'], 'pi')
+
+    def test_queued_task_pins_the_models_saved_preference(self):
+        model_defaults.update('home', 'pi')
+        task = self.submit()
+        self.assertEqual(task['engine'], 'pi')
+        model_defaults.update('home', 'dsh')
         settings.save_settings({'execution_agent': 'dsh'})
         with patch.object(panel.subprocess, 'Popen') as process:
             process.return_value.pid = 4242

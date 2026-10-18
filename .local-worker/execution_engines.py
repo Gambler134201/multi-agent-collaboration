@@ -4,6 +4,10 @@ from copy import deepcopy
 AGENTS = ('dsh', 'pi')
 ENGINES = ('dsh', 'pi', 'direct', 'aider')
 DEFAULT = 'dsh'
+# Explicit form value meaning "omit the override and let the selected model (then
+# the global default) decide".  It is accepted as the absence of an override, not
+# as an execution engine.
+TASK_DEFAULT = 'model_default'
 LABELS = {'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'direct': '直接调用', 'aider': 'Aider'}
 
 # Each adapter declares its own controls. Model connection forms never interpret
@@ -48,11 +52,45 @@ def selected(settings):
     return normalize(settings.get('execution_agent', DEFAULT))
 
 
-def resolve(body, settings):
-    value = body['engine'] if 'engine' in body else selected(settings)
-    if not isinstance(value, str) or value not in ENGINES:
+def requested_engine(body):
+    """Return an explicit task-level engine, or ``None`` for no override.
+
+    A form/CLI that simply wants the selected model's preference must omit the
+    field (or send ``model_default``); sending the current global value would be
+    a real explicit override and is therefore avoided by the entry points.
+    """
+    if not isinstance(body, dict):
+        raise ValueError('执行方式参数需要是对象')
+    value = body.get('engine')
+    if value is None:
+        return None
+    if not isinstance(value, str):
         raise ValueError('执行方式无效；请选择已支持的执行 Agent')
-    return value
+    text = value.strip().lower()
+    if not text or text == TASK_DEFAULT:
+        return None
+    if text not in ENGINES:
+        raise ValueError('执行方式无效；请选择已支持的执行 Agent')
+    return text
+
+
+def resolution(body, settings, model=None):
+    """Resolve ``(engine, source)`` using explicit > model > global.
+
+    ``source`` is ``explicit``/``model``/``global``.  A model preference only
+    applies to agent engines; callers still validate direct/aider compatibility.
+    """
+    explicit = requested_engine(body)
+    if explicit is not None:
+        return explicit, 'explicit'
+    if model is not None:
+        import model_agent_defaults
+        return model_agent_defaults.effective(model, settings)
+    return selected(settings), 'global'
+
+
+def resolve(body, settings, model=None):
+    return resolution(body, settings, model=model)[0]
 
 
 def has_session(task):

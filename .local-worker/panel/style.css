@@ -583,7 +583,10 @@ dialog{padding:20px}
 }
 
 .model-metadata .model-endpoint{margin-bottom:5px}
-.model-thinking{font-size:9px;line-height:1.5;color:var(--muted);margin-bottom:12px;overflow-wrap:anywhere}
+.model-thinking{font-size:9px;line-height:1.5;color:var(--muted);margin-bottom:5px;overflow-wrap:anywhere}
+.model-agent{font-size:9px;line-height:1.5;color:var(--ink-soft);margin-bottom:12px;overflow-wrap:anywhere}
+.agent-default-summary{font-size:11px;line-height:1.6;color:var(--ink-soft);background:var(--inset);border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin:0 0 6px}
+#agent-settings-open-model{margin:0 0 12px}
 .thinking-setting{display:flex;align-items:center;gap:12px;margin-top:14px}
 .thinking-setting strong{font-size:12px;color:var(--accent)}
 
@@ -629,6 +632,16 @@ h1{font-size:18px}
 .workflow-context span{min-width:0;overflow-wrap:anywhere}
 .workflow-context strong{font-size:10px;font-weight:600;color:var(--ink);overflow-wrap:anywhere}
 .workflow-context .subtle{font-size:10px;color:var(--muted)}
+/* Per-model default agent: the compact model / agent / save controls that took
+   the place of the old global default select.  Nothing here edits the global
+   execution_agent; the save button patches only that model's default_agent. */
+.agent-entry{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.agent-entry-title{font-size:10px;font-weight:600;color:var(--ink-soft)}
+.agent-entry label{display:flex;align-items:center;gap:5px;margin:0;font-size:10px;color:var(--muted);min-width:0}
+.agent-entry select{width:132px;min-width:0;max-width:132px;height:32px;margin-top:0;padding:0 6px;font-size:11px}
+.agent-entry .button{padding:6px 12px;font-size:11px;min-height:32px}
+.agent-entry select:disabled,.agent-entry .button:disabled{opacity:.45}
+#agent-entry-status.error{color:var(--red)}
 .models-panel>.section-heading{margin-bottom:12px}
 
 @media(max-width:640px){.topbar.tool-header{gap:10px}
@@ -638,18 +651,35 @@ h1{font-size:18px}
 .usage-item{flex:1 1 130px;min-width:120px}
 .workflow-bar{padding:12px 13px;row-gap:9px}
 .workflow-context{gap:8px;padding-top:8px}
+.agent-entry{gap:6px}
+.agent-entry select{width:116px;max-width:116px;font-size:10px}
 }
 @media(max-width:420px){.usage-item{flex:1 1 118px;min-width:112px}
 .usage-windows{gap:6px 10px}
 .usage-values{gap:6px}
+.agent-entry{gap:5px}
+.agent-entry select{width:104px;max-width:104px}
 .stats{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:10px}
 }
 
+/* ---------- home page: one collapsed progress line for active goals ---------- */
+.goals-row{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;min-width:0}
+.goals-row-toggle{display:flex;align-items:center;gap:7px;flex:1 1 240px;min-width:0;padding:5px 8px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink);text-align:left;cursor:pointer;font-weight:600}
+.goals-row-toggle:hover:not(:disabled),.goals-row-toggle:focus-visible{background:var(--surface-hover);border-color:var(--line)}
+.goals-row-toggle:disabled{cursor:default;opacity:.72}
+.goals-caret{color:var(--faint);font-size:10px;flex-shrink:0;transition:transform .15s}
+.goals-row-toggle[aria-expanded="true"] .goals-caret{transform:rotate(90deg)}
+.goals-row-label{flex-shrink:0;font-size:12px}
+.goals-row-summary{flex:1 1 auto;min-width:0;font-size:11px;font-weight:500;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#goals-stats{font-size:10px;color:var(--muted);flex:0 1 auto;min-width:0;overflow-wrap:anywhere}
+#goals-error{margin:8px 0 0}
+.goals-detail{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);min-width:0}
+.goals-detail .section-heading{flex-wrap:wrap;gap:4px 8px}
+.goals-detail .section-heading h2{margin:0}
+#goals-scope-note{font-size:10px;color:var(--muted);min-width:0;overflow-wrap:anywhere}
 /* ---------- goals / stages / tasks / children tree ---------- */
 .goals-panel{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:12px 14px;margin:0 0 16px;min-width:0}
 .goals-panel .section-heading{margin-bottom:6px}
-.goals-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
-.goals-head-actions .subtle{font-size:10px;color:var(--muted)}
 .goals-panel .field-hint{margin:0 0 10px}
 .goals-tree{display:flex;flex-direction:column;gap:8px;min-width:0}
 .goal-node{border:1px solid var(--line);border-radius:8px;background:var(--surface);min-width:0}
@@ -685,6 +715,11 @@ h1{font-size:18px}
 .obs-sub>summary{font-size:10px;color:var(--muted);cursor:pointer}
 .obs-sub>*{margin-top:4px}
 @media(max-width:640px){.goals-panel{padding:10px 11px}
+.goals-row{align-items:flex-start}
+.goals-row-toggle{flex-basis:100%}
+.goals-row-summary{font-size:10px}
+#goals-stats{flex-basis:100%;padding-left:17px}
+.goals-detail .section-heading{flex-direction:column;align-items:flex-start}
 .goal-body{padding-left:12px}
 .stage-body{padding-left:10px}
 .task-body{padding-left:10px}
@@ -776,6 +811,15 @@ h1{font-size:18px}
 .records-confirm-list li.added{border-color:var(--orange);background:var(--orange-bg)}
 .records-confirm-list .record-title{font-size:11px}
 .record-added{font-size:9px;color:var(--orange)}
+.records-goals{margin:10px 0 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--inset)}
+.records-goals>summary{cursor:pointer;font-size:11px;font-weight:600;color:var(--ink-soft);display:flex;align-items:center;gap:4px}
+.records-goals-body{display:flex;flex-direction:column;gap:7px;margin-top:8px;min-width:0}
+.records-goals-body p{margin:0;overflow-wrap:anywhere}
+.records-goals-body .field-hint{margin:0}
+.records-goals-list{display:flex;flex-direction:column;gap:6px;min-width:0}
+.records-goals-list .goal-node{background:var(--surface)}
+.records-goals-list .empty{padding:14px 10px;text-align:left}
+.records-goals-error,.records-goals #records-goals-error{margin:0}
 .records-storage{margin:10px 0 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--inset)}
 .records-storage summary{cursor:pointer;font-size:11px;font-weight:600;color:var(--ink-soft)}
 .records-storage-body{display:flex;flex-direction:column;gap:6px;margin-top:8px;min-width:0}
@@ -798,4 +842,5 @@ h1{font-size:18px}
 .records-search{flex-basis:100%;max-width:none}
 }
 #workflow-save-status.unsaved{color:var(--ink);font-weight:600}
-#execution-agent{width:auto;min-width:190px;max-width:100%}
+/* The removed global default select is gone; the per-model entry sizes itself
+   through .agent-entry above, so no width override is needed here. */

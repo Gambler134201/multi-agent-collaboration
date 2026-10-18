@@ -14,6 +14,7 @@
     <span class="project-current-label">当前项目</span>
     <button type="button" class="project-name" id="project-view-name" title="尚未选择项目" aria-expanded="false" aria-controls="project-path-row">尚未选择项目</button>
     <button type="button" class="button secondary" id="project-view-switch" aria-haspopup="menu" aria-expanded="false" aria-controls="project-view-menu">选择项目</button>
+    <button type="button" class="button secondary" id="new-goal" title="在当前绑定项目下新建目标；未选择项目时会先提示选择项目">＋ 新建目标</button>
     <p class="project-path" id="project-path-row" hidden><code id="project-view-path"></code></p>
     <span id="project-view-status" class="sr-only" role="status">尚未选择项目</span>
     <span id="project-storage-state" class="project-storage" role="status" hidden></span>
@@ -28,12 +29,18 @@
   </section>
   <section id="execution-activity" class="execution-activity" aria-label="全局执行状态" hidden></section>
   <section class="usage-bar" aria-label="GPT Codex 额度"><div class="usage-heading"><strong title="当前 Codex 登录账号的共享额度，不是 API 余额或当前聊天的 token 数">GPT / Codex 额度</strong><span id="usage-status" class="subtle">正在读取…</span><button id="usage-refresh" class="text-button">刷新</button></div><div id="usage-windows" class="usage-windows"></div><p id="usage-error" class="field-hint" hidden></p></section>
-  <section class="workflow-bar" aria-label="协作总开关"><div><label class="workflow-switch"><input type="checkbox" id="workflow-toggle" role="switch"><span>多 Agent 协作</span><strong id="workflow-mode">正在读取…</strong></label><p id="workflow-description">关闭时按 Codex 默认方式工作。</p></div><div class="workflow-budget"><span id="budget-summary"></span><span id="workflow-scope-summary" class="subtle" title="全局执行模型范围"></span><button class="button secondary" id="workflow-settings">模型范围与预算</button></div><div class="workflow-context"><span id="delegation-stats" hidden></span><span>默认：<strong id="default-name">正在读取…</strong></span><label>执行 Agent：<select id="execution-agent" class="theme-select" aria-label="默认执行 Agent" title="全局默认执行 Agent；只影响新任务"><option value="dsh">DeepSeek Harness</option><option value="pi">Pi Agent</option></select></label><button class="button secondary" id="agent-settings-open" type="button">Agent 设置</button><span id="agent-state" class="subtle">正在读取执行器…</span><span id="delegation-summary" class="subtle"></span></div><p id="workflow-error" class="form-error" role="alert" hidden></p></section>
-  <section class="goals-panel" id="goals-panel" aria-label="目标与阶段">
-    <div class="section-heading"><h2>目标与阶段 <span id="goal-count" class="count">0</span></h2><div class="goals-head-actions"><span id="goals-stats" class="subtle"></span><button class="button secondary" id="new-goal">＋ 新建目标</button></div></div>
-    <p class="field-hint" id="goals-note">目标 → 阶段 → 任务 → 子代理按真实持久记录展示；执行器完成不等于验收通过，未验证子代理只显示未验证/未启用。</p>
-    <div id="goals-tree" class="goals-tree"></div>
+  <section class="workflow-bar" aria-label="协作总开关"><div><label class="workflow-switch"><input type="checkbox" id="workflow-toggle" role="switch"><span>多 Agent 协作</span><strong id="workflow-mode">正在读取…</strong></label><p id="workflow-description">关闭时按 Codex 默认方式工作。</p></div><div class="workflow-budget"><span id="budget-summary"></span><span id="workflow-scope-summary" class="subtle" title="全局执行模型范围"></span><button class="button secondary" id="workflow-settings">模型范围与预算</button></div><div class="workflow-context"><span id="delegation-stats" hidden></span><span>默认：<strong id="default-name">正在读取…</strong></span><div class="agent-entry" id="model-agent-entry" role="group" aria-label="各模型的默认执行 Agent"><span class="agent-entry-title">模型默认执行 Agent</span><label>模型<select id="agent-entry-model" class="agent-entry-select" aria-label="要设置默认执行 Agent 的模型" title="选择任一已配置模型；只修改这一个模型"></select></label><label>执行 Agent<select id="agent-entry-agent" class="agent-entry-select" aria-label="该模型的默认执行 Agent" title="该模型新任务的默认执行 Agent；本次分派显式指定仍然优先，已有任务保持原 Agent"></select></label><button class="button secondary" id="agent-entry-save" type="button" title="只保存这个模型的默认执行 Agent，不修改模型连接、密钥、参数或全局设置">保存</button><span id="agent-entry-status" class="subtle" role="status">正在读取…</span></div><button class="button secondary" id="agent-settings-open" type="button">各执行 Agent 参数设置</button><span id="agent-state" class="subtle">正在读取执行器…</span><span id="delegation-summary" class="subtle"></span></div><p id="workflow-error" class="form-error" role="alert" hidden></p></section>
+  <section class="goals-panel" id="goals-panel" aria-label="当前需求进度" hidden>
+    <div class="goals-row">
+      <button type="button" class="goals-row-toggle" id="goals-toggle" aria-expanded="false" aria-controls="goals-detail"><span class="goals-caret" aria-hidden="true">▸</span><span class="goals-row-label">当前需求进度</span><span class="goals-row-summary" id="goals-summary">正在读取…</span></button>
+      <span id="goals-stats" class="subtle"></span>
+    </div>
     <p id="goals-error" class="form-error" role="alert" hidden></p>
+    <div class="goals-detail" id="goals-detail" hidden>
+      <div class="section-heading"><h2>目标与阶段 <span id="goal-count" class="count">0</span></h2><span id="goals-scope-note" class="subtle"></span></div>
+      <p class="field-hint" id="goals-note">目标 → 阶段 → 任务 → 子代理按真实持久记录展示；执行器完成不等于验收通过，未验证子代理只显示未验证/未启用。</p>
+      <div id="goals-tree" class="goals-tree"></div>
+    </div>
   </section>
   <section class="stats" aria-label="工作概览">
     <div><span class="label">已启用模型</span><strong id="stat-models">—</strong><small id="model-caption">个执行端</small></div>
@@ -55,6 +62,7 @@
     <label>思考等级<div class="input-action"><select id="model-thinking-level"><option value="default">沿用默认</option></select><button type="button" class="button secondary" id="model-thinking-probe">读取引擎默认</button></div></label><p class="field-hint" id="model-thinking-note"></p>
     <label>API Key <span class="optional">自建服务无认证可留空</span><input id="model-key" type="password" autocomplete="new-password" placeholder="仅保存在这台电脑，以 Windows 用户密钥加密"></label><div id="key-hint" class="field-hint"></div>
     <label>模型 ID<div class="input-action"><input id="model-code" required list="discovered-models" placeholder="填写服务端的准确模型 ID" spellcheck="false"><button type="button" class="button secondary" id="discover-models">读取列表</button></div><datalist id="discovered-models"></datalist></label>
+    <label>默认执行 Agent<select id="model-default-agent"><option value="follow_global">跟随全局默认</option><option value="dsh">DeepSeek Harness</option><option value="pi">Pi Agent</option></select></label><p class="field-hint" id="model-default-agent-hint">仅决定使用这个模型的新任务由谁执行；优先级为本次显式指定 &gt; 模型默认 &gt; 全局默认。已有任务、续接和整改保留原 Agent 快照。</p>
     <div class="form-grid"><label>上下文窗口 / tokens<input id="model-input" type="number" value="32768" min="64" max="1048576" required></label><label>单次最大输出 / tokens<input id="model-output" type="number" value="4096" min="64" max="131072" required></label></div><p class="field-hint">上下文包括输入、会话历史、工具结果及输出；较大的窗口不会自动填满。更改后请新建执行会话。</p>
     <details class="capability-settings"><summary>能力与成本预设</summary><label>适合的任务 <span class="optional">逗号、顿号或分号分隔</span><input id="model-capabilities" placeholder="代码修改、测试、文档、信息提取"></label><label>能力说明<textarea id="model-capability-notes" rows="3" maxlength="3000" placeholder="例如：擅长小范围 Python 修改；复杂架构交给其他模型。"></textarea></label><div class="form-grid"><label>成本定位<select id="model-cost-preference"><option value="economy">经济型</option><option value="balanced">均衡型</option><option value="quality">高质量优先</option></select></label><label>自动派发复杂度上限<select id="model-complexity"><option value="simple">简单任务</option><option value="medium">中等复杂度</option><option value="complex">复杂任务</option></select></label></div><p class="field-hint">能力说明供主脑评估；自动路由检查类别、复杂度、上下文和预算，再比较预期总成本。这里是你的声明，并非实测评分。</p>
     <details><summary>其他服务商单价 · 人民币 / 百万 tokens</summary><p class="field-hint">DeepSeek 官方接口自动使用已核对的峰谷单价；GLM 或第三方需填写价格才能用于付费路由。留空表示未确认价格。</p><div class="form-grid"><label>输入 / 未命中<input id="model-price-input" type="number" min="0" max="10000" step="any"></label><label>输入 / 缓存命中<input id="model-price-cache" type="number" min="0" max="10000" step="any"></label></div><label>输出<input id="model-price-output" type="number" min="0" max="10000" step="any"></label></details></details>
@@ -64,12 +72,14 @@
   </form>
 </dialog>
 <dialog id="agent-settings-dialog">
-  <form id="agent-settings-form"><div class="dialog-heading"><div><span class="eyebrow">EXECUTION AGENT</span><h2>执行 Agent 设置</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div>
-    <label>执行 Agent<select id="agent-settings-agent"></select></label>
+  <form id="agent-settings-form"><div class="dialog-heading"><div><span class="eyebrow">EXECUTION AGENT PARAMETERS</span><h2>各执行 Agent 参数设置</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div>
+    <label>Agent<select id="agent-settings-agent"></select></label>
     <p id="agent-settings-description" class="field-hint"></p>
+    <p id="agent-settings-default-summary" class="agent-default-summary"></p>
+    <button type="button" class="text-button" id="agent-settings-open-model">设置此模型的默认执行 Agent</button>
     <label id="agent-settings-model-field">应用到模型<select id="agent-settings-model"></select></label>
     <div id="agent-settings-fields"></div>
-    <p class="field-hint">这里只保存所选 Agent 的专属选项，不改变默认 Agent、模型连接、思考等级、预算或其他 Agent 的配置。各项更改用于新的执行会话。</p>
+    <p class="field-hint">这里只调整所选 Agent 的专属运行预设/参数；它不决定谁执行，也不改变模型默认 Agent、模型连接、思考等级、预算或其他 Agent 的配置。要决定“谁执行”，请用协作区域的“模型默认执行 Agent”入口（或编辑执行模型里的“默认执行 Agent”）。各项更改用于新的执行会话。</p>
     <p id="agent-settings-error" class="form-error" role="alert"></p>
     <div class="dialog-footer"><button type="button" class="button secondary close-dialog">关闭</button><button type="submit" id="agent-settings-save" class="button primary">保存 Agent 设置</button></div>
   </form>
@@ -77,7 +87,7 @@
 <dialog id="task-dialog">
   <form id="task-form"><div class="dialog-heading"><div><span class="eyebrow">NEW TASK</span><h2>分派一个任务</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭">×</button></div>
     <div class="form-grid"><label>模型选择<select id="task-route"><option value="auto">自动路由 · 能力与总成本</option><option value="manual">手动指定</option></select></label><label>任务类型<select id="task-kind"><option value="chat">咨询 / 分析</option><option value="edit">修改项目文件</option></select></label></div><label id="task-model-field">执行模型<select id="task-model" required></select></label>
-    <label>执行 Agent / 方式<select id="task-engine"><option value="dsh">DeepSeek Harness · 可使用工具、继续会话</option><option value="pi">Pi Agent · 可使用工具、继续会话</option><option value="direct">直接询问模型 · 简单咨询</option><option value="aider">Aider · 文件修改</option></select></label><p id="task-session-hint" class="field-hint">新任务使用独立会话；任务结束后可以继续追问。</p>
+    <label>执行 Agent（默认使用模型默认）<select id="task-engine"><option value="model_default">使用模型默认（推荐）</option><option value="dsh">DeepSeek Harness · 可使用工具、继续会话</option><option value="pi">Pi Agent · 可使用工具、继续会话</option><option value="direct">直接询问模型 · 简单咨询</option><option value="aider">Aider · 文件修改</option></select></label><p id="task-agent-hint" class="field-hint">不额外指定时按“所选模型保存的默认 Agent，其次全局默认”执行；显式选择会覆盖本次任务。</p><p id="task-session-hint" class="field-hint">新任务使用独立会话；任务结束后可以继续追问。</p>
     <label>任务名称 <span class="optional">可选</span><input id="task-title" maxlength="100" placeholder="例如：审查登录逻辑"></label><label>任务内容<textarea id="task-prompt" rows="5" required placeholder="写清目标、需要保留的行为与验收条件。" maxlength="50000"></textarea></label>
     <div id="project-field"><label>项目文件夹 <span class="optional" id="project-hint">分析任务可选，留空使用独立工作目录</span><input id="task-project" placeholder="笔记本上的项目绝对路径" spellcheck="false"></label></div><div id="edit-fields" hidden><label>待修改文件 <span class="optional">每行一个，路径相对项目文件夹</span><textarea id="task-files" rows="3" placeholder="src/main.py&#10;README.md" spellcheck="false"></textarea></label><label>测试命令 <span class="optional">可选，执行完成后运行</span><input id="task-test" placeholder="例如：python -m pytest" spellcheck="false"></label><p class="field-hint">修改会写入所选项目。模型执行完成后，仍需要检查实际改动与测试结果。</p></div>
     <details class="capability-settings" id="task-routing-settings"><summary>任务要求与路由预览</summary><div class="form-grid"><label>任务类别<select id="task-category"><option value="analysis">内容 / 逻辑分析</option><option value="code_small">小范围代码修改</option><option value="code_multi">多文件修改 / 架构</option><option value="debug">疑难排查</option><option value="writing">文案 / 文档</option><option value="extract">信息提取 / 重复工作</option><option value="tests">测试</option><option value="other">其他</option></select></label><label>复杂度<select id="task-complexity"><option value="simple">简单</option><option value="medium">中等</option><option value="complex">复杂</option></select></label></div><div class="form-grid"><label>预计输入 / tokens<input id="task-input-estimate" type="number" value="8192" min="1" max="1048576" required></label><label>需要输出 / tokens<input id="task-output-estimate" type="number" value="4096" min="1" max="131072" required></label></div><label>预计模型请求次数<input id="task-calls-estimate" type="number" min="1" max="100000" value="1" required></label><label>单请求输出目标 / tokens <span class="optional">可选，仅约束本次请求</span><input id="task-request-output" type="number" min="1" max="131072" placeholder="留空使用模型默认上限"></label><p class="field-hint" id="task-output-hint">模型最大输出与上下文窗口是能力上限；请求输出目标只约束本次请求，不修改模型预设。</p><button type="button" class="button secondary" id="preview-route">预览选择 · 不调用模型</button><p id="route-preview" class="field-hint" aria-live="polite">预览只用于判断，实际发送前会再次检查。</p></details>
@@ -134,6 +144,14 @@
           <p id="records-storage-legacy" class="subtle">旧版未归属 / 迁移异常记录仍在旧全局存储中；这里只做提示，不并入上面的项目列表，需要处理时由主脑在队列空闲时运行迁移命令。</p>
           <div class="records-storage-actions"><button type="button" class="button secondary" id="task-records-compact">空闲时压缩数据库</button><span id="task-records-compact-result" class="subtle" role="status"></span></div>
           <p class="field-hint">压缩只回收 SQLite 空闲页，不删除任何记录；队列或该项目仍有未结束任务时会被拒绝。永久删除仍需先预览再二次确认。</p>
+        </div>
+      </details>
+      <details class="records-goals" id="records-goals">
+        <summary>历史目标与阶段（只读查看）<span id="records-goals-count" class="count">0</span></summary>
+        <div class="records-goals-body">
+          <p class="field-hint">已完成 / 已取消的目标在这里查看阶段、关联任务、成果交接与独立验收记录；首页不再常驻这些目标。这里只读取真实记录，不会自动归档、删除、改状态或派发任务。</p>
+          <div id="records-goals-list" class="records-goals-list"></div>
+          <p id="records-goals-error" class="form-error" role="alert" hidden></p>
         </div>
       </details>
       <div class="records-tools">

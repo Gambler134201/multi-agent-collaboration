@@ -59,11 +59,16 @@ let state = {models:[],tasks:[],default_model:null,observability:{},tree:null}, 
 let detailPrompt = '', promptTask = null, pendingDelete = null, toastTimer;
 let continuingTask=null;
 const treeOpen = new Set(); const observabilityLoading = new Set(); let pendingAction=null, stageGoal=null;
+// Home page shows one collapsed progress line for active goals only; the user's
+// expansion survives the auto-poll, and a project switch folds it back up.
+let goalsExpanded=false;
 let modelThinkingProfile=null;
 // Task history management state. Records, selection and the preview token always belong to one bound project.
 let historyRecords=[], historySelected=new Set(), historyStatus='all', historyKeyword='';
 let historyProject=null, historyToken=null, historyPreview=null, historyExpiresAt=0;
 let historyLoading=false, historySubmitting=false,historyGeneration=0;
+// Read-only history goals inside 任务记录管理; separate state so the delete flow is untouched.
+let recordsGoals=[],recordsGoalsError='',recordsGoalsLoading=false,recordsGoalsGeneration=0;
 // Per-document context. Never inherit a different tab's last selected project.
 const viewQuery=new URLSearchParams(window.location.search);
 let rememberedPanelView=null;
@@ -246,7 +251,7 @@ function renderProjectView(){
 function changeProjectView(view){
   if(JSON.stringify(view)===JSON.stringify(projectView))return;
   projectView=view;viewEpoch++;projectPathPinned=false;closeProjectMenu();resetProjectStorage();savePanelBinding();selectedTask=null;detailPrompt='';promptTask=null;continuingTask=null;
-  pendingAction=null;stageGoal=null;detailTab='result';taskFilter='all';treeOpen.clear();observabilityLoading.clear();
+  pendingAction=null;stageGoal=null;detailTab='result';taskFilter='all';treeOpen.clear();observabilityLoading.clear();goalsExpanded=false;
   // Project switch invalidates this dialog: no stale preview token, no stale selection, no stale confirmation.
   resetHistoryManagement();
   state={...state,tasks:[],tree:null,observability:{},delegation:null};
@@ -261,6 +266,20 @@ const engineNames={dsh:'DeepSeek Harness',pi:'Pi Agent',direct:'直接调用',ai
 const defaultAgent=()=>state.workflow?.execution_agent||'dsh';
 const registeredAgents=()=>state.execution_agents||{dsh:{name:'DeepSeek Harness'},pi:{name:'Pi Agent'}};
 const agentIds=()=>Object.keys(registeredAgents());
+const MODEL_AGENT_FOLLOW='follow_global';
+const MODEL_AGENT_VALUES=[MODEL_AGENT_FOLLOW,'dsh','pi'];
+const modelAgentPreference=model=>model?.default_agent||MODEL_AGENT_FOLLOW;
+const modelAgentValid=model=>model?.default_agent_valid!==false&&MODEL_AGENT_VALUES.includes(modelAgentPreference(model));
+const effectiveModelAgent=model=>{
+  if(!modelAgentValid(model))return null;
+  const preference=modelAgentPreference(model);
+  return preference===MODEL_AGENT_FOLLOW?defaultAgent():preference;
+};
+const modelAgentLabel=model=>{
+  if(!modelAgentValid(model))return '配置无效，需在编辑模型中修正';
+  const agent=effectiveModelAgent(model),source=modelAgentPreference(model)===MODEL_AGENT_FOLLOW?'跟随全局默认':'模型指定';
+  return `${engineNames[agent]||agent} · ${source}`;
+};
 const hasAgentSession=task=>task.engine==='pi'?!!(task.pi_session_id&&task.pi_session_file):task.engine==='dsh'&&!!task.dsh_session_id;
 const presetNames={native:'原生模式',standard:'标准模式'};
 function thinkingInfo(model,task=null){
@@ -386,14 +405,81 @@ function renderBilling(model){
   </section>`;
 }
 
+// Per-model default agent entry.  It replaces the old global-default select in
+// the collaboration bar: it patches exactly {default_agent} for one model and
+// never writes the global execution_agent.  The legacy global fallback stays in
+// the backend for rows that inherit it, but this page offers no control for it.
+let agentEntry={model:'',agent:'',dirty:false,status:'idle',error:'',saved_at:''};
+const agentEntryModel=()=>(state.models||[]).find(m=>m.id===agentEntryId())||null;
+function agentEntryId(){
+  const models=state.models||[];
+  if(models.some(m=>m.id===agentEntry.model))return agentEntry.model;
+  if(models.some(m=>m.id===state.default_model))return state.default_model;
+  return models[0]?.id||'';
+}
+function agentEntryChoices(){
+  const choices=[{value:MODEL_AGENT_FOLLOW,label:'跟随全局默认（未显式指定）'}];
+  for(const [id,info] of Object.entries(registeredAgents()))choices.push({value:id,label:info.name||id});
+  return choices;
+}
+function agentStatusText(agent){
+  if(!agent)return '执行器未确定 · 该模型默认 Agent 无效';
+  const info=registeredAgents()[agent]||{};
+  // An older payload may only describe the globally selected adapter; use it
+  // when it is the same adapter instead of inventing a readiness.
+  const status=typeof info.ready==='boolean'?info:(agent===defaultAgent()&&state.agent?state.agent:info);
+  const name=engineNames[agent]||status.name||agent;
+  return `${name}${status.version?' '+status.version:''}${status.ready===true?' 就绪':status.ready===false?' 未就绪':''}`;
+}
+function agentEntryStatusText(model){
+  if(!model)return '还没有已配置模型；请先添加执行模型';
+  if(agentEntry.status==='saving')return '正在保存…';
+  if(agentEntry.status==='error')return `保存失败：${agentEntry.error}`;
+  if(agentEntry.status==='removed')return '原模型已移除，已切换到其他模型';
+  if(agentEntry.dirty&&agentEntry.model===model.id)return '未保存 · 保存只更新这个模型';
+  if(!modelAgentValid(model))return '已保存值无效 · 请重新选择后保存';
+  if(agentEntry.status==='saved'&&agentEntry.model===model.id)return `已保存 ${clock(agentEntry.saved_at)} · 新的任务生效`;
+  return '当前显示已保存值 · 只影响这个模型的新任务';
+}
+function renderModelAgentEntry(){
+  const modelSelect=$('agent-entry-model'),agentSelect=$('agent-entry-agent'),status=$('agent-entry-status');
+  if(!modelSelect||!agentSelect)return;
+  const models=state.models||[];
+  if(agentEntry.model&&!models.some(m=>m.id===agentEntry.model))agentEntry={model:'',agent:'',dirty:false,status:'removed',error:'',saved_at:''};
+  const model=agentEntryModel();
+  agentEntry.model=model?.id||'';
+  const modelSignature=models.map(m=>m.id).join(',');
+  if(modelSelect.dataset.signature!==modelSignature){
+    modelSelect.replaceChildren(...models.map(m=>new Option(m.name,m.id)));
+    modelSelect.dataset.signature=modelSignature;
+  }
+  modelSelect.value=agentEntry.model;
+  const saved=model?modelAgentPreference(model):'';
+  const choices=agentEntryChoices();
+  if(model&&!choices.some(choice=>choice.value===saved))choices.push({value:saved,label:`已保存值无效（${saved||'未记录'}）`});
+  const agentSignature=choices.map(choice=>choice.value).join(',');
+  if(agentSelect.dataset.signature!==agentSignature){
+    agentSelect.replaceChildren(...choices.map(choice=>new Option(choice.label,choice.value)));
+    agentSelect.dataset.signature=agentSignature;
+  }
+  const shown=agentEntry.dirty&&agentEntry.model===model?.id?agentEntry.agent:saved;
+  agentSelect.value=shown;
+  if(agentSelect.value!==shown)agentSelect.value=saved;
+  modelSelect.disabled=!model||agentEntry.status==='saving';agentSelect.disabled=!model||agentEntry.status==='saving';
+  $('agent-entry-save').disabled=!model||agentEntry.status==='saving';
+  status.textContent=agentEntryStatusText(model);
+  status.classList.toggle('error',agentEntry.status==='error');
+  // Adapter readiness belongs to the agent this model actually resolves to, so
+  // a model pinned to DSH is never shown as "Pi ready" (or the other way round).
+  const agent=model?effectiveModelAgent(model):null;
+  $('agent-state').textContent=model
+    ?`${agentStatusText(agent)} · ${modelAgentPreference(model)===MODEL_AGENT_FOLLOW?'全局回退':'模型指定'}`
+    :'未选择模型 · 执行器状态不适用';
+}
 function renderModels() {
   const agents=registeredAgents();
   for(const [id,info] of Object.entries(agents))engineNames[id]=info.name||id;
-  const choices=Object.entries(agents).map(([id,info])=>`<option value="${escapeText(id)}">${escapeText(info.name||id)}</option>`).join('');
-  if($('execution-agent').innerHTML!==choices)$('execution-agent').innerHTML=choices;
-  const agentName=engineNames[defaultAgent()]||'执行 Agent';
-  $('execution-agent').value=defaultAgent();
-  $('agent-state').textContent=agentName+(state.agent?.version?' '+state.agent.version:'')+(state.agent?.ready?' 就绪':' 未就绪');
+  renderModelAgentEntry();
   $('model-count').textContent=state.models.length;
   $('default-name').textContent=state.models.find(m=>m.id===state.default_model)?.name || '尚未选择';
   $('stat-models').textContent=state.models.filter(m=>m.enabled).length;
@@ -409,7 +495,7 @@ function renderModels() {
     try {hostname=new URL(model.api_base).host;} catch {}
     return `<article class="model-card ${model.id===state.default_model?'is-default':''} ${model.enabled?'':'disabled'} ${model.billing?'billing-model '+(expandedBillingModels.has(model.id)?'is-expanded':'is-collapsed'):''}">
       <div class="model-head"><div class="model-avatar ${model.provider==='local'?'':'cloud'}">${({local:'Q',deepseek:'D',glm:'G',custom:'M'})[model.provider]||'M'}</div><div class="model-title"><strong>${escapeText(model.name)}</strong><div class="provider-label">${escapeText(providerNames[model.provider])}</div></div>${model.id===state.default_model?'<span class="default-badge">默认</span>':''}${model.billing?`<span class="pricing-badge ${model.billing.pricing.period==='peak'?'peak':model.billing.pricing.period==='off_peak'?'off-peak':'unknown'}" title="${escapeText(model.billing.pricing.label)}">${({peak:'峰价',off_peak:'谷价',unknown:'待核实',third_party:'转发计价'})[model.billing.pricing.period]||'待核实'}</span>`:''}</div>
-      <div class="model-info"><div class="model-metadata"><div class="model-code">${escapeText(model.model)}</div><div class="model-endpoint" title="${escapeText(model.api_base)}">${escapeText(hostname)}</div><div class="model-thinking" title="${escapeText(thinking.note)}">思考：${escapeText(thinking.label)}</div></div>${renderBilling(model)}</div>
+      <div class="model-info"><div class="model-metadata"><div class="model-code">${escapeText(model.model)}</div><div class="model-endpoint" title="${escapeText(model.api_base)}">${escapeText(hostname)}</div><div class="model-thinking" title="${escapeText(thinking.note)}">思考：${escapeText(thinking.label)}</div><div class="model-agent" title="新任务默认执行 Agent：本次显式指定 &gt; 模型默认 &gt; 全局默认">默认 Agent：${escapeText(modelAgentLabel(model))}</div></div>${renderBilling(model)}</div>
       <div class="model-status">${connection}<span class="subtle">${jobs.length?`全局 ${jobs.length} 个任务`:check?.ok?`${(check.latency_ms/1000).toFixed(1)}s 测试响应`:'暂无任务'}</span></div>
       <div class="model-actions"><button data-model-action="test" data-id="${escapeText(model.id)}" ${testingModels.has(model.id)?'disabled':''}>${testingModels.has(model.id)?'测试中…':'测试连接'}</button><button data-model-action="edit" data-id="${escapeText(model.id)}">编辑</button>${model.id!==state.default_model&&model.enabled?`<button class="set-default" data-model-action="default" data-id="${escapeText(model.id)}">设为默认</button>`:''}<button class="remove" data-model-action="delete" data-id="${escapeText(model.id)}">删除</button></div></article>`;
   }).join('') : '<div class="empty"><strong>还没有执行模型</strong><p>添加一个本地服务或线上模型。</p></div>');
@@ -495,6 +581,7 @@ function renderWorkflow(){
   const error=w.error||w.daily?.error||'';$('workflow-error').textContent=error;$('workflow-error').hidden=!error;
   $('task-route').querySelector('[value="auto"]').disabled=!w.enabled;
   if(!continuingTask&&$('task-dialog').open&&!w.enabled&&$('task-route').value==='auto'){$('task-route').value='manual';routeFields();}
+  if($('task-dialog').open)updateTaskAgentHint();
 }
 // ------------------------------------------------ goals / stages / obs tree
 const goalStatusClass = status => ({active:'running',completed:'completed',cancelled:'cancelled'}[status]||'queued');
@@ -538,7 +625,7 @@ function renderObservability(taskId){
 async function loadObservability(id){
   if(!id||state.observability?.[id]||observabilityLoading.has(id))return;
   observabilityLoading.add(id);
-  try{state.observability[id]=await api(`/api/tasks/${encodeURIComponent(id)}/observability`);if(selectedTask===id)renderDetail();if(state.tree)renderGoals();}
+  try{state.observability[id]=await api(`/api/tasks/${encodeURIComponent(id)}/observability`);if(selectedTask===id)renderDetail();if(state.tree)renderGoals();if($('task-records-dialog')?.open)renderRecordsGoals();}
   catch(error){/* keep it explicitly unknown; never fabricate numbers */}
   finally{observabilityLoading.delete(id);}
 }
@@ -570,43 +657,98 @@ function renderTreeTask(task){
       <details class="obs-sub"><summary>改动文件与代码 hash（${Object.keys(task.file_hashes||{}).length}）</summary><div class="tree-facts">${Object.entries(task.file_hashes||{}).map(([name,hash])=>`<span>${escapeText(name)} · ${escapeText(String(hash).slice(0,12))}</span>`).join('')||'<span class="obs-unknown">未记录</span>'}</div></details>
     </div></details>`;
 }
-function renderStage(stage){
+function renderStage(stage,readOnly=false){
   const deps=stage.depends_on||[],readiness=stage.readiness||{},delivery=stage.delivery||{deliveries:[],warnings:[]};
   const dependencyStates=readiness.dependency_states||{};
-  const canCancel=!['accepted','final_accepted','cancelled'].includes(stage.status);
-  const canRequeue=['failed','blocked','recovery_pending','cancelled','executor_completed'].includes(stage.status);
+  const canCancel=!readOnly&&!['accepted','final_accepted','cancelled'].includes(stage.status);
+  const canRequeue=!readOnly&&['failed','blocked','recovery_pending','cancelled','executor_completed'].includes(stage.status);
   return `<details class="stage-node" data-stage="${escapeText(stage.id)}"${treeOpen.has('stage:'+stage.id)?' open':''}>
     <summary><span class="stage-title">${escapeText(String(stage.ordinal||''))}. ${escapeText(stage.title)}</span>${badge(stageStatusClass(stage.status),stage.status_label||stage.status)}<span class="stage-meta">${escapeText(stage.kind_label||stage.kind||'')}</span><span class="stage-meta">依赖 ${deps.length}</span></summary>
     <div class="stage-body">
       <div class="tree-facts"><span>目标：${escapeText(stage.objective||'—')}</span><span>会话策略：${escapeText(stage.session_policy==='reuse_session'?'显式复用会话':'新会话')}</span><span>会话标识：<strong>${escapeText(stage.session_key||'未建立')}</strong></span></div>
       <details class="obs-sub"><summary>前置依赖与就绪（${readiness.ready?'就绪':'未就绪'}）</summary><div class="tree-facts"><span>${escapeText((readiness.reasons||[]).join('；')||'无阻塞')}</span><span>依赖状态：${escapeText(deps.map(dep=>`${dep}=${dependencyStates[dep]||'未知'}`).join('，')||'无')}</span></div></details>
       <details class="obs-sub"><summary>成果交接与代码 hash（${delivery.deliveries.length} 份）</summary>${delivery.deliveries.length?delivery.deliveries.map(renderDelivery).join(''):'<p class="obs-unknown">尚无已独立验收的成果交接。</p>'}${(delivery.warnings||[]).map(item=>`<p class="obs-unknown">${escapeText(JSON.stringify(item))}</p>`).join('')}</details>
-      <div class="tree-actions"><button data-stage-action="dispatch" data-id="${escapeText(stage.id)}">派发</button>${canCancel?`<button data-stage-action="cancel" data-id="${escapeText(stage.id)}">取消阶段</button>`:''}${canRequeue?`<button data-stage-action="requeue" data-id="${escapeText(stage.id)}">恢复/重新排队</button>`:''}<button data-stage-action="sync" data-id="${escapeText(stage.id)}">同步</button></div>
+      ${readOnly?'':`<div class="tree-actions"><button data-stage-action="dispatch" data-id="${escapeText(stage.id)}">派发</button>${canCancel?`<button data-stage-action="cancel" data-id="${escapeText(stage.id)}">取消阶段</button>`:''}${canRequeue?`<button data-stage-action="requeue" data-id="${escapeText(stage.id)}">恢复/重新排队</button>`:''}<button data-stage-action="sync" data-id="${escapeText(stage.id)}">同步</button></div>`}
       ${(stage.tasks||[]).length?stage.tasks.map(renderTreeTask).join(''):'<p class="goal-meta">还没有关联任务。</p>'}
     </div></details>`;
 }
-function renderGoal(goal){
+function renderGoal(goal,readOnly=false){
   const stages=goal.stages||[];
-  const actions=[`<button data-goal-action="stage" data-id="${escapeText(goal.id)}">＋ 新建阶段</button>`];
-  if(goal.status==='active')actions.push(`<button data-goal-action="complete" data-id="${escapeText(goal.id)}">标记完成</button>`,`<button data-goal-action="cancel" data-id="${escapeText(goal.id)}">取消目标</button>`);
-  return `<details class="goal-node" data-goal="${escapeText(goal.id)}"${treeOpen.has('goal:'+goal.id)?' open':''}>
+  const actions=readOnly?[]:[`<button data-goal-action="stage" data-id="${escapeText(goal.id)}">＋ 新建阶段</button>`];
+  if(!readOnly&&goal.status==='active')actions.push(`<button data-goal-action="complete" data-id="${escapeText(goal.id)}">标记完成</button>`,`<button data-goal-action="cancel" data-id="${escapeText(goal.id)}">取消目标</button>`);
+  return `<details class="goal-node${readOnly?' goal-node-readonly':''}" data-goal="${escapeText(goal.id)}"${treeOpen.has('goal:'+goal.id)?' open':''}>
     <summary><span class="goal-title">${escapeText(goal.title)}</span>${badge(goalStatusClass(goal.status),goal.status_label||goal.status)}<span class="goal-meta">阶段 ${goal.accepted_count||0}/${goal.stage_count||0}</span>${goal.project?`<span class="goal-meta">${escapeText(goal.project)}</span>`:''}</summary>
     <div class="goal-body">
       ${goal.objective?`<p class="goal-meta">${escapeText(goal.objective)}</p>`:''}
-      <div class="tree-actions">${actions.join('')}</div>
-      ${stages.length?stages.map(renderStage).join(''):'<p class="goal-meta">这个目标还没有阶段。</p>'}
+      ${actions.length?`<div class="tree-actions">${actions.join('')}</div>`:''}
+      ${stages.length?stages.map(stage=>renderStage(stage,readOnly)).join(''):'<p class="goal-meta">这个目标还没有阶段。</p>'}
     </div></details>`;
 }
+const ACTIVE_GOAL_STATUS='active';
+const activeGoalsOf=tree=>((tree&&tree.goals)||[]).filter(goal=>goal&&goal.status===ACTIVE_GOAL_STATUS);
+const historyGoalsOf=tree=>((tree&&tree.goals)||[]).filter(goal=>goal&&goal.status!==ACTIVE_GOAL_STATUS);
+// Progress is counted over the active goals shown on the home page only, so an
+// old accepted stage from a finished goal never inflates the current numbers.
+function goalProgress(goals){
+  const counts={goals:goals.length,stages:0,accepted:0,executor_completed:0,running:0,pending:0,ready:0,failed:0,recovery_pending:0,cancelled:0,unknown:0};
+  for(const goal of goals)for(const stage of (goal.stages||[])){
+    if(!stage)continue;
+    counts.stages+=1;
+    const status=stage.status;
+    const bucket=['accepted','final_accepted'].includes(status)?'accepted':status==='executor_completed'?'executor_completed'
+      :['running','dispatched'].includes(status)?'running':['failed','blocked','returned'].includes(status)?'failed'
+      :status==='recovery_pending'?'recovery_pending':status==='cancelled'?'cancelled':status==='pending'?'pending':status==='ready'?'ready':'unknown';
+    counts[bucket]+=1;
+  }
+  return counts;
+}
+function progressParts(counts){
+  const parts=[`阶段 ${numberText(counts.accepted)}/${numberText(counts.stages)} 已验收`];
+  if(counts.running)parts.push(`执行中 ${numberText(counts.running)}`);
+  // Executor completion is not acceptance: it never joins the accepted count.
+  if(counts.executor_completed)parts.push(`执行完成待验收 ${numberText(counts.executor_completed)}`);
+  if(counts.recovery_pending)parts.push(`待恢复 ${numberText(counts.recovery_pending)}`);
+  if(counts.failed)parts.push(`失败/受阻 ${numberText(counts.failed)}`);
+  if(counts.ready)parts.push(`待派发 ${numberText(counts.ready)}`);
+  if(counts.pending)parts.push(`待前置验收 ${numberText(counts.pending)}`);
+  if(counts.cancelled)parts.push(`阶段已取消 ${numberText(counts.cancelled)}`);
+  if(counts.unknown)parts.push(`状态未知 ${numberText(counts.unknown)}`);
+  return parts;
+}
+function goalTitleLine(goals){
+  const first=String(goals[0].title||'（无标题）');
+  return goals.length===1?first:`${first} 等 ${numberText(goals.length)} 个进行中目标`;
+}
 function renderGoals(){
+  const panel=$('goals-panel'),detail=$('goals-detail'),toggle=$('goals-toggle'),summary=$('goals-summary');
+  if(!panel||!detail||!toggle||!summary)return;
   const tree=state.tree;
-  if(!tree){setMarkup($('goals-tree'),state.treeError?`<p class="obs-unknown">目标/阶段接口暂不可用：${escapeText(state.treeError)}（面板服务加载新后端后可用；这里不会自动重启服务）。</p>`:'<p class="subtle">正在读取目标与阶段…</p>');return;}
-  const stats=tree.stats||{},goals=tree.goals||[];
-  $('goal-count').textContent=goals.length;
-  $('goals-stats').textContent=`阶段 ${numberText(stats.stages||0)} · 已验收 ${numberText(stats.accepted||0)} · 待恢复 ${numberText(stats.recovery_pending||0)}`;
-  $('goals-error').hidden=!tree.error;
-  $('goals-error').textContent=tree.error||'';
+  const problem=[state.treeError||'',(tree&&tree.error)||''].filter(Boolean).join('；');
+  const active=activeGoalsOf(tree),historyCount=historyGoalsOf(tree).length;
+  const counts=goalProgress(active);
+  if(tree&&!problem&&!active.length)goalsExpanded=false;
+  const expanded=goalsExpanded&&active.length>0;
+  // Unknown is never presented as "no goals": the block stays visible while the
+  // first read is pending or the read failed, and hides only for a settled answer.
+  panel.hidden=!(active.length||problem||!tree);
+  toggle.disabled=!active.length;
+  toggle.setAttribute('aria-expanded',expanded?'true':'false');
+  detail.hidden=!expanded;
+  $('goal-count').textContent=numberText(counts.goals);
+  $('goals-error').hidden=!problem;
+  $('goals-error').textContent=problem?`目标/阶段数据未能确认${tree?'（下面是最近一次成功读取的内容，不代表当前状态）':''}：${problem}`:'';
+  $('goals-scope-note').textContent=expanded?`首页只列进行中的目标；已完成 / 已取消的 ${numberText(historyCount)} 个目标在“任务记录管理”中查看。`:'';
+  $('goals-stats').textContent=active.length?`进行中目标 ${numberText(active.length)} · 历史目标 ${numberText(historyCount)}（在“任务记录管理”查看）`:'';
+  if(!active.length){
+    setMarkup($('goals-tree'),'');
+    summary.textContent=problem?`读取失败，无法确认目标与阶段：${problem}`:(tree?'当前没有进行中的目标':'正在读取目标与阶段…');
+    summary.setAttribute('title',summary.textContent);
+    return;
+  }
+  const line=[goalTitleLine(active),...progressParts(counts)].join(' · ');
+  summary.textContent=line;summary.setAttribute('title',line);
   const scroll=$('goals-tree').scrollTop;
-  setMarkup($('goals-tree'),goals.length?goals.map(renderGoal).join(''):'<div class="empty"><strong>暂无目标</strong><p>创建一个目标，再添加只读调查或实现阶段；全部阶段独立验收通过后才能标记目标完成。</p></div>');
+  setMarkup($('goals-tree'),active.map(goal=>renderGoal(goal,false)).join(''));
   $('goals-tree').scrollTop=scroll;
 }
 function openAction(config){
@@ -805,7 +947,11 @@ async function refreshState() {
     if(state.view)projectView=state.view;savePanelBinding();renderProjectView();renderExecutionActivity();
     if(!selectedTask&&state.tasks.length)selectedTask=state.tasks[0].id;
     renderModels();renderUsage();renderWorkflow();renderTasks();renderDetail();
-    try{state.treeError=null;state.tree=await api('/api/tree');}catch(error){if(error.stale)return;state.treeError=error.message;}
+    try{
+      const nextTree=await api('/api/tree');
+      if(!nextTree||nextTree.error||!Array.isArray(nextTree.goals))throw new Error(nextTree?.error||'返回内容缺少目标列表');
+      state.treeError=null;state.tree=nextTree;
+    }catch(error){if(error.stale)return;state.treeError=error.message;}
     renderGoals();
     pollFailure=false;markPollData();
     setMarkup($('sync'),'<span class="dot"></span>实时同步');$('sync').classList.remove('offline');$('last-sync').textContent=`最近同步 ${clock(state.server_time)} · 数据保存在本机`;
@@ -816,22 +962,29 @@ async function refreshState() {
     pollFailure=true;
     setMarkup($('sync'),'<span class="dot"></span>连接已中断');$('sync').classList.add('offline');$('last-sync').textContent=error.message||'无法连接本地面板，请运行启动脚本。';}finally{if(epoch!==viewEpoch)refresh();}
 }
+let modelSavedConnectionDraft='';
+function modelConnectionDraft(body){const {default_agent,...connection}=body;return JSON.stringify(connection);}
 function openModel(id=null) {
   $('model-form').reset();$('model-error').textContent='';$('discovered-models').innerHTML='';$('model-id').value=id||'';
   const model=state.models.find(m=>m.id===id);$('model-dialog-title').textContent=model?'编辑执行模型':'添加执行模型';
   $('model-name').value=model?.name||'';$('model-provider').value=model?.provider||'local';$('model-base').value=model?.api_base||'';$('model-code').value=model?.model||'';
   $('model-input').value=model?.max_input_tokens||32768;$('model-output').value=model?.max_output_tokens||4096;$('model-enabled').checked=model?.enabled??true;$('model-bypass').checked=model?.bypass_proxy??true;$('model-default').checked=!!id&&id===state.default_model;
+  const preference=modelAgentPreference(model);$('model-default-agent').value=MODEL_AGENT_VALUES.includes(preference)?preference:MODEL_AGENT_FOLLOW;
+  const globalName=engineNames[defaultAgent()]||defaultAgent();
+  $('model-default-agent').options[0].textContent=`跟随全局默认（当前：${globalName}）`;
+  $('model-default-agent-hint').textContent=`仅决定使用这个模型的新任务由谁执行；优先级为本次显式指定 > 模型默认 > 全局默认（当前 ${globalName}）。已有任务、续接和整改保留原 Agent 快照。`;
   $('model-capabilities').value=(model?.preferred_tasks||[]).join('、');$('model-capability-notes').value=model?.capability_notes||'';$('model-cost-preference').value=model?.cost_preference||($('model-provider').value==='local'?'economy':'balanced');
   $('model-complexity').value=model?.max_task_complexity||($('model-provider').value==='local'?'simple':'complex');
   renderThinkingSetting(model||{provider:$('model-provider').value,api_base:$('model-base').value});
   renderSubagentCapability(model||null);
   $('model-price-input').value=model?.pricing_cny?.cache_miss_input??'';$('model-price-cache').value=model?.pricing_cny?.cache_hit_input??'';$('model-price-output').value=model?.pricing_cny?.output??'';
-  $('key-hint').textContent=model?.api_key_set?'已有密钥。留空保持原密钥；输入新值可替换。':'';$('clear-key-label').hidden=!model?.api_key_set;$('model-dialog').showModal();
+  $('key-hint').textContent=model?.api_key_set?'已有密钥。留空保持原密钥；输入新值可替换。':'';$('clear-key-label').hidden=!model?.api_key_set;
+  modelSavedConnectionDraft=modelConnectionDraft(modelBody());$('model-dialog').showModal();
 }
 function modelBody() {
   const id=$('model-id').value;
   return {name:$('model-name').value.trim(),provider:$('model-provider').value,api_base:$('model-base').value.trim(),model:$('model-code').value.trim(),api_key:$('model-key').value,
-    clear_key:$('model-clear-key').checked,api_key_env:state.models.find(m=>m.id===id)?.api_key_env||'',max_input_tokens:Number($('model-input').value),max_output_tokens:Number($('model-output').value),enabled:$('model-enabled').checked,bypass_proxy:$('model-bypass').checked,make_default:$('model-default').checked,
+    clear_key:$('model-clear-key').checked,api_key_env:state.models.find(m=>m.id===id)?.api_key_env||'',max_input_tokens:Number($('model-input').value),max_output_tokens:Number($('model-output').value),enabled:$('model-enabled').checked,bypass_proxy:$('model-bypass').checked,make_default:$('model-default').checked,default_agent:$('model-default-agent').value,
     preferred_tasks:$('model-capabilities').value.split(/[,，、;；\n]/).map(s=>s.trim()).filter(Boolean),capability_notes:$('model-capability-notes').value.trim(),cost_preference:$('model-cost-preference').value,max_task_complexity:$('model-complexity').value,thinking_level:$('model-thinking-level').value,
     pricing_cny:['model-price-input','model-price-cache','model-price-output'].every(key=>$(key).value==='')?null:{cache_miss_input:$('model-price-input').value===''?null:Number($('model-price-input').value),cache_hit_input:$('model-price-cache').value===''?null:Number($('model-price-cache').value),output:$('model-price-output').value===''?null:Number($('model-price-output').value)}};
 }
@@ -851,25 +1004,51 @@ function renderThinkingNote(){
   const known=p.default_effort?`已确认默认：${names[p.default_effort]||p.default_effort} / ${p.default_effort}。 `:'';
   $('model-thinking-note').textContent=known+(p.note||'')+' 选择仅影响工作台的新任务，不修改服务端全局设置；更改后请新建会话。';
 }
+function taskAgentHint(){
+  const control=$('task-engine'),selected=control.value,automatic=$('task-route').value==='auto';
+  if(continuingTask)return `继续使用原任务的 ${engineNames[continuingTask.engine]||continuingTask.engine}、原模型与原会话；当前模型偏好不会迁移已有任务。`;
+  if(selected==='direct')return '本次显式使用“直接询问模型”。它不使用 Agent 会话，也不会被模型默认或全局默认替换。';
+  if(selected==='aider')return '本次显式使用 Aider。它不使用 Agent 会话，也不会被模型默认或全局默认替换。';
+  if(selected&&selected!=='model_default')return `本次显式指定 ${engineNames[selected]||selected}；不会改用模型默认或全局默认。`;
+  if(automatic)return `自动路由会按最终候选模型解析 Agent（模型默认，其次全局默认）；当前全局默认 ${engineNames[defaultAgent()]||defaultAgent()}。`;
+  const model=state.models.find(item=>item.id===$('task-model').value);
+  if(!model)return '选择模型后，将使用该模型保存的默认 Agent；模型未指定时再回退全局默认。';
+  if(!modelAgentValid(model))return '所选模型的默认 Agent 配置无效；请先在“编辑执行模型”中修正，不会静默回退。';
+  const preference=modelAgentPreference(model),globalName=engineNames[defaultAgent()]||defaultAgent();
+  return preference===MODEL_AGENT_FOLLOW
+    ?`本次不额外指定：该模型跟随全局默认，将使用 ${globalName}；显式选择可覆盖本次任务。`
+    :`本次不额外指定：将使用该模型保存的默认 Agent（${engineNames[effectiveModelAgent(model)]||effectiveModelAgent(model)}）；显式选择可覆盖本次任务。`;
+}
+function updateTaskAgentHint(){$('task-agent-hint').textContent=taskAgentHint();}
 function taskFields(){
-  const editing=$('task-kind').value==='edit',automatic=$('task-route').value==='auto';
+  const editing=$('task-kind').value==='edit',automatic=$('task-route').value==='auto',control=$('task-engine');
   $('edit-fields').hidden=!editing;$('project-field').hidden=false;
   $('project-hint').textContent='必填；任务归属此目录，不会使用工作台安装目录';
-  $('task-engine').querySelector('[value="direct"]').disabled=editing||automatic;$('task-engine').querySelector('[value="aider"]').disabled=!editing||automatic;
-  if((automatic&&!agentIds().includes($('task-engine').value))||(editing&&$('task-engine').value==='direct')||(!editing&&$('task-engine').value==='aider'))$('task-engine').value=defaultAgent();
+  control.querySelector('[value="direct"]').disabled=editing||automatic;control.querySelector('[value="aider"]').disabled=!editing||automatic;
+  const inheritanceAllowed=['model_default',...agentIds()];
+  if(automatic&&!inheritanceAllowed.includes(control.value))control.value='model_default';
+  if(editing&&control.value==='direct')control.value='model_default';
+  if(!editing&&control.value==='aider')control.value='model_default';
   $('task-project').required=true;$('task-files').required=editing;
+  updateTaskAgentHint();
 }
 function routeFields(){
   const automatic=$('task-route').value==='auto';$('task-model-field').hidden=automatic;$('task-model').required=!automatic;
   $('task-engine').disabled=!!continuingTask;
-  if(automatic&&!agentIds().includes($('task-engine').value))$('task-engine').value=defaultAgent();
+  if(automatic&&!['model_default',...agentIds()].includes($('task-engine').value))$('task-engine').value='model_default';
   $('route-preview').textContent='预览只用于判断，实际发送前会再次检查。';taskFields();updateTaskOutputHint();
 }
 function taskBody(){
-  return {model_id:$('task-model').value,route_mode:$('task-route').value,kind:$('task-kind').value,title:$('task-title').value.trim(),prompt:$('task-prompt').value,
-    project:$('task-project').value.trim(),files:$('task-files').value.split(/\r?\n/).map(f=>f.trim()).filter(Boolean),test_command:$('task-test').value,timeout:Number($('task-timeout').value),engine:$('task-engine').value,continue_task:continuingTask?.id,
+  const body={model_id:$('task-model').value,route_mode:$('task-route').value,kind:$('task-kind').value,title:$('task-title').value.trim(),prompt:$('task-prompt').value,
+    project:$('task-project').value.trim(),files:$('task-files').value.split(/\r?\n/).map(f=>f.trim()).filter(Boolean),test_command:$('task-test').value,timeout:Number($('task-timeout').value),continue_task:continuingTask?.id,
     request_output_tokens:$('task-request-output').value===''?null:Number($('task-request-output').value),
     routing:{category:$('task-category').value,complexity:$('task-complexity').value,input_tokens:Number($('task-input-estimate').value),output_tokens:Number($('task-output-estimate').value),expected_calls:Number($('task-calls-estimate').value)}};
+  // "使用模型默认" must omit the field so the backend resolves the final
+  // model's preference; sending the current global value would be a fake
+  // explicit override.  A continuation is pinned by the server to its parent.
+  const engine=$('task-engine').value;
+  if(!continuingTask&&engine&&engine!=='model_default')body.engine=engine;
+  return body;
 }
 function openTask(parent=null) {
   if(!parent&&projectView.mode==='unbound'){toast('请先在顶部选择项目目录',true);$('project-view-switch').focus();return;}
@@ -881,15 +1060,15 @@ function openTask(parent=null) {
   const inScope=inScopeModels(enabled);
   if(!inScope.length){toast(`执行模型范围「${scopeLabel()}」下没有已启用的模型；请在模型范围与预算中调整范围或启用相应模型。`,true);return;}
   continuingTask=parent;
-  $('task-engine').innerHTML=Object.entries(registeredAgents()).map(([id,info])=>`<option value="${escapeText(id)}">${escapeText(info.name||id)} · 工具与会话</option>`).join('')+'<option value="direct">直接询问模型 · 简单咨询</option><option value="aider">Aider · 文件修改</option>';
+  $('task-engine').innerHTML='<option value="model_default">使用模型默认（推荐）</option>'+Object.entries(registeredAgents()).map(([id,info])=>`<option value="${escapeText(id)}">${escapeText(info.name||id)} · 工具与会话</option>`).join('')+'<option value="direct">直接询问模型 · 简单咨询</option><option value="aider">Aider · 文件修改</option>';
   $('task-form').reset();$('task-error').textContent='';$('task-model').innerHTML=enabled.map(m=>`<option value="${escapeText(m.id)}"${modelInScope(m)?'':' disabled'}>${escapeText(m.name)}${modelInScope(m)?'':'（范围外，不可选）'}</option>`).join('');$('task-model').value=parent?.model_id||(inScope.some(m=>m.id===state.default_model)?state.default_model:inScope[0].id);
-  $('task-engine').value=parent?.engine||defaultAgent();$('task-kind').value=parent?.kind||'chat';$('task-project').value=parent?.project||(projectView.mode==='project'?projectView.project:'');$('task-files').value=(parent?.files||[]).join('\n');$('task-title').value=parent?'继续 · '+parent.title:'';
+  $('task-engine').value=parent?.engine||'model_default';$('task-kind').value=parent?.kind||'chat';$('task-project').value=parent?.project||(projectView.mode==='project'?projectView.project:'');$('task-files').value=(parent?.files||[]).join('\n');$('task-title').value=parent?'继续 · '+parent.title:'';
   $('task-route').querySelector('[value="auto"]').disabled=!state.workflow?.enabled;
   $('task-route').value=parent?'manual':state.workflow?.enabled?'auto':'manual';$('task-route').disabled=!!parent;
   if(parent?.route?.requirements){const r=parent.route.requirements;$('task-category').value=r.category;$('task-complexity').value=r.complexity;$('task-input-estimate').value=r.input_tokens;$('task-output-estimate').value=r.output_tokens;$('task-calls-estimate').value=r.expected_calls;}
   $('task-request-output').value=parent?.request_output_tokens??'';
   for(const id of ['task-model','task-kind','task-engine','task-project','task-files','task-request-output'])$(id).disabled=!!parent;
-  $('task-session-hint').textContent=parent?`继续同一 ${engineNames[parent.engine]||parent.engine} 会话，保留前面的任务上下文。`:'新任务使用所选 Agent 的独立会话；任务结束后可以继续追问。';
+  $('task-session-hint').textContent=parent?`继续同一 ${engineNames[parent.engine]||parent.engine} 会话，保留原任务 Agent/模型/项目；任务结束后可以继续追问。`:'默认按所选模型的默认 Agent 新建独立会话；任务结束后可以继续追问。';
   routeFields();updateTaskOutputHint();$('task-dialog').showModal();
 }
 $('add-model').onclick=()=>openModel();$('add-model-small').onclick=()=>openModel();$('new-task').onclick=()=>openTask();
@@ -897,6 +1076,10 @@ function renderAgentSettings(){
   const engine=$('agent-settings-agent').value,info=registeredAgents()[engine],schema=info?.configuration;
   const fields=schema?.model_fields||[],model=state.models.find(m=>m.id===$('agent-settings-model').value);
   $('agent-settings-description').textContent=schema?.description||'当前连接尚未提供此 Agent 的额外配置。';
+  $('agent-settings-default-summary').textContent=model
+    ?`当前模型默认执行 Agent：${modelAgentLabel(model)}。这里不会改变它；下面只保存 ${info?.name||engine} 的专属运行参数。`
+    :'请先选择模型。';
+  $('agent-settings-open-model').hidden=!model;
   $('agent-settings-model-field').hidden=!fields.length;
   $('agent-settings-fields').replaceChildren();$('agent-settings-error').textContent='';
   let supported=true;
@@ -914,14 +1097,22 @@ function renderAgentSettings(){
   $('agent-settings-save').disabled=!model;
 }
 $('agent-settings-open').onclick=()=>{
+  const models=state.models||[],modelId=agentEntryId()||state.default_model||models[0]?.id||'';
+  const entryAgent=agentEntryModel()?effectiveModelAgent(agentEntryModel()):null;
   $('agent-settings-agent').replaceChildren(...Object.entries(registeredAgents()).map(([id,info])=>new Option(info.name||id,id)));
-  $('agent-settings-agent').value=defaultAgent();
-  $('agent-settings-model').replaceChildren(...state.models.map(model=>new Option(model.name,model.id)));
-  $('agent-settings-model').value=state.default_model||state.models[0]?.id||'';
+  $('agent-settings-agent').value=entryAgent&&registeredAgents()[entryAgent]?entryAgent:defaultAgent();
+  $('agent-settings-model').replaceChildren(...models.map(model=>new Option(model.name,model.id)));
+  $('agent-settings-model').value=modelId;
   renderAgentSettings();$('agent-settings-dialog').showModal();
 };
 $('agent-settings-agent').onchange=renderAgentSettings;
 $('agent-settings-model').onchange=renderAgentSettings;
+$('agent-settings-open-model').onclick=()=>{
+  const model=$('agent-settings-model').value;
+  if(!model)return;
+  $('agent-settings-dialog').close();
+  openModel(model);
+};
 $('agent-settings-form').onsubmit=async event=>{
   event.preventDefault();const button=$('agent-settings-save'),engine=$('agent-settings-agent').value,model=$('agent-settings-model').value;
   const values=Object.fromEntries([...$('agent-settings-fields').querySelectorAll('[data-agent-key]')].map(field=>[field.dataset.agentKey,field.value]));
@@ -931,11 +1122,35 @@ $('agent-settings-form').onsubmit=async event=>{
   catch(error){$('agent-settings-error').textContent=error.message;}
   finally{button.disabled=false;$('agent-settings-agent').disabled=false;$('agent-settings-model').disabled=false;}
 };
-$('execution-agent').onchange=async()=>{
-  const control=$('execution-agent'),value=control.value;control.disabled=true;
-  try{state.workflow=await api('/api/workflow',{execution_agent:value});await refresh();toast(`新任务默认使用 ${engineNames[value]}；已有任务继续使用原 Agent。`);}
-  catch(error){control.value=defaultAgent();toast(error.message,true);}
-  finally{control.disabled=false;}
+// The collaboration bar now edits one model's preference at a time.  Only
+// {default_agent} is sent, to that model's own save endpoint; the global
+// execution_agent is never written from this page.
+$('agent-entry-model').onchange=()=>{agentEntry={model:$('agent-entry-model').value,agent:'',dirty:false,status:'idle',error:'',saved_at:''};renderModelAgentEntry();};
+$('agent-entry-agent').onchange=()=>{agentEntry.agent=$('agent-entry-agent').value;agentEntry.dirty=true;agentEntry.status='idle';agentEntry.error='';renderModelAgentEntry();};
+$('agent-entry-save').onclick=async()=>{
+  const modelId=agentEntryId(),value=$('agent-entry-agent').value,model=(state.models||[]).find(m=>m.id===modelId);
+  if(!model||!value)return;
+  const label=value===MODEL_AGENT_FOLLOW?'跟随全局默认':engineNames[value]||registeredAgents()[value]?.name||value;
+  agentEntry={model:modelId,agent:value,dirty:true,status:'saving',error:'',saved_at:''};
+  renderModelAgentEntry();
+  try{
+    const saved=await api(`/api/models/${encodeURIComponent(modelId)}/save`,{default_agent:value});
+    if(!saved||saved.id!==modelId||String(saved.default_agent??'').toLowerCase()!==value)
+      throw new Error('服务返回的默认 Agent 与提交值不一致，未确认保存');
+    // Drain an older poll before publishing the confirmed response. The
+    // controls must unlock even if the following state refresh is unavailable.
+    if(pollInFlight)await pollInFlight;
+    const current=(state.models||[]).find(item=>item.id===modelId);
+    if(current)Object.assign(current,saved);
+    agentEntry={model:modelId,agent:value,dirty:false,status:'saved',error:'',saved_at:new Date().toISOString()};
+    renderModels();
+    await refresh();
+    toast(`${model.name} 的默认执行 Agent 已保存为 ${label}；只影响该模型的新任务。`);
+  }catch(error){
+    agentEntry={model:modelId,agent:value,dirty:true,status:'error',error:error.message||'保存失败',saved_at:''};
+    renderModelAgentEntry();
+    toast(`保存失败：${error.message}`,true);
+  }
 };
 $('usage-refresh').onclick=async()=>{
   const button=$('usage-refresh');button.disabled=true;
@@ -962,7 +1177,9 @@ $('model-base').addEventListener('input',updateThinkingEndpoint);$('model-code')
 $('model-thinking-level').onchange=renderThinkingNote;
 $('model-thinking-probe').onclick=async()=>{const saved=state.models.find(m=>m.id===$('model-id').value);if(!saved||saved.api_base!==$('model-base').value.trim().replace(/\/$/,'')||saved.model!==$('model-code').value.trim()){toast('请先保存接口和模型配置，再读取引擎默认。',true);return;}const button=$('model-thinking-probe');const selected=$('model-thinking-level').value;button.disabled=true;button.textContent='读取中…';try{const thinking=await api(`/api/models/${encodeURIComponent(saved.id)}/thinking`,{});saved.thinking=thinking;renderThinkingSetting(saved,selected);toast('默认等级已确认；只读查询，没有调用模型生成。');}catch(error){$('model-error').textContent=error.message;}finally{button.disabled=false;button.textContent='读取引擎默认';}};
 $('model-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('model-error').textContent='';try{
-  const id=$('model-id').value;await api(id?`/api/models/${encodeURIComponent(id)}/save`:'/api/models',modelBody());$('model-dialog').close();toast('模型已保存');await refresh();
+  const id=$('model-id').value,body=modelBody();
+  const payload=id&&modelConnectionDraft(body)===modelSavedConnectionDraft?{default_agent:body.default_agent}:body;
+  await api(id?`/api/models/${encodeURIComponent(id)}/save`:'/api/models',payload);$('model-dialog').close();toast('模型已保存');await refresh();
 }catch(error){$('model-error').textContent=error.message;}finally{button.disabled=false;}};
 $('discover-models').onclick=async()=>{const button=$('discover-models');button.disabled=true;button.textContent='读取中…';$('model-error').textContent='';try{
   const data=await api('/api/discover',{...modelBody(),id:$('model-id').value});$('discovered-models').innerHTML=data.models.map(model=>`<option value="${escapeText(model)}"></option>`).join('');
@@ -993,7 +1210,7 @@ function workflowDirtyHint(){const hint=$('workflow-save-status');if(hint){const
 $('workflow-form').addEventListener('input',workflowDirtyHint);
 $('workflow-scope').onchange=()=>{$('workflow-scope-hint').textContent=scopeHintText($('workflow-scope').value);workflowDirtyHint();};
 $('workflow-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{await api('/api/workflow',{model_scope:$('workflow-scope').value,paid_allowed:$('workflow-paid').checked,enforce_paid_budget:$('workflow-enforce-budget').checked,enforce_model_call_limit:$('workflow-enforce-calls').checked,task_budget_cny:Number($('workflow-task-budget').value),daily_budget_cny:Number($('workflow-daily-budget').value),max_model_calls:Number($('workflow-max-calls').value)});$('workflow-dialog').close();toast('执行模型范围与预算限制已保存；执行中的任务不受影响，排队任务在启动前按新范围检查');await refresh();}catch(error){$('workflow-form-error').textContent=error.message;}finally{button.disabled=false;}};
-$('task-model').onchange=updateTaskOutputHint;
+$('task-model').onchange=()=>{updateTaskOutputHint();updateTaskAgentHint();};
 $('new-goal').onclick=()=>{if(projectView.mode==='unbound'){toast('请先选择项目目录',true);return;}$('goal-form').reset();$('goal-project').value=projectView.mode==='project'?projectView.project:'';$('goal-error').textContent='';$('goal-dialog').showModal();};
 $('goal-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('goal-error').textContent='';try{await api('/api/goals',{title:$('goal-title').value.trim(),objective:$('goal-objective').value.trim(),project:$('goal-project').value.trim()});$('goal-dialog').close();toast('目标已创建');await refresh();}catch(error){$('goal-error').textContent=error.message;}finally{button.disabled=false;}};
 $('stage-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('stage-error').textContent='';try{
@@ -1008,7 +1225,14 @@ $('action-form').onsubmit=async event=>{event.preventDefault();if(!pendingAction
   else if(type==='dispatch')await api(`/api/stages/${encodeURIComponent(id)}/dispatch`,{prompt:reason,source:'panel'});
   $('action-dialog').close();pendingAction=null;toast('操作已记录');await refresh();
 }catch(error){$('action-error').textContent=error.message;}finally{button.disabled=false;}};
-$('goals-tree').addEventListener('toggle',event=>{const node=event.target;if(!(node instanceof HTMLDetailsElement))return;const key=node.dataset.goal?`goal:${node.dataset.goal}`:node.dataset.stage?`stage:${node.dataset.stage}`:node.dataset.task?`task:${node.dataset.task}`:null;if(key){if(node.open)treeOpen.add(key);else treeOpen.delete(key);}if(node.open){const host=node.closest('[data-task]');if(host&&state.tree)loadObservability(host.dataset.task);}},true);
+function onGoalTreeToggle(event){
+  const node=event.target;if(!(node instanceof HTMLDetailsElement)||!event.currentTarget.contains(node))return;
+  const key=node.dataset.goal?`goal:${node.dataset.goal}`:node.dataset.stage?`stage:${node.dataset.stage}`:node.dataset.task?`task:${node.dataset.task}`:null;
+  if(key){if(node.open)treeOpen.add(key);else treeOpen.delete(key);}
+  if(node.open){const host=node.closest('[data-task]');if(host)loadObservability(host.dataset.task);}
+}
+$('goals-tree').addEventListener('toggle',onGoalTreeToggle,true);
+$('records-goals-list')?.addEventListener('toggle',onGoalTreeToggle,true);
 $('goals-tree').onclick=async event=>{
   const goalButton=event.target.closest('[data-goal-action]');
   if(goalButton){const id=goalButton.dataset.id;const action=goalButton.dataset.goalAction;const goal=(state.tree?.goals||[]).find(item=>item.id===id);
@@ -1024,6 +1248,7 @@ $('goals-tree').onclick=async event=>{
     if(action==='sync'){try{await api(`/api/stages/${encodeURIComponent(id)}/sync`,{});toast('阶段状态已同步');await refresh();}catch(error){toast(error.message,true);}return;}
   }
 };
+$('goals-toggle').onclick=()=>{if(!activeGoalsOf(state.tree).length)return;goalsExpanded=!goalsExpanded;renderGoals();};
 $('task-detail').addEventListener('toggle',event=>{const node=event.target;if(!(node instanceof HTMLDetailsElement)||node.id!=='detail-observability')return;const key='detail-obs:'+selectedTask;if(node.open)treeOpen.add(key);else treeOpen.delete(key);if(node.open)loadObservability(selectedTask);},true);
 
 // Current-project entry: read-only name + lightweight switch menu (known/recent + system picker).
@@ -1095,7 +1320,42 @@ function historyBoundProject(){return projectView.mode==='project'&&projectView.
 function setRecordsError(message){const box=$('task-records-error');if(!box)return;box.textContent=message||'';box.hidden=!message;}
 function setConfirmError(message){const box=$('task-records-confirm-error');if(!box)return;box.textContent=message||'';box.hidden=!message;}
 function clearHistoryToken(){historyToken=null;historyPreview=null;historyExpiresAt=0;}
-function resetHistoryRecords(){historyGeneration++;historyRecords=[];historySelected.clear();historyStatus='all';historyKeyword='';historyProject=null;clearHistoryToken();setRecordsError('');}
+function resetHistoryRecords(){historyGeneration++;historyRecords=[];historySelected.clear();historyStatus='all';historyKeyword='';historyProject=null;clearHistoryToken();setRecordsError('');resetRecordsGoals();}
+// ---- read-only history goals inside 任务记录管理 (GET /api/tree only; never archives, deletes, restates or dispatches)
+function setRecordsGoalsError(message){const box=$('records-goals-error');if(!box)return;box.textContent=message||'';box.hidden=!message;}
+function resetRecordsGoals(){
+  recordsGoalsGeneration++;recordsGoals=[];recordsGoalsError='';recordsGoalsLoading=false;
+  setRecordsGoalsError('');renderRecordsGoals();
+}
+function renderRecordsGoals(){
+  const list=$('records-goals-list');if(!list)return;
+  const count=$('records-goals-count');if(count)count.textContent=numberText(recordsGoals.length);
+  if(recordsGoalsLoading&&!recordsGoals.length){setMarkup(list,'<div class="empty"><strong>正在读取该项目历史目标…</strong></div>');return;}
+  if(recordsGoalsError){setMarkup(list,'<p class="obs-unknown">历史目标读取失败；下面不会把未知当作“没有历史目标”，具体原因见下方提示。</p>');return;}
+  if(!recordsGoals.length){setMarkup(list,'<div class="empty"><strong>该项目暂无已完成 / 已取消的目标</strong><p>进行中的目标显示在首页；这里只列已完成、已取消或其他非进行中的目标。</p></div>');return;}
+  setMarkup(list,recordsGoals.map(goal=>renderGoal(goal,true)).join(''));
+}
+async function loadRecordsGoals(){
+  const list=$('records-goals-list');if(!list)return;
+  if(recordsGoalsLoading)return;
+  const epoch=viewEpoch,generation=recordsGoalsGeneration,project=historyBoundProject();
+  if(!project){recordsGoals=[];recordsGoalsError='';renderRecordsGoals();return;}
+  recordsGoalsLoading=true;renderRecordsGoals();
+  try{
+    const data=await api('/api/tree');
+    if(epoch!==viewEpoch||generation!==recordsGoalsGeneration||!$('task-records-dialog').open||historyBoundProject()!==project)return;
+    if(!data||data.error||!Array.isArray(data.goals)){recordsGoals=[];recordsGoalsError=(data&&data.error)||'返回内容缺少目标列表';}
+    else{
+      recordsGoals=historyGoalsOf(data).filter(goal=>!goal.project||sameProjectPath(goal.project,project));
+      recordsGoalsError='';
+    }
+  }catch(error){
+    if(error.stale||epoch!==viewEpoch||generation!==recordsGoalsGeneration)return;
+    recordsGoals=[];recordsGoalsError=error.message||'未知错误';
+  }finally{
+    if(generation===recordsGoalsGeneration){recordsGoalsLoading=false;setRecordsGoalsError(recordsGoalsError?`历史目标读取失败：${recordsGoalsError}`:'');renderRecordsGoals();}
+  }
+}
 // Called on every project change: closes only this document's management dialogs and drops management state.
 function resetHistoryManagement(){
   resetHistoryRecords();historyLoading=false;historySubmitting=false;
@@ -1237,6 +1497,7 @@ async function confirmHistoryDelete(){
     forgetHistoryTaskCaches(deletedIds);
     toast(`已删除：任务 ${numberText(data?.deleted_tasks)} · 目标 ${numberText(data?.deleted_goals)} · 阶段 ${numberText(data?.deleted_stages)}${data?.cleanup_pending?'；文件清理暂未完成，服务恢复后继续':''}（项目文件与费用总账保留）`,!!data?.cleanup_pending);
     await loadTaskRecords();
+    await loadRecordsGoals();
     await refresh();
     refreshProjectStorage();
   }catch(error){
@@ -1276,9 +1537,11 @@ function openTaskHistory(){
   $('task-records-search').value='';
   if($('task-records-compact-result'))$('task-records-compact-result').textContent='';
   document.querySelectorAll('[data-record-status]').forEach(b=>b.classList.toggle('active',b.dataset.recordStatus==='all'));
+  const goalsPanel=$('records-goals');if(goalsPanel&&'open' in goalsPanel)goalsPanel.open=false;
   renderTaskRecords();
   $('task-records-dialog').showModal();
   loadTaskRecords();
+  loadRecordsGoals();
   loadRecordsStorage();
 }
 $('task-records-compact').onclick=async()=>{
@@ -1298,7 +1561,7 @@ $('task-records-compact').onclick=async()=>{
     if(result)result.textContent=`压缩未执行：${error.message}`;
   }finally{button.disabled=false;await refreshProjectStorage();}
 };
-$('task-records-refresh').onclick=()=>{clearHistoryToken();loadTaskRecords();};
+$('task-records-refresh').onclick=()=>{clearHistoryToken();loadTaskRecords();loadRecordsGoals();};
 $('task-records-preview').onclick=()=>requestHistoryPreview();
 $('task-records-delete').onclick=()=>confirmHistoryDelete();
 $('task-records-search').oninput=event=>{historyKeyword=event.target.value.trim();renderTaskRecords();};

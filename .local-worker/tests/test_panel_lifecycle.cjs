@@ -101,6 +101,9 @@ class El {
   querySelectorAll() { return []; }
   append(child) { this.children.push(child); return child; }
   appendChild(child) { return this.append(child); }
+  // The panel fills <select> elements with `new Option(...)` through replaceChildren;
+  // the fake browser needs the same two entry points, nothing more.
+  replaceChildren(...nodes) { this.children = nodes.slice(); }
   closest() { return null; }
   contains() { return false; }
   focus() {}
@@ -313,6 +316,7 @@ function createHarness(options = {}) {
     requestAnimationFrame: fn => clock.setTimeout(fn, 16),
     Date: FakeDate, URL, URLSearchParams, btoa, unescape, console,
     HTMLDetailsElement: class HTMLDetailsElement {},
+    Option: class Option { constructor(text, value) { this.text = text; this.value = value; } },
     Event: class Event { constructor(type, init) { this.type = type; Object.assign(this, init || {}); } },
     CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; Object.assign(this, init || {}); } },
   };

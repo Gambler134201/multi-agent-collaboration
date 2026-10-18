@@ -136,6 +136,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -InstallRules
 
 测试只用操作系统临时目录和 mock，不调用真实模型、不启动服务、不注册 MCP。需要真实 DSH/Pi 的既有测试（例如预设读取、Pi 运行时）在没装或未配置时会跳过或明确失败——那是环境缺件，不是代码回退成别的引擎。
 
+可选的 mock 浏览器检查使用真实面板前端和假 HTTP 数据，默认也不连接真实工作台。Playwright 需要在你自己的 Node 环境准备，不能加进项目生产依赖；依赖查找和完整命令见 [使用说明的离线与浏览器检查](USAGE.md#离线与浏览器检查)。
+
 ## 8. 常见问题
 
 | 现象 | 处理 |

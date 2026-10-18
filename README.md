@@ -6,12 +6,12 @@
 
 项目源码采用 [MIT 许可证](LICENSE)，维护者为 [Gambler134201](https://github.com/Gambler134201)。
 
-开发流程见 [Git 工作流](docs/GIT_WORKFLOW.md)，当前开发与公开源码的整合事项见 [源码整合清单](docs/SOURCE_RECONCILIATION.md)。功能路线见 [后续待更新功能](后续待更新功能/README.md)。
+开发流程见 [Git 工作流](docs/GIT_WORKFLOW.md)，日常操作与测试见 [使用说明](docs/USAGE.md)，当前开发与公开源码的整合事项见 [源码整合清单](docs/SOURCE_RECONCILIATION.md)。功能路线见 [后续待更新功能](后续待更新功能/README.md)。
 
 ## 你会得到什么
 
-- 本地面板（`http://127.0.0.1:8765`）：模型与密钥、执行 Agent 选择、任务派发与状态、用量与账单核对、项目与阶段记录。
-- 两个执行 Agent 适配：**DSH（DeepSeek Harness）** 走 ACP/acpx，**Pi Agent** 走 Pi RPC。二者互不替换：选中的 Agent 不可用时直接报错，不会改用另一个。
+- 本地面板（`http://127.0.0.1:8765`）：模型与密钥、每个模型自己的默认执行 Agent、任务派发与状态、精简的目标进度与只读历史目标、用量与账单核对、项目与阶段记录。
+- 两个执行 Agent 适配：**DSH（DeepSeek Harness）** 走 ACP/acpx，**Pi Agent** 走 Pi RPC。每个模型可保存自己的 `default_agent`（DSH / Pi / 跟随全局）；新任务按「本次显式指定 > 模型默认 > 全局默认」解析，自动路由对每个最终候选分别解析。已有任务、续接、整改与会话复用保留原 Agent。选中的 Agent 不可用时直接报错，不会改用另一个。
 - 任务记录、日志、验收与阶段交接写在每个项目自己的 `.model-desk/records.db` 与 `.model-desk/runs/<id>/task.json`；阶段交接带文件哈希校验。
 - 可选的 Codex MCP（全局服务名 `model_desk`）与可选的全局协作规则，两者都只在显式命令下安装。
 - 记录写入防护：DSH 与 Pi 侧都带工具参数防护（应用层防护，不是操作系统沙箱）。
@@ -80,7 +80,9 @@ Stop-Process -Id (Get-Content .\.local-worker\panel-runtime.json -Raw | ConvertF
 1. 打开面板 → 模型编辑界面 → 新增模型，填服务类型、Base URL、模型 ID、Token 预算。
 2. 密钥写在保存时由 Windows DPAPI 加密，界面不回显；也可以只填环境变量名，密钥留在你自己的环境变量里。
 3. 「协作开关」和「付费授权」默认关闭，打包不会打开；需要你显式开启。付费执行需要显式允许，额度与调用上限的开关按你的设置保留。
-4. 执行 Agent 在面板里选 DSH 或 Pi；选中的 Agent 未就绪时任务会被拒绝，不会自动改用另一个。
+4. 每个模型可保存自己的默认执行 Agent：模型编辑器里的「默认执行 Agent」，或协作栏的「模型 / 执行 Agent / 保存」快捷入口。优先级是本次显式指定 > 模型默认 > 全局默认；全局回退仍保留在后台兼容旧配置，面板不再提供容易误解的全局选择器。
+5. 「各执行 Agent 参数设置」只调整 DSH/Pi 的适配器参数，不决定谁执行。选中的 Agent 未就绪时任务会被拒绝，不会自动改用另一个；Pi 不加载 DSH 预设。
+6. 首页只显示进行中目标的一行折叠进度；已完成 / 已取消目标在「任务记录管理」里只读查看，保留原有删除预览与二次确认。读取失败、HTTP 错误或返回结构异常会明确显示为未知，不会伪装成「没有目标」或「全部完成」。
 
 ## 最小使用步骤
 
@@ -106,6 +108,7 @@ setup.ps1                     安装脚本（默认只装本目录依赖）
 requirements.txt              Python 直接依赖（固定版本）
 启动模型面板.ps1 / 打开模型工作台.ps1 / local-worker.ps1   启动与派发脚本
 docs/INSTALL.md               安装、环境变量、可选 MCP/规则、退出与故障排查
+docs/USAGE.md                 每模型默认 Agent、目标进度、离线与浏览器检查
 .local-worker/                服务、worker、执行器适配、单元测试、workflow-guides 模板
 .local-worker/agent-runtime/  本地 Node 侧运行器与 package.json / pnpm-lock.yaml
 ```
@@ -119,6 +122,8 @@ docs/INSTALL.md               安装、环境变量、可选 MCP/规则、退出
 ```
 
 测试只用系统临时目录和 mock，不调用真实模型、不启动服务。需要真实 DSH/Pi 的既有测试会在没装/没配置时自动跳过或明确失败。
+
+可选的 mock 浏览器检查使用真实面板前端与假 HTTP 数据，默认不连接真实工作台或模型服务。先在你自己的 Node 环境准备 Playwright（不加入项目生产依赖），再按 [使用说明](docs/USAGE.md#离线与浏览器检查) 设置依赖查找路径；完整命令见同一节。
 
 ## 许可证与后续范围
 

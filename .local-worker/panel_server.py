@@ -21,6 +21,7 @@ import deepseek_billing
 import dsh_worker
 import pi_worker
 import execution_engines
+import model_agent_defaults
 import workflow_settings
 import model_router
 import model_scope
@@ -1049,8 +1050,12 @@ def submit_task(body):
     if kind not in {"chat", "edit"}:
         raise ValueError("任务类型不正确")
     settings = workflow_settings.snapshot()
-    engine = execution_engines.resolve(body, settings)
     body = dict(body)
+    # Only a real task override is explicit.  The global default is never copied
+    # into the body here; otherwise a form/CLI would turn inheritance into a
+    # permanent per-task override and hide the model preference.
+    explicit_engine = execution_engines.requested_engine(body)
+    engine = explicit_engine
     continue_id = str(body.get("continue_task") or "").strip()
     rework_id = str(body.get("rework_of") or "").strip()
     reuse_session = bool(body.get("reuse_session"))
@@ -1074,7 +1079,7 @@ def submit_task(body):
         if body.get("route_mode") == "auto":
             raise ValueError("整改保持原模型，不能自动重新路由")
         rework_parent = json.loads((rework_run / "task.json").read_text(encoding="utf-8"))
-        if 'engine' in body and body['engine'] != rework_parent.get('engine'):
+        if explicit_engine is not None and explicit_engine != rework_parent.get('engine'):
             raise ValueError('整改保持原执行 Agent；切换 Agent 请创建新任务')
         for field in ('stage_id', 'goal_id'):
             if body.get(field) and body.get(field) != rework_parent.get(field):
@@ -1098,24 +1103,30 @@ def submit_task(body):
     routing_body = dict(body)
     if continue_id:
         original = json.loads((registry.task_dir(continue_id) / 'task.json').read_text(encoding='utf-8'))
-        if 'engine' in body and body['engine'] != original.get('engine'):
+        if explicit_engine is not None and explicit_engine != original.get('engine'):
             raise ValueError('继续会话不能切换执行 Agent；请创建新任务')
         engine = original.get('engine') or 'dsh'
         if body.get('route_mode') == 'auto':
             raise ValueError('继续会话保持原模型；升级模型请创建新任务')
         routing_body['model_id'] = body.get('model_id') or original['model_id']
+        # A continuation keeps the original engine snapshot even if the model's
+        # preference or the global default changed after the parent was created.
+        routing_body['engine'] = engine
     elif routing_body.get('route_mode', 'manual') == 'manual' and not body.get('model_id'):
         routing_body['model_id'] = registry.list_models()['default_model']
-    if engine not in execution_engines.ENGINES or (engine == 'direct' and kind != 'chat') or (engine == 'aider' and kind != 'edit'):
-        raise ValueError('执行器与任务类型不匹配')
-    if engine in execution_engines.AGENTS and not execution_engines.availability(engine)['ready']:
-        raise ValueError(execution_engines.LABELS[engine] + ' 执行器未就绪；不会切换到其他执行器')
-    body['engine'] = routing_body['engine'] = engine
     routing_data = deepseek_billing.enrich_models(registry.list_models())
     daily_cost = budget_relay.daily_state(settings)
     route = model_router.choose(routing_body, routing_data['models'], settings, public_tasks(),
                                 daily_cost['remaining_cny'], daily_uncertain=daily_cost.get('unresolved', False))
+    # The router resolves explicit > model preference > global per final model.
+    # Use that exact engine for every following capability/project check.
+    engine = route['engine']
     model = registry.get_model(route['model_id'])
+    if engine not in execution_engines.ENGINES or (engine == 'direct' and kind != 'chat') or (engine == 'aider' and kind != 'edit'):
+        raise ValueError('执行器与任务类型不匹配')
+    if engine in execution_engines.AGENTS and not execution_engines.availability(engine)['ready']:
+        raise ValueError(execution_engines.LABELS[engine] + ' 执行器未就绪；不会切换到其他执行器')
+    body['engine'] = engine
     thinking_config.validate(model)
     # A stale failed connection check must not permanently exclude a capable
     # local model: recheck reachability read-only (no inference) before the real
@@ -1496,8 +1507,14 @@ def dispatch_stage(stage_id, body, project=None):
         raise ValueError("阶段不存在")
     settings = workflow_settings.snapshot()
     route_mode = str(body.get("route_mode") or ("manual" if stage["fixed_model"] else "auto"))
-    stage_engine = execution_engines.resolve(body, settings)
-    if stage_engine not in execution_engines.AGENTS:
+    explicit_engine = execution_engines.requested_engine(body)
+    stage_engine = explicit_engine
+    if stage_engine is None and stage["fixed_model"] and not body.get("reuse_session"):
+        # The stage-fixed model is the final candidate here, so its saved default
+        # (then the global default) is what a new stage task will execute with.
+        fixed = registry.get_model(stage["fixed_model"], require_enabled=False)
+        stage_engine, _ = execution_engines.resolution({}, settings, model=fixed)
+    if stage_engine is not None and stage_engine not in execution_engines.AGENTS:
         raise ValueError('阶段任务请选择 DeepSeek Harness 或 Pi Agent')
     if route_mode == "auto" and not settings.get("enabled"):
         raise ValueError("协作总开关已关闭，不自动派发新阶段")
@@ -1515,7 +1532,7 @@ def dispatch_stage(stage_id, body, project=None):
     elif explicit_model:
         submit["model_id"] = explicit_model
     routing, stage_policy = stage_dispatch_policy(stage, body)
-    submit.update({"stage_id": stage_id, "goal_id": stage["goal_id"], "kind": stage_kind, "engine": stage_engine,
+    submit.update({"stage_id": stage_id, "goal_id": stage["goal_id"], "kind": stage_kind,
                    "project": stage["project"] or body.get("project") or "",
                    # Chat keeps its configured files as read-only context so the
                    # code index and handover scope are not silently dropped; the
@@ -1524,16 +1541,24 @@ def dispatch_stage(stage_id, body, project=None):
                    "readonly_files": (list(stage["files"]) if stage_kind == stage_store.KIND_CHAT else []),
                    "routing": routing,
                    "route_mode": route_mode})
+    if explicit_engine is not None:
+        # Only a real caller override is explicit; otherwise submit_task resolves
+        # the final model's saved agent before writing the task snapshot.
+        submit["engine"] = explicit_engine
     submit.setdefault("title", stage["title"])
     if body.get("reuse_session"):
-        # Explicit exception only; default is a new session per stage.
+        # Explicit exception only; default is a new session per stage.  An old
+        # session keeps the old task's engine/model/project when reused.
+        # Without a deliberate override, reuse follows the original session,
+        # not a preference which applies only to new sessions.
+        session_engine = explicit_engine
         candidates = [task_id for task_id in reversed(stage["task_ids"])]
         for task_id in candidates:
             try:
                 state = json.loads((registry.task_dir(task_id) / "task.json").read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if state.get('engine') == submit['engine'] and execution_engines.has_session(state) and state.get("status") not in {"queued", "running"}:
+            if (session_engine is None or state.get('engine') == session_engine) and execution_engines.has_session(state) and state.get("status") not in {"queued", "running"}:
                 submit["continue_task"] = task_id
                 break
         else:
@@ -1976,7 +2001,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/state":
                 settings = workflow_settings.snapshot()
                 models = registry.list_models()
-                return self.send_json({**thinking_config.enrich(deepseek_billing.enrich_models(models)), "tasks": panel_snapshot_tasks(self.project_view), "server_time": registry.now(),
+                enriched = thinking_config.enrich(deepseek_billing.enrich_models(models))
+                enriched['models'] = model_agent_defaults.public_rows(enriched.get('models', []), settings)
+                return self.send_json({**enriched, "tasks": panel_snapshot_tasks(self.project_view), "server_time": registry.now(),
                                       "workspace": str(HERE.parent), "execution": "任务按顺序执行", "agent": execution_engines.public_selection(settings)[1],
                                       "execution_agents": execution_engines.public_agents(),
                                       'execution_activity':execution_activity(),
@@ -2136,7 +2163,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(codex_usage.usage_state(force=True))
             if path == '/api/route-preview':
                 settings = workflow_settings.snapshot()
-                body = {**body, 'engine': execution_engines.resolve(body, settings)}
+                # Preview uses the same final-model -> agent resolution as a real
+                # submission.  It must not bake the current global value into the
+                # request body as an explicit override.
                 data = deepseek_billing.enrich_models(registry.list_models())
                 daily_cost = budget_relay.daily_state(settings)
                 return self.send_json(model_router.choose(body, data['models'], settings, public_tasks(),
@@ -2173,11 +2202,19 @@ class Handler(BaseHTTPRequestHandler):
             match = re.fullmatch(r"/api/tasks/([A-Za-z0-9_-]+)/reference", path)
             if match:
                 return self.send_json(reference_handover(match.group(1), body))
-            match = re.fullmatch(r"/api/models/([A-Za-z0-9_-]+)/(save|delete|test|default|balance|thinking)", path)
+            match = re.fullmatch(r"/api/models/([A-Za-z0-9_-]+)/(save|delete|test|default|balance|thinking|agent-default)", path)
             if match:
                 model_id, action = match.groups()
-                if action in {"delete", "save"} and any(t.get("model_id") == model_id and t["status"] in {"queued", "running"} for t in public_tasks()):
+                preference_only = (action == "save" and isinstance(body, dict)
+                                   and set(body) == {"default_agent"})
+                if action in {"delete", "save"} and not preference_only and any(t.get("model_id") == model_id and t["status"] in {"queued", "running"} for t in public_tasks()):
                     raise ValueError("这个模型还有任务，请等待完成或先停止任务")
+                if action == "agent-default" or preference_only:
+                    # Preference-only atomic patch: no connection, secret,
+                    # preset, price, scope or budget field can be touched.
+                    if not isinstance(body, dict) or set(body) != {"default_agent"}:
+                        raise ValueError("模型默认 Agent 需要单独保存，不能混入模型连接或其他参数")
+                    return self.send_json(model_agent_defaults.update(model_id, body["default_agent"]))
                 if action == "delete":
                     registry.delete_model(model_id)
                     return self.send_json({"ok": True})

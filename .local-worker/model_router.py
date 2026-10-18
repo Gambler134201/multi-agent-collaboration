@@ -434,6 +434,15 @@ def pricing_info(model):
             'note': '用户填写人民币单价'}
 
 
+def _global_agent(settings):
+    """Describe the fallback without turning an unused broken value into a crash."""
+    import execution_engines
+    try:
+        return execution_engines.selected(settings)
+    except ValueError:
+        return 'invalid'
+
+
 def choose(body, models, settings, history=(), daily_remaining=None, moment=None, daily_uncertain=False):
     import execution_engines
     req = requirements(body)
@@ -449,10 +458,14 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
         scope = model_scope.normalize(raw_scope)
     except ValueError as error:
         raise ValueError('执行模型范围设置无效，已拒绝路由：' + str(error)) from None
-    body = {**body, 'engine': execution_engines.resolve(body, settings)}
+    # Do not resolve the global agent here: automatic routing must be able to
+    # choose a model whose saved preference is the other agent.  The final
+    # candidate resolves its own agent below, and every agent-dependent gate
+    # (availability, paid execution) uses that resolved value.
+    requested = execution_engines.requested_engine(body)
     if mode == 'auto' and (not settings.get('enabled') or not settings.get('readable', True)):
         raise ValueError('协作总开关已关闭，请开启后使用自动路由')
-    if mode == 'auto' and body.get('engine', 'dsh') not in {'dsh', 'pi'}:
+    if mode == 'auto' and requested is not None and requested not in execution_engines.AGENTS:
         raise ValueError('自动协作请使用 DSH 或 Pi 执行器')
     if settings.get('enforce_model_call_limit', True) and req['expected_calls'] > settings['max_model_calls']:
         raise ValueError('预计请求次数超过任务上限，请拆分任务或调整限制')
@@ -478,6 +491,21 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                 raise ValueError(model_scope.reason(scope, is_paid(model)))
             if not model.get('enabled', True):
                 raise ValueError('模型已停用')
+            agent, agent_source = execution_engines.resolution(body, settings, model=model)
+            if agent_source == 'model' and agent in execution_engines.AGENTS:
+                # A saved model preference is authoritative for this candidate:
+                # an unavailable adapter refuses the route instead of quietly
+                # falling back to the global engine.  Explicit/global engines are
+                # checked by the dispatch entry point, which also owns task type
+                # and project validation.
+                availability = execution_engines.availability(agent)
+                if not availability.get('ready'):
+                    detail = str(availability.get('message') or '').strip()
+                    raise ValueError(execution_engines.LABELS[agent]
+                                     + ' 执行器未就绪；不会切换到其他执行器'
+                                     + (('：' + detail) if detail else ''))
+            elif mode == 'auto' and agent not in execution_engines.AGENTS:
+                raise ValueError('自动协作请使用 DSH 或 Pi 执行器')
             connectivity = None
             if mode == 'auto':
                 connectivity = connectivity_verdict(model)
@@ -514,7 +542,7 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
             if is_paid(model):
                 if not settings.get('paid_allowed'):
                     raise ValueError('付费执行未开启')
-                if body.get('engine', 'dsh') not in {'dsh', 'pi'}:
+                if agent not in execution_engines.AGENTS:
                     raise ValueError('付费任务请使用 DSH 或 Pi，以执行逐次请求预算检查')
                 if not rates:
                     raise ValueError('缺少可核对的单价，请在模型中填写人民币单价')
@@ -550,6 +578,8 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
             if mode == 'auto' and model.get('preferred_tasks') and not matches and req['eligible_model_ids'] is None:
                 raise ValueError('任务类别未匹配能力标签；需要主脑依据说明提供候选模型')
             reason = ('手动指定；' if mode == 'manual' else '满足复杂度、上下文与输出要求；')
+            reason += ('执行 Agent：' + execution_engines.LABELS.get(agent, agent)
+                       + '（' + {'explicit': '本次显式指定', 'model': '模型默认'}.get(agent_source, '全局默认') + '）；')
             if scope != model_scope.ALL:
                 reason += '执行模型范围：' + model_scope.LABELS[scope] + '；'
             reason += ('匹配标签：' + '、'.join(matches) + '；') if matches else '主脑候选或未设置标签；'
@@ -564,7 +594,8 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
             candidates.append({'model': model, 'estimated_cost_cny': float(estimate), 'budget_cny': float(cap) if cap is not None else 0,
                                'reason': reason, 'retry_factor': retry_factor, 'matched_tags': matches,
                                'warnings': warnings, 'risk': risk, 'prediction': prediction,
-                               'pricing': pricing_info(model)})
+                               'pricing': pricing_info(model), 'engine': agent,
+                               'agent_source': agent_source})
         except ValueError as error:
             excluded.append({'model_id': model['id'], 'model_name': model['name'], 'reason': str(error)})
     if not candidates:
@@ -577,6 +608,10 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
     model_ceiling = model.get('max_output_tokens', 4096)
     goal = request_target if request_target is not None else est_output
     return {'mode': mode, 'model_id': model['id'], 'reason': selected['reason'], 'requirements': req,
+            'engine': selected['engine'], 'agent_source': selected['agent_source'],
+            'agent_label': execution_engines.LABELS.get(selected['engine'], selected['engine']),
+            'model_default_agent': model.get('default_agent', 'follow_global'),
+            'global_agent': _global_agent(settings),
             'agent_preset': preset_runtime.selected_id(model),
             'estimated_cost_cny': selected['estimated_cost_cny'], 'budget_cny': selected['budget_cny'],
             'budget_enforced': settings.get('enforce_paid_budget', True), 'excluded': excluded,

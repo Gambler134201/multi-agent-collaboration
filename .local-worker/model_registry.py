@@ -147,6 +147,11 @@ def normalize_row(row):
         row["subagent"] = model_capabilities.normalize_block(None, None)
     if "model_version" not in row:
         row["model_version"] = ""
+    # Legacy rows inherit the global default without needing a migration.  An
+    # explicitly invalid value is left untouched so the router can refuse it
+    # instead of silently treating it as inheritance.
+    if "default_agent" not in row or row.get("default_agent") is None:
+        row["default_agent"] = "follow_global"
     return row
 
 
@@ -169,6 +174,7 @@ def capability_models():
             "api_base": row.get("api_base"),
             "model": row.get("model"),
             "agent_preset": row.get("agent_preset"),
+            "default_agent": row.get("default_agent"),
             "enabled": bool(row.get("enabled", True)),
             "model_version": row.get("model_version"),
             "executor_version": row.get("executor_version"),
@@ -187,9 +193,14 @@ def current_capability_identity(row):
 
 
 def public_model(row):
+    import model_agent_defaults
     row = normalize_row(dict(row))
     public = {k: v for k, v in row.items() if k not in {"secret", "api_key", "subagent"}}
     public["api_key_set"] = bool(row.get("secret") or os.environ.get(row.get("api_key_env", "")))
+    try:
+        public["default_agent_valid"] = model_agent_defaults.stored(row) in model_agent_defaults.VALUES
+    except ValueError:
+        public["default_agent_valid"] = False
     # Capability/policy decision is separated from the raw evidence so a public
     # payload never carries measurement internals or key material.  The identity
     # is resolved from the installation rather than defaulted to unversioned-v1,
@@ -264,6 +275,14 @@ def upsert_model(body, model_id=None):
         agent_preset = body.get('agent_preset', previous.get('agent_preset', 'native' if provider == 'local' else 'standard') if previous else 'native' if provider == 'local' else 'standard')
         if agent_preset not in {'native', 'standard'}:
             raise ValueError('请选择原生或标准 Agent 预设')
+        import model_agent_defaults
+        if 'default_agent' in body:
+            # An explicitly supplied value must be one of the declared choices;
+            # an empty/missing field is only legacy inheritance on stored rows.
+            default_agent = model_agent_defaults.normalize_update(body['default_agent'])
+        else:
+            default_agent = model_agent_defaults.normalize(
+                previous.get('default_agent') if previous else None)
         import thinking_config
         thinking_level = body.get('thinking_level', previous.get('thinking_level', 'default') if previous else 'default')
         thinking_info = previous.get('thinking_info') if previous and previous['api_base'] == api_base and previous['model'] == model else None
@@ -299,6 +318,7 @@ def upsert_model(body, model_id=None):
                "preferred_tasks": list(dict.fromkeys(item.strip() for item in capabilities)),
                "capability_notes": notes, "cost_preference": cost_preference,
                'max_task_complexity': complexity, 'pricing_cny': prices, 'agent_preset': agent_preset,
+               'default_agent': default_agent,
                'thinking_level': thinking_level, 'thinking_info': thinking_info,
                'model_version': str(body.get('model_version', previous.get('model_version', '') if previous else '')).strip()[:120],
                'subagent': subagent_block}
@@ -313,6 +333,12 @@ def upsert_model(body, model_id=None):
             data["default_model"] = model_id
         write_json(REGISTRY, data)
     return public_model(row)
+
+
+def update_model_agent_default(model_id, value):
+    """Preference-only atomic patch; connection/preset/policy fields stay intact."""
+    import model_agent_defaults
+    return model_agent_defaults.update(model_id, value)
 
 
 def update_agent_settings(model_id, engine, values):
