@@ -736,3 +736,23 @@ test('Windows current-drive-rooted paths cannot become a trusted project', {skip
   assert.equal(PLUGIN._test.resolveProject('\\Windows'), null);
   assert.equal(PLUGIN._test.resolveProject('/Windows'), null);
 });
+
+test('bundle literal empty config resolves the one explicit environment pointer', async (t) => {
+  const f = fixture(t);
+  const agent = makeAgent('bundle-env', f.project);
+  const config = path.join(f.dir, 'machine.json');
+  write(config, JSON.stringify(f.config));
+  const previous = process.env.MODEL_DESK_DSH_BRAIN_CONFIG;
+  process.env.MODEL_DESK_DSH_BRAIN_CONFIG = config;
+  try {
+    await applyPlugin(t, f, {agents:[agent], config:{configFile:''}});
+    assert.equal(agent.ctx.mounts.length, 1);
+    assert.equal(currentRules(agent).text({agent}).includes('主脑'), true);
+    // Inline paths cannot be combined with an unrelated inherited config file.
+    process.env.MODEL_DESK_DSH_BRAIN_CONFIG = path.join(f.dir, 'missing.json');
+    assert.equal(PLUGIN._test.loadConfig(f.config).python, f.config.python);
+  } finally {
+    if (previous === undefined) delete process.env.MODEL_DESK_DSH_BRAIN_CONFIG;
+    else process.env.MODEL_DESK_DSH_BRAIN_CONFIG = previous;
+  }
+});

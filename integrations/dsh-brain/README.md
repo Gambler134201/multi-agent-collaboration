@@ -36,6 +36,15 @@ DSH 默认模型、preset、预算、调用次数或 runtime。
    patch 中按 `model-desk-dsh-brain` id 覆盖 `config.configFile`。二者都没有时插件
    保持 inert（fail closed）。
 
+也可使用 `.local-worker/dsh_brain_desktop.py`：`prepare` 在新目录准备固定清单的插件包、
+机器配置与安装计划；`check` 验证已运行工作台的新主脑接口；显式 `install` 才通过
+安装版 DSH 的官方 desktop CLI 安装，并设置一个 User 环境值；`uninstall` 按原收据
+只移除本插件。它不重启 DSH、不启动工作台、不改账号配置，不覆盖其他插件或用户 patch。
+服务接口不可用时拒绝安装；未知命令结果保留收据，不自动重试或盲目恢复。
+
+原 bundle 的 `!!js` 环境表达式在本机加载探针中未生效，现已改为普通空值配置，
+由插件代码读取这一条环境变量。完整内联路径配置不受继承的环境变量影响。
+
 ## 运行时边界
 
 - `agent/created` 串行 await：只处理 `ctx.agents.roots()` 中同一实例的顶层 Agent。

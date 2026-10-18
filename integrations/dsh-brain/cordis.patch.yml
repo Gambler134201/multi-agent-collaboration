@@ -9,4 +9,4 @@
     - id: model-desk-dsh-brain
       name: 'model-desk-dsh-brain'
       config:
-        configFile: !!js 'process.env.MODEL_DESK_DSH_BRAIN_CONFIG || ""'
+        configFile: ''

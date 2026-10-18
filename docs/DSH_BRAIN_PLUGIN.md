@@ -30,7 +30,7 @@
 新增可选插件组合包 `integrations/dsh-brain/`：
 
 - `package.json`：`dsh.bundle.patch = cordis.patch.yml`，预构建 CommonJS 入口 `index.cjs`，不含运行依赖；`@deepseek-ai/dsh-mcp-client` 作为可选 peer，从已安装的 DSH profile 动态解析，不硬编码厂商安装路径。
-- `cordis.patch.yml`：只插入一个 `model-desk-dsh-brain` 条目；`configFile` 从 `MODEL_DESK_DSH_BRAIN_CONFIG` 读取，未设置时插件保持 inert。不添加全局项目绑定，不修改模型默认 Agent、preset、预算、次数或 runtime。
+- `cordis.patch.yml`：只插入一个 `model-desk-dsh-brain` 条目，`configFile` 默认普通空值，由插件代码读取 `MODEL_DESK_DSH_BRAIN_CONFIG`。原 `!!js` 环境表达式在本机探针中未生效，已修正并重测；未配置时保持 inert。不添加全局项目绑定，不修改模型默认 Agent、preset、预算、次数或 runtime。
 - `index.cjs`：插件主体。每个顶层原生 Agent 使用自己的 `agent.ctx` 挂载一个 stdio MCP client（默认 `serverName=model_desk_brain`），不共用全局 MCP 配置。
 
 新增本机配置生成器 `.local-worker/dsh_brain_plugin.py`：只接受显式绝对路径，只创建用户指定的一个输出文件，已存在时拒绝覆盖；不写 DSH profile、workflow 设置或项目记录。生成内容不含 project/owner/session/role/host，项目与会话只能在运行时从原生聊天取得。
@@ -95,12 +95,12 @@ node --test .local-worker\tests\test_dsh_brain_plugin.cjs
 
 ## 仍未验证 / 明确边界
 
-- 未把该 bundle 安装到真实 DSH desktop profile，未验证 GUI 插件管理、真实加载/卸载、profile patch 合并和 `!!js` 环境读取在安装版中的行为。
+- 原生 GUI 插件管理和实际桌面聊天仍需验证。包的官方 CLI 安装/卸载与环境配置读取已有独立探针，不能将这些结果写成 GUI 验收通过。
 - 临时 ACP overlay 已验证实际 `agent/created`、`session.header.cwd/id`、`ctx.agents.roots()`、MCP 解析、`tools.guard` 和 `systemPrompt.section`。尚未验证真实桌面聊天中的 pre-step 顺序、动态开关后的下一轮模型行为和 GUI 状态；ACP 接口探针不替代桌面验收。
 - 未验证真实模型轮次中规则是否实际影响行为，也未验证关闭开关后规则在真实 GUI 中的可见状态。
 - 未实现自动唤醒、后台续接、桌面通知、完成投递一次或等待恢复；插件未承诺这些能力。
 - 当前 `0.2.1-rc.2` 的 MCP 解析与导出经探针验证，其他版本和正式 link/bundle 安装路径未验证；插件会从 DSH 上下文 baseUrl、插件包位置和运行目录动态尝试 require/import 并 fail closed。若解析不到可显式配置 `--mcp-client-path`，不保证任意版本兼容。
-- bundle patch 使用 DSH profile patch 文档允许的 `!!js` 读取 `MODEL_DESK_DSH_BRAIN_CONFIG`；若某个安装版禁止 bundle 层 JS 表达式，需要在 profile patch 中按插件 id 显式覆盖 `config.configFile`，插件代码本身不变。
+- bundle patch 不再依赖 `!!js` 读取环境；本机失败探针保留，改用插件内的显式环境指针读取后，安装版双会话探针通过。配置完整内联路径时不会混入继承的其他安装配置。
 - 开关 guard 在每次派发/整改前同步执行一次 `workflow_settings.py --status`，可能给该工具调用增加一个本机 Python 启动延迟；超时/失败按关闭处理，不缓存允许状态。
 - 插件只应在 desktop 主脑 profile 使用；代码中的顶层判断不能替代用户正确的 profile 安装范围。未知/缺失宿主 API 时只保持无规则/无工具，不会全局屏蔽 DSH 正常工具。
 - 首次绑定仅在本插件模块生命周期内固定；DSH 进程重启或模块重新加载后的原生会话迁移属于宿主行为，插件不写持久归属记录来阻止。
@@ -125,3 +125,29 @@ node --test .local-worker\tests\test_dsh_brain_plugin.cjs
 - [ACP 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/acp/acp/README.zh.md)：自动化入口，与原生 GUI 接入分开验收。
 
 官方主分支文档用于选择路线，安装版本的能力以本机验证为准。本阶段基础代码与接口边界已独立检查；下一步是原生桌面安装/入口及实际需求的协作与质量闭环，再验证后台唤醒。
+
+## 桌面安装入口（2026-10-18）
+
+新增 `.local-worker/dsh_brain_desktop.py`。默认无安装副作用，操作明确分开：
+
+```powershell
+<python> .local-worker\dsh_brain_desktop.py prepare `
+  --output "<尚不存在的本机安装资料目录>" `
+  --workbench "<已部署新主脑接口的工作台目录>" `
+  --python "<工作台 venv>\Scripts\python.exe" `
+  --executable "<DSH目录>\DeepSeek Harness.exe" `
+  --home "<已由 DSH 初始化的 DSH_HOME>"
+<python> .local-worker\dsh_brain_desktop.py check --directory "<安装资料目录>"
+<python> .local-worker\dsh_brain_desktop.py install --directory "<安装资料目录>"
+<python> .local-worker\dsh_brain_desktop.py uninstall --directory "<原安装资料目录>"
+```
+
+- `prepare` 只创建新目录中的 `plugin.tgz`、`config.json` 和最后提交的 `plan.json`。包只含五个明确源码/许可文件，不含机器配置、模型密钥或记录；拒绝链接源码、已有输出与 `.model-desk` 路径。目录不完整时无法安装。
+- `check/install` 使用 unknown 责任绑定连接已运行的新 broker，只读取 describe，不具备任务变更授权。旧版接口/连接失败/返回身份不匹配都拒绝安装；不会为安装启动或部署工作台。
+- `install` 只对显式 DSH_HOME 的现有 desktop profile 调用已安装产品携带的官方 CLI，禁用安装脚本、自动 peer 安装和联网包解析。只设置 `MODEL_DESK_DSH_BRAIN_CONFIG` 这一条 User 环境值，不改 PATH、账号或 profile patch。已有同名未知插件/环境值不能接管。
+- 使用固定清单/hash、独占操作锁与原安装收据确认归属。重复成功安装不重复执行 CLI；命令结果未知时标 attention，不自动安装/卸载；不会把安装前快照覆盖回用户后来修改的 profile。
+- `uninstall` 比较原包路径与原收据，只移除本插件并清除仍属于本安装的环境值；保留其他插件与准备目录中的资料。环境值或插件来源被用户更改时拒绝覆盖。已删除/升级工作台仍可按原收据移除自己的包；宿主版本变化需先核查。
+- 安装/卸载均不关闭或重启任何程序。已运行 DSH 不会自动获得新 bundle 成员和环境，需要用户择时退出再打开。安装包资料目录必须保留，不能作为普通临时文件清理。
+- 本轮执行任务在启动前因 DeepSeek 余额查询 DNS 失败终止，模型调用 0；安装实现由主脑完成，没有绕过余额门禁或替换执行模型。
+
+独立验证：安装器 20 项离线测试、插件 19 项 Node 测试通过；安装版 DSH 在临时 DSH_HOME 中使用官方 CLI 的完整 add/remove 探针通过，其他元数据不变。原先 remove 不支持直接传入的选项已改用其支持的 `--config.*` 形式，失败探针保留。原 bundle 配置表达式失败后改用代码读取环境，真实 DSH 双项目加载探针再次通过，无模型提示或 broker 变更。新接口叠加运行版其他源码的临时兼容镜像，56 项核心测试通过。真实 GUI 与主脑质量闭环不能由这些探针推定。

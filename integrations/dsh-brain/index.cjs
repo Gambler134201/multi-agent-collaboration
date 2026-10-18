@@ -215,7 +215,11 @@ function loadConfig(raw) {
     throw new ConfigError('插件配置需要是一个对象');
   }
   let fileConfig = {};
-  const configFile = raw.configFile;
+  // Bundle-layer !!js expressions are not a portable environment lookup in
+  // the installed desktop loader. Resolve this one explicit setting here.
+  // A full inline configuration remains independent of any inherited value.
+  const inlinePaths = ['python', 'brainMcpServer', 'workflowSettings'].some((key) => Object.hasOwn(raw, key));
+  const configFile = raw.configFile || (!inlinePaths ? process.env.MODEL_DESK_DSH_BRAIN_CONFIG : undefined);
   if (typeof configFile === 'string' && configFile.trim()) {
     const fileName = absoluteExisting(configFile, 'configFile');
     let text;
