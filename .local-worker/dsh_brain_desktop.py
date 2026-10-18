@@ -26,7 +26,8 @@ import dsh_brain_plugin
 
 PACKAGE = 'model-desk-dsh-brain'
 ENV_NAME = 'MODEL_DESK_DSH_BRAIN_CONFIG'
-FILES = ('index.cjs', 'package.json', 'cordis.patch.yml', 'README.md', 'LICENSE')
+FILES = ('index.cjs', 'client.mjs', 'package.json', 'cordis.patch.yml', 'README.md', 'LICENSE')
+CLIENT_ORIGIN_MARKER = b'"__MODEL_DESK_PANEL_ORIGIN__"'
 CLI_RELATIVE = 'dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js'
 SUPPORTED_DSH = '0.2.1-rc.2'
 BUNDLE = Path(__file__).resolve().parent.parent / 'integrations' / 'dsh-brain'
@@ -167,6 +168,19 @@ def installation_files(root):
         'brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py', 'workflow_settings.py')}
 
 
+def client_bundle(data, panel_url):
+    """Bind the prepared client half to the same loopback origin as the Host config.
+
+    The source package keeps a loopback default so it remains usable when linked
+    manually. Preparation replaces one quoted marker; a missing or duplicated
+    marker fails closed instead of shipping a guessed origin.
+    """
+    if data.count(CLIENT_ORIGIN_MARKER) != 1:
+        raise SetupError('客户端源码的模型工作台来源标记缺失或重复，拒绝打包')
+    replacement = json.dumps(panel_url, ensure_ascii=False).encode('utf-8')
+    return data.replace(CLIENT_ORIGIN_MARKER, replacement)
+
+
 def prepare(output, workbench, python, executable, home, panel_url=brain_transport.DEFAULT_BASE_URL):
     folder = explicit_path(output, new=True)
     root = explicit_path(workbench, directory=True)
@@ -190,6 +204,7 @@ def prepare(output, workbench, python, executable, home, panel_url=brain_transpo
     package = json.loads(source['package.json'])
     if package.get('name') != PACKAGE or package.get('scripts'):
         raise SetupError('插件包身份或安装脚本不符合要求')
+    source['client.mjs'] = client_bundle(source['client.mjs'], config['panelUrl'])
     # Exclusive directory creation is the ownership boundary. plan.json is the
     # last commit marker; an interrupted preparation cannot be installed.
     folder.mkdir(mode=0o700)

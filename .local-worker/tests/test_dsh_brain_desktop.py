@@ -59,9 +59,12 @@ class DesktopTests(unittest.TestCase):
     def read_manifest(self):
         return setup.read_json(self.profile / 'package.json')
 
-    def prepare(self):
-        return setup.prepare(str(self.folder), str(self.root), sys.executable,
-                             str(self.executable), str(self.home))
+    def prepare(self, panel_url=None):
+        arguments = [str(self.folder), str(self.root), sys.executable,
+                     str(self.executable), str(self.home)]
+        if panel_url is not None:
+            return setup.prepare(*arguments, panel_url=panel_url)
+        return setup.prepare(*arguments)
 
     def runner(self, plan, arguments):
         self.commands.append(copy.deepcopy(arguments))
@@ -92,8 +95,42 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(set(archive.getnames()), {'package/' + name for name in setup.FILES})
             self.assertTrue(all(item.isfile() for item in archive.getmembers()))
             self.assertNotIn(str(self.base).encode(), archive.extractfile('package/index.cjs').read())
+            self.assertNotIn(str(self.base).encode(), archive.extractfile('package/client.mjs').read())
         self.controller.assert_not_called()
         self.assertEqual(self.environment.writes, [])
+
+    def test_prepared_client_half_declares_native_sidebar_and_embeds_panel_origin(self):
+        self.prepare(panel_url='http://localhost:9123')
+        with tarfile.open(self.folder / 'plugin.tgz') as archive:
+            manifest = json.loads(archive.extractfile('package/package.json').read())
+            client = archive.extractfile('package/client.mjs').read()
+        self.assertEqual(manifest['version'], '0.2.0')
+        self.assertEqual(set(manifest['files']), set(setup.FILES) - {'package.json'})
+        self.assertEqual(manifest['exports']['./client'], './client.mjs')
+        self.assertIn('client.mjs', manifest['files'])
+        self.assertEqual(manifest['dsh']['client']['platform'], 'web')
+        self.assertEqual(manifest['dsh']['client']['immediately'], True)
+        self.assertIn('@deepseek-ai/dsh-client-ui-sidebar-right', manifest['dsh']['client']['inject'])
+        self.assertIn(b'"http://localhost:9123"', client)
+        self.assertNotIn(setup.CLIENT_ORIGIN_MARKER, client)
+        self.assertIn('模型工作台'.encode(), client)
+        self.assertNotIn(b'brain_connect', client)
+        self.assertNotIn(b'postMessage', client)
+        self.assertNotIn(b'localStorage', client)
+        # Preparing a byte copy must not rewrite the tracked source package.
+        self.assertIn(setup.CLIENT_ORIGIN_MARKER,
+                      (setup.BUNDLE / 'client.mjs').read_bytes())
+        config = setup.read_json(self.folder / 'config.json')
+        self.assertEqual(config['panelUrl'], 'http://localhost:9123')
+
+    def test_client_origin_template_rejects_missing_or_duplicated_marker(self):
+        with self.assertRaises(setup.SetupError):
+            setup.client_bundle(b'const x = 1;\n', 'http://127.0.0.1:8765')
+        with self.assertRaises(setup.SetupError):
+            setup.client_bundle(setup.CLIENT_ORIGIN_MARKER * 2, 'http://127.0.0.1:8765')
+        rendered = setup.client_bundle(b'const x = ' + setup.CLIENT_ORIGIN_MARKER + b';\n',
+                                       'http://[::1]:8765')
+        self.assertEqual(rendered, b'const x = "http://[::1]:8765";\n')
 
     def test_prepare_refuses_existing_or_record_directory(self):
         self.prepare()

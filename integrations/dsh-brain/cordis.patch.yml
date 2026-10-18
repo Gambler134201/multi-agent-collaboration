@@ -1,7 +1,10 @@
 # Optional Model Desk main-brain adapter for the DSH desktop profile.
 #
-# The bundle inserts one adapter. It does not add a global project/owner binding,
-# start the workbench, change DSH model defaults, presets, budgets or limits.
+# The bundle inserts one adapter. Its client.mjs half separately contributes the
+# native right-sidebar "模型工作台" guide entry through the public sidebar-right
+# tab registry; the DSH installation stays untouched. It does not add a global
+# project/owner binding, start the workbench, change DSH model defaults, presets,
+# budgets or limits.
 # Point MODEL_DESK_DSH_BRAIN_CONFIG at the JSON produced by
 # .local-worker/dsh_brain_plugin.py, or override config.configFile in the
 # profile patch. The plugin stays inert when that configuration is missing.

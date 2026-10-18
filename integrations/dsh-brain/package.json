@@ -1,17 +1,25 @@
 {
   "name": "model-desk-dsh-brain",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Optional DSH native main-brain adapter for the local Model Desk workbench",
   "license": "MIT",
   "type": "commonjs",
   "main": "index.cjs",
+  "exports": {
+    ".": "./index.cjs",
+    "./client": "./client.mjs",
+    "./index.cjs": "./index.cjs",
+    "./client.mjs": "./client.mjs",
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=20",
     "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "files": [
     "index.cjs",
+    "client.mjs",
     "cordis.patch.yml",
     "LICENSE",
     "README.md"
@@ -27,6 +35,14 @@
   "dsh": {
     "bundle": {
       "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
     }
   }
 }

@@ -7,6 +7,10 @@ stdio MCP（`brain_mcp_server.py`），并按工作台协作总开关加载主�
 它只应安装到 **DSH desktop（主脑）profile**，不安装到 DSH/Pi 执行器 profile，也不修改
 DSH 默认模型、preset、预算、调用次数或 runtime。
 
+0.2.0 另含一个原生右侧栏 `client.mjs`：在右侧栏 guide 注册中文“模型工作台”入口，按
+当前原生会话的绝对 `cwd` 生成 `project` 参数，并用 DSH 自带 browser tab 打开本机工作台。
+它不修改 DSH 安装目录，不注入私有 DOM，不向父页面/URL 传递 panel token 或连接 capability。
+
 ## 不做什么
 
 - 不启动模型工作台，不调用模型，不读取账号、密钥或会话历史。
@@ -48,6 +52,30 @@ DSH 默认模型、preset、预算、调用次数或 runtime。
 原 bundle 的 `!!js` 环境表达式在本机加载探针中未生效，现已改为普通空值配置，
 由插件代码读取这一条环境变量。完整内联路径配置不受继承的环境变量影响。
 
+## 原生右侧栏入口（0.2.0）
+
+`package.json` 的 `dsh.client` 和 `exports["./client"]` 让同一 bundle 带出一个浏览器半侧；
+`client.mjs` 只使用本机 DSH 0.2.1-rc.2 已公开的接口：
+
+- `ctx.sidebarRightTabs.register({ id, kind, title, guide })` 注册页面类型和中文 guide 条目；
+- `ctx.slots.register({ name: 'sidebar.right.pane.tab', key })` 注册临时正文；
+- 正文的 `inject(sessionId)` 取当前原生会话，`ctx.sessions.list` 的该行 `cwd` 必须是绝对路径；
+- 点击后调用所属 tab 的 `openTab('browser', { params: { url }, replaceTab: true })`，复用
+  `@deepseek-ai/dsh-client-ui-sidebar-browser` 的原生浏览器 tab。
+
+`project` 只来自该原生会话的绝对 `cwd`，经 `URLSearchParams` 编码。缺失/相对/尚未加载
+的身份显示“未选择项目”，可显式打开未绑定工作台；不猜服务目录或最近项目。正文只使用
+自己 tab 的 `sessionId` 与 actions，切换会话不串项目。入口注册随 Cordis effect 释放；
+已打开的原生 browser tab 仍由 sidebar 管理。重复点击会按 browser 的既有 `multiple`
+行为新建 tab，不做静默去重。浏览器插件未启用时，正文显示可解释错误，不退回自建 iframe。
+
+安装器 `prepare` 会把 Host 配置里的同一个 loopback `panelUrl` 写入准备包中的
+`client.mjs`；直接链接源码包时客户端使用默认 `http://127.0.0.1:8765`，自定义端口必须
+经安装器准备。准备后再改 `panelUrl` 会使 Host 与客户端入口不一致，必须重新 `prepare`
+而不能只改 live `config.json`。固定清单现为 `index.cjs`、`client.mjs`、`package.json`、
+`cordis.patch.yml`、`README.md`、`LICENSE`。从 0.1.0 升级时先用原收据卸载旧包，再对新
+目录准备/安装 0.2.0；不覆盖旧 `plan.json`/`receipt.json`。
+
 ## 运行时边界
 
 - `agent/created` 串行 await：只处理 `ctx.agents.roots()` 中同一实例的顶层 Agent。
@@ -84,7 +112,9 @@ DSH 默认模型、preset、预算、调用次数或 runtime。
 
 ```powershell
 node --test .local-worker\tests\test_dsh_brain_plugin.cjs
+node --test .local-worker\tests\test_dsh_brain_sidebar.cjs
 <python> .local-worker\tests\test_dsh_brain_plugin.py
+<python> .local-worker\tests\test_dsh_brain_desktop.py
 ```
 
 测试使用临时目录、假状态脚本和 mock Agent/Cordis API；不启动服务、不加载真实 DSH
@@ -93,4 +123,5 @@ profile、不调用模型。
 主脑另用已安装 DSH `0.2.1-rc.2` 的临时 ACP overlay 验证：两个临时项目各自加载九工具、
 `brain_describe` 的项目/原生会话一致、规则装配生效、继承作用域的验收调用被拒绝，
 临时开关关闭后拒绝派发但保留验收。没有发送 `session/prompt` 或调用 `brain_connect`。
-这是原生插件接口验证；尚未验收桌面 GUI 安装/入口、真实模型行为或自动唤醒。
+这是原生插件接口验证；尚未验收桌面 GUI 安装/入口、右侧栏实际可见性、真实模型行为或
+自动唤醒。右侧栏入口目前只经 mock Cordis/React、准备包和 app.asar 只读接口核对。
