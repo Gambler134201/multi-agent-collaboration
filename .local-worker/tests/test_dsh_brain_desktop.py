@@ -250,6 +250,18 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(lock.read_bytes(), b'other operation')
         self.assertEqual(self.commands, [])
 
+    def test_another_prepared_directory_cannot_bypass_the_same_profile_operation(self):
+        self.prepare()
+        second = self.base / 'other-preparation'
+        setup.prepare(str(second), str(self.root), sys.executable, str(self.executable), str(self.home))
+        lock = self.profile / '.model-desk-brain-install.lock'
+        lock.write_bytes(b'other installer')
+        with self.assertRaises(setup.SetupError):
+            setup.install(second, environment=self.environment, runner=self.runner)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(lock.read_bytes(), b'other installer')
+        self.assertFalse((second / 'operation.lock').exists())
+
     def test_official_cli_uses_argv_desktop_scope_and_hidden_non_shell_process(self):
         self.prepare()
         _, plan = setup.load_plan(self.folder)
@@ -262,6 +274,25 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(kwargs['env']['DSH_HOME'], str(self.home))
         self.assertEqual(kwargs['env']['ELECTRON_RUN_AS_NODE'], '1')
 
+    def test_package_manager_diagnostic_never_persists_raw_output(self):
+        self.prepare()
+        _, plan = setup.load_plan(self.folder)
+        result = mock.Mock(returncode=1, stdout=b'ERR_PNPM_NO_OFFLINE_TARBALL',
+                           stderr=b'Authorization: fixture-not-a-real-secret')
+        with mock.patch.object(setup.subprocess, 'run', return_value=result):
+            with self.assertRaises(setup.PackageCommandFailed) as caught:
+                setup.official_cli(plan, ['add', str(self.folder / 'plugin.tgz')])
+        public = json.dumps(caught.exception.diagnostic)
+        self.assertNotIn('fixture-not-a-real-secret', public)
+        self.assertEqual(caught.exception.diagnostic['error_codes'], ['ERR_PNPM_NO_OFFLINE_TARBALL'])
+
+    def test_check_does_not_report_an_unresolved_receipt_as_ready(self):
+        self.prepare()
+        setup.save_receipt(self.folder, {'schema': 1, 'state': 'attention'})
+        result = setup.check(self.folder)
+        self.assertFalse(result['ready'])
+        self.assertEqual(result['receipt_state'], 'attention')
+
     def test_controller_check_uses_unknown_read_only_context_and_disconnects(self):
         # Retain the original before setUp replaces the public helper.
         transport = mock.Mock()
@@ -271,9 +302,32 @@ class DesktopTests(unittest.TestCase):
         with mock.patch.object(setup.brain_transport, 'BrainTransport', return_value=transport):
             result = ORIGINAL_CONTROLLER_CHECK({'workbench': str(self.root), 'panel_url': 'http://127.0.0.1:8765'})
         self.assertFalse(result['task_mutation_authority'])
-        self.assertEqual(transport.connect.call_args.args[0].session_binding, 'unknown')
+        self.assertIsInstance(transport.connect.call_args.args[0], dict)
+        self.assertEqual(transport.connect.call_args.args[0]['session_binding'], 'unknown')
         transport.call.assert_called_once_with('describe', {})
         transport.disconnect.assert_called_once()
+
+    def test_preflight_uses_real_transport_contract_and_keeps_capability_private(self):
+        context = setup.brain_context.build_context(str(self.root), 'dsh-setup', 'desktop-installer',
+                session_binding='unknown', launcher='dsh-desktop-check')
+        calls = []
+        def request(method, route, body=None, **kwargs):
+            calls.append(route)
+            if route == '/api/session':
+                return 200, {'token': 'fixture-panel-only'}
+            if route == '/api/brain/connect':
+                self.assertIsInstance(body, dict)
+                self.assertEqual(body['session_binding'], 'unknown')
+                return 201, {'capability': 'fixture-capability-only', 'context': context.public()}
+            if route == '/api/brain/call':
+                self.assertEqual(body, {'operation': 'describe', 'payload': {}})
+                return 200, {'context': context.public()}
+            raise AssertionError('unexpected route')
+        with mock.patch.object(setup.brain_transport.BrainTransport, '_request', side_effect=request):
+            result = ORIGINAL_CONTROLLER_CHECK({'workbench': str(self.root), 'panel_url': 'http://127.0.0.1:8765'})
+        self.assertEqual(calls, ['/api/session', '/api/brain/connect', '/api/brain/call'])
+        self.assertFalse(result['task_mutation_authority'])
+        self.assertNotIn('fixture-', json.dumps(result))
 
     def test_unexpected_controller_identity_cannot_become_an_install_permission(self):
         transport = mock.Mock()

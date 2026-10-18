@@ -36,6 +36,17 @@ class SetupError(ValueError):
     pass
 
 
+class PackageCommandFailed(SetupError):
+    def __init__(self, exit_code, output):
+        # Preserve useful fixed error categories, never raw registry output.
+        known = ('ERR_PNPM_NO_OFFLINE_META', 'ERR_PNPM_NO_OFFLINE_TARBALL',
+                 'ERR_PNPM_UNEXPECTED_STORE', 'ERR_PNPM_LOCKFILE_CONFIG_MISMATCH',
+                 'ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY', 'ERR_PNPM_FETCH_401',
+                 'ERR_PNPM_FETCH_403', 'ERR_PNPM_FETCH_404', 'ERR_PNPM_META_FETCH_FAIL')
+        self.diagnostic = {'exit_code': int(exit_code), 'error_codes': [code for code in known if code in output]}
+        super().__init__('官方 CLI 未成功返回；效果需核查，未自动重试')
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -135,7 +146,7 @@ def controller_check(plan):
                                           session_binding='unknown', launcher='dsh-desktop-check')
     transport = brain_transport.BrainTransport(plan['panel_url'], timeout=10)
     try:
-        transport.connect(context)
+        transport.connect(context.declaration())
         result = transport.call('describe', {})
         public = result.get('context', {})
         owner, session = public.get('owner'), public.get('session')
@@ -258,8 +269,8 @@ class UserEnvironment:
 
 
 @contextmanager
-def setup_lock(folder):
-    path = folder / 'operation.lock'
+def setup_lock(folder, name='operation.lock'):
+    path = folder / name
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
@@ -293,22 +304,27 @@ def official_cli(plan, arguments):
     # Package-manager output may contain arbitrary registry diagnostics. Do not
     # put it into model-visible exceptions or installer receipts.
     result = subprocess.run(command, env=env, cwd=plan['dsh_home'], shell=False,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode:
-        raise SetupError('官方 CLI 未成功返回；效果需核查，未自动重试')
+        output = (result.stdout + result.stderr).decode('utf-8', 'replace')
+        raise PackageCommandFailed(result.returncode, output)
 
 
 def check(folder):
     folder, plan = load_plan(folder)
     result = controller_check(plan)
-    return {'ready': True, **result, 'profile': str(Path(plan['dsh_home']) / 'profiles' / 'desktop'),
+    record = receipt_for(folder)
+    state = record.get('state') if record else None
+    return {'ready': state is None, **result, 'receipt_state': state,
+            'profile': str(Path(plan['dsh_home']) / 'profiles' / 'desktop'),
             'requires_dsh_restart': True, 'installed': False}
 
 
 def install(folder, *, environment=None, runner=None):
     folder, plan = load_plan(folder)
-    with setup_lock(folder):
+    profile, _ = profile_manifest(plan['dsh_home'])
+    with setup_lock(folder), setup_lock(profile, '.model-desk-brain-install.lock'):
         environment = environment if environment is not None else UserEnvironment()
         record = receipt_for(folder)
         _, before = profile_manifest(plan['dsh_home'])
@@ -342,8 +358,10 @@ def install(folder, *, environment=None, runner=None):
                 raise SetupError('环境配置写入未确认')
             record['state'] = 'installed'
             save_receipt(folder, record)
-        except Exception:
+        except Exception as error:
             record['state'] = 'attention'
+            if isinstance(error, PackageCommandFailed):
+                record['cli_diagnostic'] = error.diagnostic
             save_receipt(folder, record)
             raise SetupError('安装未完全确认；保留收据，未重试或盲目恢复，请核查后按原收据卸载') from None
     return {'installed': True, 'reused': False, 'requires_dsh_restart': True}
@@ -354,7 +372,8 @@ def uninstall(folder, *, environment=None, runner=None):
     # an owned plugin, so uninstall validates artifacts/ownership independently.
     folder = explicit_path(folder, directory=True)
     plan = read_json(folder / 'plan.json')
-    with setup_lock(folder):
+    profile, _ = profile_manifest(explicit_path(plan['dsh_home'], directory=True))
+    with setup_lock(folder), setup_lock(profile, '.model-desk-brain-install.lock'):
         record = receipt_for(folder)
         if not record or record.get('plan_hash') != digest(json_bytes(plan)):
             raise SetupError('没有匹配的本安装收据；不能卸载未知插件')
@@ -396,8 +415,10 @@ def uninstall(folder, *, environment=None, runner=None):
                 environment.set(None)
             record['state'] = 'uninstalled'
             save_receipt(folder, record)
-        except Exception:
+        except Exception as error:
             record['state'] = 'attention'
+            if isinstance(error, PackageCommandFailed):
+                record['cli_diagnostic'] = error.diagnostic
             save_receipt(folder, record)
             raise SetupError('卸载未完全确认；保留收据，不重试或覆盖其他设置') from None
     return {'uninstalled': True, 'reused': False, 'requires_dsh_restart': True}

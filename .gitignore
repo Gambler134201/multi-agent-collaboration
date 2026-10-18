@@ -45,3 +45,4 @@ build/
 *.zip
 Thumbs.db
 .DS_Store
+.local-worker/desktop-integrations/
