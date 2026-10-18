@@ -183,6 +183,155 @@ class DesktopTests(unittest.TestCase):
         self.assertTrue(self.uninstall()['reused'])
         self.assertEqual(len(self.commands), 2)
 
+    def failed_without_package(self):
+        self.prepare()
+        def fail(plan, arguments):
+            self.commands.append(arguments)
+            raise setup.PackageCommandFailed(1, 'ERR_PNPM_NO_OFFLINE_META')
+        with self.assertRaises(setup.SetupError):
+            self.install(fail)
+
+    def reconcile(self, stopped=None):
+        return setup.reconcile_absent(self.folder, environment=self.environment,
+                                      stopped=stopped or (lambda plan: None))
+
+    def test_reconcile_preserves_failure_and_never_invokes_cli(self):
+        self.failed_without_package()
+        original = setup.receipt_for(self.folder)
+        result = self.reconcile()
+        self.assertFalse(result['retry_automatic'])
+        record = setup.receipt_for(self.folder)
+        self.assertEqual(record['attempt_history'], [original])
+        self.assertEqual(record['state'], 'verified_absent')
+        self.assertEqual(len(self.commands), 1)
+        with self.assertRaises(setup.SetupError):
+            self.install()
+        setup.install(self.folder, environment=self.environment, runner=self.runner,
+                      retry_verified=True, stopped=lambda plan: None)
+        self.assertEqual(setup.receipt_for(self.folder)['attempt_history'], [original])
+        self.assertEqual(len(self.commands), 2)
+
+    def test_reconciliation_refuses_host_still_running_without_receipt_change(self):
+        self.failed_without_package()
+        original = (self.folder / 'receipt.json').read_bytes()
+        def running(plan):
+            raise setup.SetupError('host running')
+        with self.assertRaises(setup.SetupError):
+            self.reconcile(running)
+        self.assertEqual((self.folder / 'receipt.json').read_bytes(), original)
+
+    def test_reconciliation_refuses_native_marker_package_link_env_and_metadata_drift(self):
+        self.failed_without_package()
+        marker = self.profile / '.plugin-manager' / 'run.json'
+        marker.parent.mkdir()
+        marker.write_bytes(b'{}')
+        with self.assertRaises(setup.SetupError):
+            self.reconcile()
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        link = self.profile / 'node_modules' / setup.PACKAGE
+        link.mkdir(parents=True)
+        with self.assertRaises(setup.SetupError):
+            self.reconcile()
+        link.rmdir()
+        self.environment.value = 'user config'
+        with self.assertRaises(setup.SetupError):
+            self.reconcile()
+        self.environment.value = None
+        manifest = self.read_manifest()
+        manifest['user_setting'] = 'changed'
+        self.write_manifest(manifest)
+        with self.assertRaises(setup.SetupError):
+            self.reconcile()
+        self.assertEqual(setup.receipt_for(self.folder)['state'], 'attention')
+
+    def test_explicit_retry_rechecks_absence_and_cannot_correct_twice(self):
+        self.failed_without_package()
+        self.reconcile()
+        def fail(plan, arguments):
+            self.commands.append(arguments)
+            raise setup.PackageCommandFailed(1, 'ERR_PNPM_NO_OFFLINE_META')
+        with self.assertRaises(setup.SetupError):
+            setup.install(self.folder, environment=self.environment, runner=fail,
+                          retry_verified=True, stopped=lambda plan: None)
+        with self.assertRaises(setup.SetupError):
+            self.reconcile()
+        with self.assertRaises(setup.SetupError):
+            setup.install(self.folder, environment=self.environment, runner=self.runner,
+                          retry_verified=True, stopped=lambda plan: None)
+        self.assertEqual(len(self.commands), 2)
+
+    def test_retry_requires_original_receipt_and_fresh_absence_check(self):
+        self.prepare()
+        with self.assertRaises(setup.SetupError):
+            setup.install(self.folder, environment=self.environment, runner=self.runner, retry_verified=True)
+        self.assertEqual(self.commands, [])
+
+    def test_process_probe_is_read_only_and_unknown_or_running_refuses(self):
+        self.prepare()
+        _, plan = setup.load_plan(self.folder)
+        for result in (mock.Mock(returncode=0, stdout=b'123'), mock.Mock(returncode=1, stdout=b'')):
+            with mock.patch.object(setup.subprocess, 'run', return_value=result):
+                with self.assertRaises(setup.SetupError):
+                    setup.desktop_stopped(plan)
+        with mock.patch.object(setup.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout=b'')) as run:
+            setup.desktop_stopped(plan)
+        self.assertIn('Get-CimInstance', run.call_args.args[0][-1])
+        self.assertNotIn('Stop-Process', run.call_args.args[0][-1])
+        self.assertFalse(run.call_args.kwargs['shell'])
+
+    def test_network_repair_is_explicit_only_for_diagnosed_offline_cache_failure(self):
+        self.failed_without_package()
+        original = setup.receipt_for(self.folder)
+        with self.assertRaises(setup.SetupError):
+            self.install()
+        setup.install(self.folder, environment=self.environment, runner=self.runner,
+                      resolve_offline_cache=True, stopped=lambda plan: None)
+        self.assertIn('--config.offline=false', self.commands[-1])
+        self.assertIn('--config.ignore-scripts=true', self.commands[-1])
+        self.assertIn('--config.auto-install-peers=false', self.commands[-1])
+        record = setup.receipt_for(self.folder)
+        self.assertEqual(record['attempt_history'], [original])
+        self.assertTrue(record['package_network'])
+
+    def test_network_repair_refuses_unknown_auth_and_changed_profile(self):
+        self.failed_without_package()
+        record = setup.receipt_for(self.folder)
+        for codes in ([], ['ERR_PNPM_FETCH_401'], ['ERR_PNPM_NO_OFFLINE_META', 'ERR_PNPM_FETCH_403']):
+            record['cli_diagnostic']['error_codes'] = codes
+            setup.save_receipt(self.folder, record)
+            with self.assertRaises(setup.SetupError):
+                setup.install(self.folder, environment=self.environment, runner=self.runner,
+                              resolve_offline_cache=True, stopped=lambda plan: None)
+        record['cli_diagnostic']['error_codes'] = ['ERR_PNPM_NO_OFFLINE_META']
+        setup.save_receipt(self.folder, record)
+        self.environment.value = 'changed-user-config'
+        with self.assertRaises(setup.SetupError):
+            setup.install(self.folder, environment=self.environment, runner=self.runner,
+                          resolve_offline_cache=True, stopped=lambda plan: None)
+        self.assertEqual(len(self.commands), 1)
+
+    def test_network_repair_failure_is_not_repeated_and_preserves_all_attempts(self):
+        self.failed_without_package()
+        self.reconcile()
+        def fail(plan, args):
+            self.commands.append(args)
+            raise setup.PackageCommandFailed(1, 'ERR_PNPM_NO_OFFLINE_META')
+        with self.assertRaises(setup.SetupError):
+            setup.install(self.folder, environment=self.environment, runner=fail,
+                          retry_verified=True, stopped=lambda plan: None)
+        original = setup.receipt_for(self.folder)
+        with self.assertRaises(setup.SetupError):
+            setup.install(self.folder, environment=self.environment, runner=fail,
+                          resolve_offline_cache=True, stopped=lambda plan: None)
+        after = setup.receipt_for(self.folder)
+        self.assertEqual(len(after['attempt_history']), 2)
+        self.assertEqual(after['attempt_history'][1]['cli_diagnostic'], original['cli_diagnostic'])
+        with self.assertRaises(setup.SetupError):
+            setup.install(self.folder, environment=self.environment, runner=self.runner,
+                          resolve_offline_cache=True, stopped=lambda plan: None)
+        self.assertEqual(len(self.commands), 3)
+
     def test_user_environment_change_blocks_uninstall_without_overwrite(self):
         self.prepare()
         self.install()
@@ -292,6 +441,17 @@ class DesktopTests(unittest.TestCase):
         result = setup.check(self.folder)
         self.assertFalse(result['ready'])
         self.assertEqual(result['receipt_state'], 'attention')
+
+    def test_check_reports_verified_install_and_refuses_changed_pointer(self):
+        self.prepare()
+        self.install()
+        result = setup.check(self.folder, environment=self.environment)
+        self.assertTrue(result['installed'])
+        self.assertTrue(result['ready'])
+        self.environment.value = 'changed-user-config'
+        result = setup.check(self.folder, environment=self.environment)
+        self.assertFalse(result['installed'])
+        self.assertFalse(result['ready'])
 
     def test_controller_check_uses_unknown_read_only_context_and_disconnects(self):
         # Retain the original before setUp replaces the public helper.

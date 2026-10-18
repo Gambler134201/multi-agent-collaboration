@@ -311,17 +311,76 @@ def official_cli(plan, arguments):
         raise PackageCommandFailed(result.returncode, output)
 
 
-def check(folder):
+def check(folder, *, environment=None):
     folder, plan = load_plan(folder)
     result = controller_check(plan)
     record = receipt_for(folder)
     state = record.get('state') if record else None
-    return {'ready': state is None, **result, 'receipt_state': state,
+    _, manifest = profile_manifest(plan['dsh_home'])
+    installed = bool(state == 'installed' and record.get('plan_hash') == digest(json_bytes(plan))
+                     and ours_matches(manifest, folder, plan['dsh_home'])
+                     and (environment or UserEnvironment()).get() == str(folder / 'config.json'))
+    return {'ready': state is None or installed, **result, 'receipt_state': state,
             'profile': str(Path(plan['dsh_home']) / 'profiles' / 'desktop'),
-            'requires_dsh_restart': True, 'installed': False}
+            'requires_dsh_restart': True, 'installed': installed}
 
 
-def install(folder, *, environment=None, runner=None):
+def desktop_stopped(plan):
+    """Read process identity only; never close the host or inspect its accounts."""
+    if os.name != 'nt':
+        raise SetupError('需要在 Windows 核查 DSH 进程状态')
+    command = ("$ErrorActionPreference='Stop'; "
+               "@(Get-CimInstance Win32_Process | Where-Object { "
+               "$_.ExecutablePath -eq $env:MODEL_DESK_SETUP_EXE } | "
+               "Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress")
+    result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
+        env=dict(os.environ, MODEL_DESK_SETUP_EXE=plan['dsh_exe']), shell=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if result.returncode or result.stdout.strip():
+        raise SetupError('DSH 或其安装进程仍在运行，或无法确认已退出；不继续安装')
+
+
+def absent_checks(folder, plan, record, environment):
+    profile, manifest = profile_manifest(plan['dsh_home'])
+    if (has_ours(manifest) or environment.get() is not None
+            or os.path.lexists(profile / 'node_modules' / PACKAGE)
+            or without_ours(manifest) != record.get('before_unrelated')):
+        raise SetupError('不能确认本插件未安装且原配置保持不变；不允许重试')
+    for marker in (profile / '.plugin-manager' / 'run.json', profile / 'lock'):
+        if os.path.lexists(marker):
+            raise SetupError('存在原生安装运行标记或锁；不删除或绕过')
+    return {'plugin_references_absent': True, 'package_link_absent': True,
+            'environment_absent': True, 'unrelated_manifest_unchanged': True,
+            'native_run_and_lock_absent': True}
+
+
+def reconcile_absent(folder, *, environment=None, stopped=None):
+    """Confirm only absence of an installed plugin, not absence of cache effects.
+
+    The original attempt remains in the receipt. This action never runs the CLI;
+    a separate, explicit retry is required and is limited to one correction.
+    """
+    folder, plan = load_plan(folder)
+    profile, _ = profile_manifest(plan['dsh_home'])
+    with setup_lock(folder), setup_lock(profile, '.model-desk-brain-install.lock'):
+        record = receipt_for(folder)
+        if (not record or record.get('plan_hash') != digest(json_bytes(plan))
+                or record.get('state') != 'attention' or not record.get('effect_unknown')
+                or record.get('package_confirmed') or record.get('attempt_history')):
+            raise SetupError('不是可核查的首次安装失败收据；不允许恢复重试')
+        (stopped or desktop_stopped)(plan)
+        checks = absent_checks(folder, plan, record, environment or UserEnvironment())
+        original = json.loads(json.dumps(record))
+        record.update(state='verified_absent', effect_unknown=False,
+                      reconciliation={'checked_at': time.time(), 'desktop_stopped': True, **checks},
+                      attempt_history=[original])
+        save_receipt(folder, record)
+    return {'installed': False, 'reconciled': True, 'retry_automatic': False, **checks}
+
+
+def install(folder, *, environment=None, runner=None, retry_verified=False, stopped=None,
+            resolve_offline_cache=False):
     folder, plan = load_plan(folder)
     profile, _ = profile_manifest(plan['dsh_home'])
     with setup_lock(folder), setup_lock(profile, '.model-desk-brain-install.lock'):
@@ -329,21 +388,48 @@ def install(folder, *, environment=None, runner=None):
         record = receipt_for(folder)
         _, before = profile_manifest(plan['dsh_home'])
         value = str(folder / 'config.json')
+        if retry_verified and resolve_offline_cache:
+            raise SetupError('不能同时指定普通恢复和联网缓存修复')
+        history = []
         if record:
             if (record.get('state') == 'installed' and record.get('plan_hash') == digest(json_bytes(plan))
                     and ours_matches(before, folder, plan['dsh_home']) and environment.get() == value):
                 return {'installed': True, 'reused': True, 'requires_dsh_restart': True}
-            raise SetupError('已有安装收据但状态/归属无法确认；先核查或按收据卸载，不重复安装')
+            diagnosed_offline = (resolve_offline_cache and record.get('state') == 'attention'
+                    and record.get('effect_unknown') and not record.get('package_confirmed')
+                    and not record.get('package_network')
+                    and len(record.get('attempt_history', [])) <= 1
+                    and bool(record.get('cli_diagnostic', {}).get('error_codes'))
+                    and set(record['cli_diagnostic']['error_codes']) <= {
+                        'ERR_PNPM_NO_OFFLINE_META', 'ERR_PNPM_NO_OFFLINE_TARBALL'})
+            verified_retry = (retry_verified and record.get('state') == 'verified_absent'
+                    and record.get('plan_hash') == digest(json_bytes(plan))
+                    and len(record.get('attempt_history', [])) == 1)
+            if (record.get('plan_hash') != digest(json_bytes(plan))
+                    or not (diagnosed_offline or verified_retry)):
+                raise SetupError('已有安装收据但状态/归属无法确认；先核查或按收据卸载，不重复安装')
+            (stopped or desktop_stopped)(plan)
+            absent_checks(folder, plan, record, environment)
+            history = record.get('attempt_history', [])
+            if diagnosed_offline:
+                history = [*history, json.loads(json.dumps({k: v for k, v in record.items()
+                                                           if k != 'attempt_history'}))]
+        elif retry_verified or resolve_offline_cache:
+            raise SetupError('明确重试需要原失败收据及未安装核查结果')
         if has_ours(before) or environment.get() is not None:
             raise SetupError('已有同名插件或配置环境值，拒绝接管/覆盖')
         controller_check(plan)  # All preconditions before profile/environment effects.
         baseline = without_ours(before)
         record = {'schema': 1, 'state': 'installing', 'plan_hash': digest(json_bytes(plan)),
-                  'before_unrelated': baseline, 'created_at': time.time(), 'effect_unknown': True}
+                  'before_unrelated': baseline, 'created_at': time.time(), 'effect_unknown': True,
+                  'package_network': bool(resolve_offline_cache)}
+        if history:
+            record['attempt_history'] = history
         save_receipt(folder, record)
         try:
             (runner or official_cli)(plan, ['add', str(folder / 'plugin.tgz'), '--config.ignore-scripts=true',
-                                          '--config.auto-install-peers=false', '--config.offline=true'])
+                                          '--config.auto-install-peers=false',
+                                          '--config.offline=' + ('false' if resolve_offline_cache else 'true')])
             record['effect_unknown'] = False
             save_receipt(folder, record)
             _, after = profile_manifest(plan['dsh_home'])
@@ -431,13 +517,22 @@ def main(argv=None):
     for field in ('output', 'workbench', 'python', 'executable', 'home'):
         prep.add_argument('--' + field, required=True)
     prep.add_argument('--panel-url', default=brain_transport.DEFAULT_BASE_URL)
-    for mode in ('check', 'install', 'uninstall'):
+    for mode in ('check', 'install', 'uninstall', 'reconcile-absent'):
         cmd = sub.add_parser(mode)
         cmd.add_argument('--directory', required=True)
+        if mode == 'install':
+            recovery = cmd.add_mutually_exclusive_group()
+            recovery.add_argument('--retry-verified', action='store_true')
+            recovery.add_argument('--resolve-offline-cache', action='store_true')
     args = parser.parse_args(argv)
     try:
         if args.mode == 'prepare':
             result = prepare(args.output, args.workbench, args.python, args.executable, args.home, args.panel_url)
+        elif args.mode == 'install':
+            result = install(args.directory, retry_verified=args.retry_verified,
+                             resolve_offline_cache=args.resolve_offline_cache)
+        elif args.mode == 'reconcile-absent':
+            result = reconcile_absent(args.directory)
         else:
             result = globals()[args.mode](args.directory)
         print(json.dumps(result, ensure_ascii=False))
