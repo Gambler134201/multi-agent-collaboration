@@ -1,6 +1,6 @@
-# DSH 主脑插件：入口决定与验证记录
+# DSH 主脑插件：入口决定与实现记录
 
-更新日期：2026-10-18。开发分支：`codex/brain-dsh`。本文记录已确认的使用方式和实施边界，不代表插件已交付。
+更新日期：2026-10-18。开发分支：`codex/brain-dsh`。插件加载与项目/会话绑定基础已由主脑接手修正，并经离线检查及安装版 DSH 临时 ACP overlay 验证。原生桌面 GUI 安装/入口、真实模型规则遵循和自动唤醒仍未实测。
 
 ## 用户确认的使用方式
 
@@ -20,21 +20,94 @@
 | 真实 DSH 挂载通用主脑 MCP | 成功发现九个工具，tools/list 一次，工具调用零次 | 证明安装版本可发现真实 stdio MCP 工具，未连接工作台或派发 |
 | 模型轮次 | 未提交 session/prompt | 此检查没有执行模型推理；不据此保证启动过程没有其他网络请求 |
 | 安装包静态扩展点 | 包含插件管理、串行 agent/created、Agent 作用域、工作区绑定及 MCP 模块 | 存在原生适配基础；静态存在不等于 GUI 安装/加载验收 |
-| DSH 原生桌面开关、自动绑定、自动唤醒 | 尚未实测 | 不能以 ACP 工具发现替代 |
+| 本轮 DSH 原生插件代码 | 离线边界检查及安装版临时 ACP overlay 通过 | 两个临时原生会话分别挂载九工具，项目与会话一致，规则装配生效；未安装到真实 desktop profile |
+| DSH 原生桌面开关、自动绑定、自动唤醒 | 尚未实测 | 不能以离线测试或 ACP 工具发现替代 |
 
 探针只关闭自身会话和进程，未提交模型提示、读取账号密钥、改动真实 DSH 配置或部署运行版。探针脚本、厂商源码摘录及本机结果保留在忽略的本机任务目录，不随源码发布。
 
-## 最小实现顺序
+## 本轮实现（薄适配）
 
-1. **原生安装与关闭状态。** 制作独立的 DSH 插件组合包，核对当前桌面 profile 的实际安装、加载、卸载入口。沿用工作台协作总开关，不另造一套相互矛盾的开关；默认不开服务、不派发、不调用模型。具体桌面按钮位置要通过真实宿主验证。
-2. **按当前聊天绑定。** 从原生 Agent / session / workspace 取得当前项目和会话，为每个主脑聊天分别挂载工具与规则。不得把一个固定项目写进全局 MCP 配置供所有聊天共用。原生身份的控制器验证方式先确定；现有 launcher 声明不能自行升级成 host_verified。
-3. **规则与工具生效。** 开关打开后，在后续适当的原生执行边界加载主脑职责、模型选择及独立验收规则。只对选定的顶层主脑生效；DSH/Pi 执行会话和子 Agent 不获得主脑工具或验收权。关闭后停止新自动派发，不取消已有任务或改写原责任绑定。
-4. **基础闭环。** 复用通用核心：候选/预览 → 快速派发返回原 ID → 取回真实交付 → 主脑独立检查 → 通过或一次整改。请求结果未知时保持原任务关联，不自动换请求 ID 重派。用 mock、临时项目及真实宿主分别验证。
-5. **休眠与唤醒。** 使用原生事件/续接接口和控制器后台监听，完成后只向已绑定原聊天正常通知一次。开关、会话关闭、主脑正忙、服务重启、投递未知均需有明确状态与恢复行为；不以循环询问主脑代替后台等待。原生续接尚未验证前明确显示受限。
+新增可选插件组合包 `integrations/dsh-brain/`：
 
-首版不增加模型优惠自动切换、跨宿主聊天同步或多模型并行，不更换 DSH 原生模型连接，也不假定桌面账户权益可用于开放 API。插件只适配入口、身份、规则和通知，任务/记录/费用/验收继续共用工作台。
+- `package.json`：`dsh.bundle.patch = cordis.patch.yml`，预构建 CommonJS 入口 `index.cjs`，不含运行依赖；`@deepseek-ai/dsh-mcp-client` 作为可选 peer，从已安装的 DSH profile 动态解析，不硬编码厂商安装路径。
+- `cordis.patch.yml`：只插入一个 `model-desk-dsh-brain` 条目；`configFile` 从 `MODEL_DESK_DSH_BRAIN_CONFIG` 读取，未设置时插件保持 inert。不添加全局项目绑定，不修改模型默认 Agent、preset、预算、次数或 runtime。
+- `index.cjs`：插件主体。每个顶层原生 Agent 使用自己的 `agent.ctx` 挂载一个 stdio MCP client（默认 `serverName=model_desk_brain`），不共用全局 MCP 配置。
 
-## 交付前必须验证
+新增本机配置生成器 `.local-worker/dsh_brain_plugin.py`：只接受显式绝对路径，只创建用户指定的一个输出文件，已存在时拒绝覆盖；不写 DSH profile、workflow 设置或项目记录。生成内容不含 project/owner/session/role/host，项目与会话只能在运行时从原生聊天取得。
+
+### 原生身份与首次绑定
+
+- 只处理 `ctx.agents.roots()` 中与事件 `agent` **实例相等**的顶层 Agent；不用进程、cwd、服务目录或“最近项目”判断主脑。
+- 可信身份要求 `agent.id === agent.session.id === agent.session.header.id`，且 `agent.session.header.cwd` 是已存在绝对目录的 realpath。任一项缺失、相对、不可解析或不是目录都不绑定，不猜。
+- 首次绑定后，`agent/session.header.cwd`、id 或顶层身份漂移只令绑定失效，不自动改归属。不同原生会话分别绑定、分别使用自己的 owner/operator 摘要。
+- owner 由 `ownerPrefix + SHA-256(native session id)` 稳定派生；`operator_session` 由同一原生 session id 的稳定摘要派生。原生 session id 作为 `--native-session-id` 声明保留。
+- 身份状态如实记为 `user_bound`（用户安装插件并同意自动绑定当前聊天），不是 `host_verified`；不声称宿主已核实。主脑模型/宿主版本只记录实际可声明的来源，本轮启动参数不填模型和版本，避免猜测。
+- 首次绑定记录只保存在当前插件模块的内存中，用于重复 apply/同一模块内热重载/恢复时不改归属；不写入 `.model-desk` 或宿主 profile。DSH 进程重启或插件模块被重新加载后，记录会重新建立；若那时原生 header 已指向其他项目，插件只能按当前原生 header 重新评估，不能阻止宿主层面的会话迁移。
+
+### 工具、开关与作用域
+
+- 每个 Agent 单独 `agent.ctx.plugin(mcpClientModule, config)`；`serverName` 在同一 Agent 作用域内唯一。并发 `agent/created` 以会话 id 去重，`agent/pre-step` 不挂载，插件重载先 dispose 旧实例，避免重复挂载。
+- MCP 启动参数只由原生绑定生成：`--project <realpath>`、`--host dsh`、`--owner <derived>`、`--role brain`、`--session-binding user_bound`、`--session-id <derived>`、`--native-session-id <native>`、`--panel-url <explicit>`。工具参数不能改项目、角色、owner 或会话。
+- MCP client 的 `cwd` 使用该原生项目；`brain_connect` 才显式连接已经运行的工作台。插件不会自动启动工作台，也不会在工具发现阶段访问工作台或调用模型。
+- Agent 作用域工具会被子 scope 继承，因此 `agent.ctx.tools.guard` 做最终单调拒绝：只处理本 server 的 `brain_*` 工具，要求 `exec.agent` **实例等于**所属主脑 Agent；子 Agent、其他会话、缺失 agent、身份漂移或未知宿主 API 都拒绝。不注册全局工具屏蔽，DSH 正常工具不受影响。
+- `brain_dispatch` 与 `brain_rework` 在 guard 内每次重新执行显式配置的 `workflow_settings.py --status`；缺失、不可读、非法、超时或关闭都按 OFF，不使用启动时缓存的允许值。现有 `brain_gateway` 后端仍会在派发/整改效果前再次校验。
+- 开关关闭不取消已有任务、不改绑身份；`brain_status`/`brain_delivery`/`brain_review` 等读取与验收能力保留，仅拒绝新的派发/整改。插件在 pre-step 每轮开始时刷新规则可见性，guard 在每次变更前独立校验。
+- 规则通过 Agent scope 的 `systemPrompt.section` 注册，并按当前 assembly 的 `context.agent` 过滤；子 Agent 看到空规则。规则明确：主脑判断风险与验收、执行端调查实现测试修正、候选/自报非独立证据、`completed` 不等于 `accepted`、最多一次整改、重复/未知保持原 request/task、选择 `model_id` 遵循已保存 Agent、关闭不取消已有任务。
+- 当前未接通自动唤醒/后台续接，规则明确不承诺“完成会自动回来”，也不要求周期性轮询主脑模型；没有伪造无额度消耗等待。
+- `MODEL_DESK_*EXECUTOR*` 环境标记存在时，插件不安装规则/工具；运行期出现该标记时 guard 和 pre-step 也全部拒绝主脑能力。
+- 同时识别现有执行端实际设置的 `MODEL_DESK_RECORD_PROOF`、`MODEL_DESK_PRESET_PROOF`、`MODEL_DESK_SUBAGENT_LEDGER`；不能只检查名字带 EXECUTOR 的假设标记。
+- 直接挂载 MCP 前调用安装版的 `Config` 补齐并校验参数；规则注册失败拒绝新派发。卸载等待 Cordis `inertia`，挂载中途卸载也回收迟到的连接；无法确认关闭时保留失效守卫并禁止重复加载。
+
+## 安装配置（用户显式操作，不由本仓库执行）
+
+1. 先显式启动已运行的模型工作台；插件不会自动启动它。
+2. 把 `integrations/dsh-brain` 作为可选 bundle 安装到 **DSH desktop（主脑）profile**，不要安装到 DSH/Pi 执行器 profile。安装机制以你的 DSH 版本为准；本仓库未修改真实 profile。
+3. 生成显式本机配置（路径占位，必须替换成自己的绝对路径）：
+
+```powershell
+<python> .local-worker\dsh_brain_plugin.py `
+  --python "<venv>\Scripts\python.exe" `
+  --brain-mcp-server "<安装目录>\.local-worker\brain_mcp_server.py" `
+  --workflow-settings "<安装目录>\.local-worker\workflow_settings.py" `
+  --output "<配置目录>\dsh-brain.json"
+```
+
+4. 设置 `MODEL_DESK_DSH_BRAIN_CONFIG` 指向该 JSON 后重启 DSH；或在 desktop profile 的 patch 中按 `model-desk-dsh-brain` id 覆盖 `config.configFile`。两种方式都没有时插件 fail closed（无规则、无工具）。
+5. `--python`、`--brain-mcp-server` 与 `--workflow-settings` 应来自同一个工作台安装；插件 guard 与服务端 `brain_gateway` 必须看到同一套总开关。
+6. 生成器拒绝覆盖已有文件，也不会创建父目录；输出不能位于 `.model-desk`。
+
+## 离线验证命令与结果
+
+```powershell
+node --test .local-worker\tests\test_dsh_brain_plugin.cjs
+<python> .local-worker\tests\test_dsh_brain_plugin.py
+```
+
+执行器在模型接口连接重置后中断，原任务保留 failed；主脑接手检查并修正，未自动重派或伪记为执行模型完成。独立结果如下：
+
+- Node 内置测试：18 项通过。除原有边界外，主脑先复现真实执行器标记漏判、规则失败仍能派发、迟到挂载泄漏、未等待 Cordis 清理的四项问题，再修正；补验关闭失败保留守卫和 Windows 当前盘根路径拒绝。
+- Python 配置生成器：12 项中 11 项通过，目录软链接检查因本机无创建权限跳过 1 项；实际及链接目标均校验 `.model-desk` 路径。不能将该跳过项写为已实测通过。
+- 通用主脑核心 56 项、现有 Codex MCP 37 项、可移植安装 19 项全部通过。本轮未改现有核心，合计定向检查 142 项，141 通过、1 跳过；不是全项目回归。
+- 上述回归只用 mock、临时项目及临时状态脚本，不启动真实 DSH/工作台、不调用模型。
+- 独立真实接口探针：安装版 DSH + 临时 ACP overlay 加载实际插件和真实 MCP 服务。两个临时项目/原生会话各有九工具，`brain_describe` 的项目/会话匹配，owner 和责任绑定不同，规则装配生效；借原生作用域链模拟继承者调用验收被拒绝。临时开关关闭拒绝派发，读取/验收仍可用。仅调用 `initialize`、两次 `session/new`、两次 `session/close` 和每会话一次本地 `brain_describe`；没有 `session/prompt`、`brain_connect`、派发或验收效果调用，也未修改真实宿主配置。作用域继承探针不是实际子 Agent 模型轮次。
+
+本轮未重复全项目 `unittest discover`：只新增可选适配器和生成器，未修改既有 Python 核心；按改动运行上述独立定向检查。通用核心上轮全量回归的两项既有 DSH 环境缺件仍不能称为全绿。
+
+## 仍未验证 / 明确边界
+
+- 未把该 bundle 安装到真实 DSH desktop profile，未验证 GUI 插件管理、真实加载/卸载、profile patch 合并和 `!!js` 环境读取在安装版中的行为。
+- 临时 ACP overlay 已验证实际 `agent/created`、`session.header.cwd/id`、`ctx.agents.roots()`、MCP 解析、`tools.guard` 和 `systemPrompt.section`。尚未验证真实桌面聊天中的 pre-step 顺序、动态开关后的下一轮模型行为和 GUI 状态；ACP 接口探针不替代桌面验收。
+- 未验证真实模型轮次中规则是否实际影响行为，也未验证关闭开关后规则在真实 GUI 中的可见状态。
+- 未实现自动唤醒、后台续接、桌面通知、完成投递一次或等待恢复；插件未承诺这些能力。
+- 当前 `0.2.1-rc.2` 的 MCP 解析与导出经探针验证，其他版本和正式 link/bundle 安装路径未验证；插件会从 DSH 上下文 baseUrl、插件包位置和运行目录动态尝试 require/import 并 fail closed。若解析不到可显式配置 `--mcp-client-path`，不保证任意版本兼容。
+- bundle patch 使用 DSH profile patch 文档允许的 `!!js` 读取 `MODEL_DESK_DSH_BRAIN_CONFIG`；若某个安装版禁止 bundle 层 JS 表达式，需要在 profile patch 中按插件 id 显式覆盖 `config.configFile`，插件代码本身不变。
+- 开关 guard 在每次派发/整改前同步执行一次 `workflow_settings.py --status`，可能给该工具调用增加一个本机 Python 启动延迟；超时/失败按关闭处理，不缓存允许状态。
+- 插件只应在 desktop 主脑 profile 使用；代码中的顶层判断不能替代用户正确的 profile 安装范围。未知/缺失宿主 API 时只保持无规则/无工具，不会全局屏蔽 DSH 正常工具。
+- 首次绑定仅在本插件模块生命周期内固定；DSH 进程重启或模块重新加载后的原生会话迁移属于宿主行为，插件不写持久归属记录来阻止。
+- 本机控制器授权仍是应用层信任边界，不声称 OS 隔离或抵抗恶意同用户进程。
+- 未改 `brain_context.py`、`brain_gateway.py`、`brain_requests.py`、`brain_transport.py`、`brain_mcp_server.py`、现有 Codex 面板、每模型 Agent 默认值、付费许可或工作台预算/次数。
+
+## 交付前必须验证（仍待真实宿主）
 
 - 两个项目/聊天不会互读、错派或串用请求回执；身份不清时不能变更任务。
 - 原生主脑聊天具备工具；执行器与子 Agent 不具备同一主脑权限。
@@ -51,4 +124,4 @@
 - [扩展插件实操手册](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/extension-cookbook.zh.md)：原生事件、工具注册、提示词扩展与 followup。
 - [ACP 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/acp/acp/README.zh.md)：自动化入口，与原生 GUI 接入分开验收。
 
-官方主分支文档用于选择路线，安装版本的能力以本机验证为准。本文的入口决定已确定；插件实现、原生桌面安装和主脑质量闭环仍待完成。
+官方主分支文档用于选择路线，安装版本的能力以本机验证为准。本阶段基础代码与接口边界已独立检查；下一步是原生桌面安装/入口及实际需求的协作与质量闭环，再验证后台唤醒。
