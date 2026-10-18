@@ -134,6 +134,26 @@ class SubscriptionTests(unittest.TestCase):
         starter.assert_called_once()
         self.assertEqual(len({row['id'] for row in records}),1)
 
+    def test_extended_length_resolve_prefix_keeps_same_project(self):
+        """A Windows ``\\\\?\\`` resolve prefix is a representation, not a move."""
+        if os.name != 'nt':
+            self.skipTest('extended-length prefix is Windows-specific')
+        self.task()
+        original = Path.resolve
+
+        def resolve_with_prefix(path, *args, **kwargs):
+            result = original(path, *args, **kwargs)
+            if 'notifications' in str(path):
+                return Path('\\\\?\\' + str(result))
+            return result
+
+        with patch.object(wait.Path, 'resolve', resolve_with_prefix):
+            root = wait.safe_child(self.project, 'notifications', 'wait-fixture')
+        self.assertTrue(root.is_relative_to(Path(self.project)))
+        self.assertEqual(wait._strip_windows_prefix('\\\\?\\UNC\\server\\share\\run'),
+                         '\\\\server\\share\\run')
+        self.assertEqual(wait._strip_windows_prefix('\\\\?\\C:\\project\\run'), 'C:\\project\\run')
+
     def test_different_chat_cannot_load_or_acknowledge(self):
         self.task(); data=self.arm()
         with patch.dict(os.environ,{'CODEX_THREAD_ID':str(uuid.uuid4())}), self.assertRaises(ValueError):

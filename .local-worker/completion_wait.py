@@ -50,6 +50,30 @@ def same_path(a, b):
         return False
 
 
+def _strip_windows_prefix(text):
+    """Undo the extended-length/device prefix of a Windows resolved path."""
+    if text.startswith('\\\\?\\UNC\\'):
+        return '\\\\' + text[8:]
+    for prefix in ('\\\\?\\', '\\\\.\\'):
+        if text.startswith(prefix):
+            return text[len(prefix):]
+    return text
+
+
+def _containment(path):
+    """Canonical path for a containment comparison.
+
+    ``Path.resolve()`` can return an extended-length ``\\\\?\\`` path on Windows
+    while the project came from ``os.path.realpath`` without that prefix, which
+    made the same project look like a different one after a directory appeared.
+    Strip that representation prefix and compare case-insensitively on Windows.
+    """
+    text = str(Path(path).resolve())
+    if os.name == 'nt':
+        text = _strip_windows_prefix(text)
+    return Path(os.path.normcase(text))
+
+
 def safe_child(project, *parts):
     project = Path(storage.normalize(project))
     current = project
@@ -57,7 +81,7 @@ def safe_child(project, *parts):
         current /= part
         if storage._is_link(current):
             raise ValueError('通知记录路径不允许链接或联接')
-    if not current.resolve().is_relative_to(project):
+    if not _containment(current).is_relative_to(_containment(project)):
         raise ValueError('通知记录越出所属项目')
     return current
 
