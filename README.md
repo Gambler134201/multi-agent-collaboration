@@ -6,6 +6,8 @@
 
 项目源码采用 [MIT 许可证](LICENSE)，维护者为 [Gambler134201](https://github.com/Gambler134201)。
 
+开发流程见 [Git 工作流](docs/GIT_WORKFLOW.md)，当前开发与公开源码的整合事项见 [源码整合清单](docs/SOURCE_RECONCILIATION.md)。功能路线见 [后续待更新功能](后续待更新功能/README.md)。
+
 ## 你会得到什么
 
 - 本地面板（`http://127.0.0.1:8765`）：模型与密钥、执行 Agent 选择、任务派发与状态、用量与账单核对、项目与阶段记录。
