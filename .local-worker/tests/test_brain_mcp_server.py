@@ -7,6 +7,7 @@ provider, desktop message, account or native host is touched.
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import queue
 import socket
@@ -63,6 +64,7 @@ class StdioClient:
         self.stderr = []
         self.timeout = timeout
         self.next_id = 1
+        self.tool_responses = []
         threading.Thread(target=self._read_stdout, daemon=True).start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
 
@@ -127,7 +129,13 @@ class StdioClient:
         response = self.request('tools/call', {'name': name, 'arguments': arguments or {}})
         if 'error' in response:
             raise AssertionError('JSON-RPC error: %r' % response['error'])
-        return response['result']
+        result = response['result']
+        # SDK input-schema validation can reject a call before our handler and
+        # returns its own plain-text error. Our results always have public data.
+        if 'structuredContent' in result or not result.get('isError'):
+            visible_payload(result)
+        self.tool_responses.append({'name': name, 'result': result})
+        return result
 
     def close(self):
         try:
@@ -156,6 +164,63 @@ def payload(result):
 
 def text(result):
     return ' '.join(part.get('text', '') for part in result.get('content') or [])
+
+
+def visible_payload(result):
+    """Require complete JSON in the text path, not just structuredContent."""
+    blocks = result.get('content') or []
+    if len(blocks) != 2 or blocks[-1].get('type') != 'text':
+        raise AssertionError('Expected summary plus public JSON text block')
+    data = json.loads(blocks[-1]['text'])
+    if data != payload(result):
+        raise AssertionError('Model-visible text differs from structured content')
+    return data
+
+
+def assert_native_projection(case, responses):
+    """Opt-in installed DSH client renderer check; no profile or model calls."""
+    executable = os.environ.get('MODEL_DESK_TEST_DSH_EXE')
+    if not executable:
+        return
+    archive_entry = (Path(executable).resolve().parent / 'resources' / 'app.asar' /
+                     'dsh/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js')
+    script = Path(__file__).with_name('test_brain_text_projection.cjs')
+    with tempfile.TemporaryDirectory() as folder:
+        fixture = Path(folder) / 'responses.json'
+        fixture.write_text(json.dumps(responses, ensure_ascii=False), encoding='utf-8')
+        result = subprocess.run([executable, '--expose-internals', str(script),
+                                 archive_entry.as_uri(), str(fixture)],
+            env=dict(os.environ, ELECTRON_RUN_AS_NODE='1'),
+            capture_output=True, timeout=30,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        case.assertEqual(result.returncode, 0,
+                         'Installed DSH projection check failed: ' + result.stderr.decode('utf-8', 'replace'))
+        proof = json.loads(result.stdout)
+        case.assertEqual(proof['verified'], len(responses))
+        case.assertFalse(proof['model_called'])
+
+
+class ResultTextTests(unittest.TestCase):
+    def test_complete_compact_json_and_structured_content_are_equal(self):
+        data = {'context': {'project': 'E:/测试/项目'}, 'task': {'accepted': False},
+                'answer': '第一行\n第二行\t"JSON"', 'empty': None}
+        result = brain._ok(data, '摘要').model_dump(mode='json', exclude_none=True)
+        self.assertEqual(visible_payload(result), data)
+        self.assertEqual(result['content'][1]['text'],
+                         json.dumps(data, ensure_ascii=False, separators=(',', ':')))
+
+    def test_unknown_outcome_reference_survives_text_only_clients(self):
+        result = brain._error('结果未知', outcome='unknown',
+                              request_reference={'request_id': 'fixture-id'}).model_dump(mode='json')
+        self.assertTrue(result['isError'])
+        self.assertEqual(visible_payload(result)['outcome'], 'unknown')
+        self.assertIn('fixture-id', text(result))
+
+    def test_delivery_answer_is_not_silently_cut_by_the_text_mirror(self):
+        data = {'answer': '证据' * 10000, 'answer_truncated': True,
+                'accepted': False, 'delivery_state': 'executor_completed_unaccepted'}
+        result = brain._ok(data, '交付').model_dump(mode='json')
+        self.assertEqual(visible_payload(result), data)
 
 
 class StdioProtocolTests(unittest.TestCase):
@@ -302,6 +367,8 @@ class EndToEndLoopTests(unittest.TestCase):
                                'exit_code': 0}]}]
 
     def test_full_mock_loop_connect_preview_dispatch_deliver_return_rework_accept(self):
+        described = self.client.call('brain_describe')
+        self.assertEqual(visible_payload(described)['context']['role'], 'brain')
         connected = self.client.call('brain_connect')
         self.assertFalse(connected['isError'])
         self.assertTrue(payload(connected)['connected'])
@@ -387,6 +454,13 @@ class EndToEndLoopTests(unittest.TestCase):
                                   rework, accepted, final)], ensure_ascii=False)
         self.assertNotIn('X-Brain-Capability', everything)
         self.assertNotIn('panel_token', everything.lower())
+        # Check BOTH representations against the private in-memory capability.
+        # The actual DSH renderer is exercised when explicitly configured.
+        results = json.dumps(self.client.tool_responses, ensure_ascii=False)
+        for capability in brain_gateway._CAPABILITIES:
+            self.assertNotIn(capability, results)
+        self.assertEqual({entry['name'] for entry in self.client.tool_responses}, set(brain.TOOLS))
+        assert_native_projection(self, self.client.tool_responses)
 
 
 if __name__ == '__main__':

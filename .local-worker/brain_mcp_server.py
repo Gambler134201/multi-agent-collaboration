@@ -273,12 +273,23 @@ def _redact(message):
 def _error(message, **extra):
     text = _redact(message)
     data = {'error': text, **extra}
-    return types.CallToolResult(content=[types.TextContent(type='text', text=text)],
+    return types.CallToolResult(content=_result_content(text, data),
                                 structuredContent=data, isError=True)
 
 
+def _result_content(summary, data):
+    # Some hosts preserve structuredContent internally but project only content
+    # into the model prompt (including installed DSH 0.2.1-rc.2). Mirror the
+    # already-scoped public broker result here, never a transport/capability or
+    # raw /api/state object. Compact JSON avoids formatting overhead and retains
+    # all fields needed for routing, delivery, acceptance and unknown outcomes.
+    return [types.TextContent(type='text', text=summary),
+            types.TextContent(type='text', text=json.dumps(
+                data, ensure_ascii=False, separators=(',', ':'), allow_nan=False))]
+
+
 def _ok(result, text):
-    return types.CallToolResult(content=[types.TextContent(type='text', text=text)],
+    return types.CallToolResult(content=_result_content(text, result),
                                 structuredContent=result)
 
 
