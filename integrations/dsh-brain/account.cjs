@@ -63,8 +63,16 @@ function safeText(error) {
 
 function resolveDshVersion(ctx) {
   const candidates = [];
-  if (ctx && typeof ctx.version === 'string') candidates.push(ctx.version);
-  if (ctx && ctx.app && typeof ctx.app.version === 'string') candidates.push(ctx.app.version);
+  // A Cordis plugin context is a strict service proxy, not a plain object.
+  // Accessing an undeclared service throws even behind optional chaining.
+  // Version hints are optional metadata; their absence must never prevent the
+  // account adapter from starting. Never log raw context exceptions.
+  for (const read of [() => ctx && ctx.version, () => ctx && ctx.app && ctx.app.version]) {
+    try {
+      const value = read();
+      if (typeof value === 'string') candidates.push(value);
+    } catch { /* Not a provided property in the installed Cordis context. */ }
+  }
   try {
     const required = createRequire(path.join(__dirname, 'package.json'))('@deepseek-ai/dsh/package.json');
     if (required && typeof required.version === 'string') candidates.push(required.version);

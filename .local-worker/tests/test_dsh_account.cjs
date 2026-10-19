@@ -164,6 +164,29 @@ test('public metadata and wallet projection keep only safe fields', () => {
   assert.throws(() => ACCOUNT.normalizeWallets({ status: 'failed', value: [] }), /余额/);
 });
 
+test('strict Cordis-style metadata properties cannot prevent account publication', async () => {
+  const panel = makePanel();
+  const { controller, calls } = makeController();
+  const reads = [];
+  const ctx = new Proxy({ get: () => controller }, {
+    get(target, key, receiver) {
+      if (Reflect.has(target, key)) return Reflect.get(target, key, receiver);
+      reads.push(key);
+      throw { get message() { assert.fail('raw context error must not be read'); } };
+    },
+  });
+  const adapter = ACCOUNT.createAccountAdapter({ ctx,
+    panelUrl: 'http://127.0.0.1:8765', fetchImpl: panel.fetchImpl, refreshIntervalMs: 0 });
+  assert.equal(await adapter.start(), true);
+  await adapter.whenIdle();
+  assert.deepEqual(reads, ['version', 'app']);
+  assert.equal(calls.balance, 1);
+  assert.equal(panel.posts.at(-1).body.status, 'ready');
+  assert.equal(adapter._state().resolutionPath, 'plugin');
+  assert.match(calls.metadata[0].version, /^\d+\.\d+\.\d+/);
+  await adapter.dispose();
+});
+
 test('ready balance is pushed through the existing panel session token only', async (t) => {
   const panel = makePanel();
   const { controller, calls } = makeController({
