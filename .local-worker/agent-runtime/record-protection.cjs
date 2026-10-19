@@ -79,18 +79,8 @@ function apply(ctx, config) {
   if (!expected) throw new Error('Model Desk 记录保护缺少内容指纹，已拒绝装载');
   if (expected !== actual) throw new Error('Model Desk 记录保护内容指纹不一致，已拒绝装载');
 
-  const guard = (exec) => {
-    const name = exec && exec.name;
-    try {
-      return policy.decide(name, exec && exec.arguments, { root });
-    } catch (error) {
-      // An undecidable call to a governed tool is denied, never allowed.  Other
-      // tools stay untouched so an internal fault cannot stop a whole run.
-      if (!policy.isGuardedTool(name)) return undefined;
-      const detail = String((error && error.message) || error);
-      return '工作台记录写入保护内部错误（' + detail + '），已拒绝本次工具调用';
-    }
-  };
+  const decide = policy.createGuard({ root });
+  const guard = (exec) => decide(exec && exec.name, exec && exec.arguments);
 
   const dispose = ctx.tools.guard(guard);
   if (typeof dispose !== 'function') {

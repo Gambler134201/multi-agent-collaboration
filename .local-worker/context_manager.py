@@ -79,7 +79,10 @@ READONLY_NOTE = '\n这是只读咨询任务，不得修改文件或执行写操�
 # turn discovering the boundary, and it never claims OS-level isolation.
 RECORD_PROTECTION_NOTE = ('\n工作台记录目录 .model-desk 由工作台管理：不要写入、修改、删除或移动其中的'
                           '任务记录、日志、通知、验收与交接文件。DSH 工具层会在执行前拒绝'
-                          '可识别的直接写入和终端操作；被拒绝后不要换用其他工具、脚本或命令重试。')
+                          '可识别的直接写入和终端操作。触发记录保护后，本轮写入与终端工具暂停；'
+                          '保留拒绝原文并报告主脑，不要换用其他工具、脚本或等价命令重试。'
+                          '非必要缓存清理可以省略；怀疑误拦截也应报告，由主脑检查策略。'
+                          '直接读取文件与最终报告仍可继续。这是工具参数保护，不是操作系统沙箱。')
 
 # First line of every replaced tool message; also the idempotency marker so a
 # second pass over an already-offloaded message is a no-op.

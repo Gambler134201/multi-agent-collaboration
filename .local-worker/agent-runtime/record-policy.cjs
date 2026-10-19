@@ -57,7 +57,7 @@ const DESTRUCTIVE_RE = new RegExp(
   '(\\b(remove-item|remove|rmdir|rd|rm|del|erase|clear-content|set-content|add-content'
   + '|out-file|new-item|mkdir|md|move-item|move|mv|ren|rename-item|rename|copy-item'
   + '|copy|cp|xcopy|robocopy|chmod|chown|attrib|icacls|takeown|rmtree|unlink|truncate'
-  + '|shutil|dd|format|diskpart|fsutil)\\b'
+  + '|shutil|dd|format|diskpart|fsutil)(?![\\w-])'
   + '|\\bgit\\b[^\\r\\n]*\\b(rm|clean|checkout|reset|restore|stash)\\b'
   + '|\\bfind\\b[^\\r\\n]*-(delete|exec|execdir)\\b'
   + '|\\b(sed|perl)\\b[^|]*-i\\b)',
@@ -198,7 +198,7 @@ function denyInside(display) {
 function denyAncestor(display) {
   return '已拒绝：' + display + ' 是工作台记录目录 .model-desk 的上级目录，'
     + DENY_MARKER + '，删除或移动它会连同工作台记录一起破坏。'
-    + '请不要对这一层目录做递归删除、移动或重命名。';
+    + '请停止这一操作并报告主脑；不要换用其他工具、脚本或等价命令重试。';
 }
 
 /** Decide one resolved target path. `destructive` enables the ancestor rule. */
@@ -276,9 +276,50 @@ function isProvablyReadOnly(command) {
   return true;
 }
 
+/** Narrow compound-command handling, not a shell interpreter. Unknown syntax
+ * falls back to the original conservative whole-command check. In particular,
+ * never split location changes, scripts, substitutions or mutating pipelines:
+ * their targets cannot safely be resolved independently against the same cwd.
+ */
+function simpleCommands(command) {
+  const text = String(command);
+  if (/[`$%^<>(){}\r\n]/.test(text)) return null;
+  let quote = '', start = 0;
+  const parts = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'") {
+      if (text[i - 1] === '\\') return null; // unfamiliar escaping
+      if (!quote) quote = ch;
+      else if (quote === ch) quote = '';
+    }
+    if (quote) continue;
+    if (ch === ';' || text.slice(i, i + 2) === '&&' || text.slice(i, i + 2) === '||') {
+      parts.push(text.slice(start, i).trim());
+      if (ch !== ';') i += 1;
+      start = i + 1;
+    } else if (ch === '&') return null;
+  }
+  if (quote) return null;
+  parts.push(text.slice(start).trim());
+  if (parts.length < 2 || parts.some(part => !part)) return null;
+  const literalMutation = /^(?:remove-item|rm|rmdir|rd|del|erase|clear-content|set-content|add-content|out-file|new-item|mkdir|md|move-item|mv|ren|rename-item|copy-item|cp)(?:\.exe)?\s/i;
+  if (!parts.every(part => isProvablyReadOnly(part)
+      || (literalMutation.test(part) && !/[|&]/.test(part)))) return null;
+  return parts;
+}
+
 /** Deleting/moving an ancestor of the protected directory.  Fail closed. */
 function destructiveAncestor(command, base, tokens, config) {
   const text = String(command);
+  const parts = simpleCommands(text);
+  if (parts) {
+    for (const part of parts) {
+      const reason = destructiveAncestor(part, base, extractTokens(part), config);
+      if (reason) return reason;
+    }
+    return undefined;
+  }
   if (!DESTRUCTIVE_RE.test(text)) return undefined;
   const roots = protectedRoots(config);
   if (!roots.length) return undefined;
@@ -380,6 +421,32 @@ function decide(toolName, args, config) {
   return undefined;
 }
 
+/** One executing worker's refusal boundary. After a record-policy refusal,
+ * pause writes and terminal calls across tools, so a model cannot retry the
+ * same operation through a different tool. Direct reads and the final report
+ * remain possible. A new controller-started execution gets a fresh guard.
+ * This is deliberately not a persistent session lock or OS sandbox.
+ */
+function createGuard(config) {
+  let stopped = false;
+  return (toolName, args) => {
+    const name = String(toolName || '');
+    if (name === PROBE_TOOL) return PROBE_REASON;
+    if (!isGuardedTool(name)) return undefined;
+    if (name === 'str_replace_editor' && String(args && args.command || '').toLowerCase() === 'view') return undefined;
+    if (stopped) return '已暂停本轮执行的写入和终端工具：此前触发工作台记录保护，'
+      + DENY_MARKER + '。请保留拒绝原因并向主脑报告，不要换工具或改写命令重试；仍可直接读取文件。';
+    let reason;
+    try { reason = decide(name, args, config); }
+    catch (_) { reason = '工作台记录保护判断失败，已拒绝调用；请报告主脑。'; }
+    if (reason) {
+      stopped = true;
+      return reason + ' 本轮写入和终端工具已暂停；请直接报告主脑，非必要缓存清理可以省略。';
+    }
+    return undefined;
+  };
+}
+
 module.exports = {
   PROTECTED_NAME,
   DENY_MARKER,
@@ -395,5 +462,6 @@ module.exports = {
   hasProtectedComponent,
   isProvablyReadOnly,
   isGuardedTool,
+  createGuard,
   decide,
 };

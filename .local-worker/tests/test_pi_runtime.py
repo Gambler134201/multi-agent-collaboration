@@ -111,18 +111,23 @@ class PiRuntimeTests(unittest.TestCase):
         records.mkdir()
         sentinel = records / 'sentinel.txt'
         sentinel.write_text('original', encoding='utf-8')
-        self.steps = [('write', {'path': '.model-desk/sentinel.txt', 'content': 'bad'}),
-                      ('write', {'path': 'source.txt', 'content': 'normal source'}),
+        self.steps = [('write', {'path': 'source.txt', 'content': 'normal source'}),
+                      ('write', {'path': '.model-desk/sentinel.txt', 'content': 'bad'}),
                       ('edit', {'path': '.model-desk/sentinel.txt', 'oldText': 'original', 'newText': 'bad'}),
-                      ('powershell', {'command': "Set-Content .model-desk/sentinel.txt bad"})]
+                      ('powershell', {'command': "Set-Content source.txt bypass"}),
+                      ('bash', {'command': 'echo bypass > bypass.txt'}),
+                      ('write', {'path': 'bypass.txt', 'content': 'bypass'}),
+                      ('read', {'path': 'source.txt'})]
         run, record = self.run_pi()
         self.assertEqual(sentinel.read_text(encoding='utf-8'), 'original')
         self.assertEqual((self.project / 'source.txt').read_text(encoding='utf-8'), 'normal source')
-        for key in ('tool-0', 'tool-2', 'tool-3'):
+        for key in ('tool-1', 'tool-2', 'tool-3', 'tool-4', 'tool-5'):
             self.assertIn('该目录由工作台管理', self.tool_results()[key])
+        self.assertFalse((self.project / 'bypass.txt').exists())
+        self.assertIn('normal source', self.tool_results()['tool-6'])
         self.assertIn('source.txt', record['changed_files'])
-        self.assertEqual(record['model_calls'], 5)
-        self.assertEqual(record['usage']['total_tokens'], 75)
+        self.assertEqual(record['model_calls'], 8)
+        self.assertEqual(record['usage']['total_tokens'], 120)
         self.assertIn('中文\u2028LF\u2029ONLY', record['answer'])
         self.assertNotIn('mock-pi-test-key', (run / 'pi.log').read_text(encoding='utf-8'))
         self.assertEqual(record['subagent_decision']['decision'], 'deny')
@@ -131,6 +136,19 @@ class PiRuntimeTests(unittest.TestCase):
         texts = [content if isinstance(content, str) else ''.join(
             part.get('text', '') for part in content if isinstance(part, dict)) for content in contents]
         self.assertTrue(any(context_manager.SELF_TEST_NOTE in text for text in texts))
+        self.assertTrue(any('本轮写入与终端工具暂停' in text for text in texts))
+
+    def test_cache_cleanup_and_formatting_without_record_refusal(self):
+        cache = self.project / 'cache'
+        cache.mkdir()
+        (cache / 'discard.txt').write_text('cache', encoding='utf-8')
+        self.steps = [('powershell', {'command': 'Get-ChildItem . | Format-List'}),
+                      ('powershell', {'command': 'Remove-Item -LiteralPath cache -Recurse -Force; Get-ChildItem . | Select-Object Name'}),
+                      ('write', {'path': 'source.txt', 'content': 'still writable'})]
+        self.run_pi()
+        self.assertFalse(cache.exists())
+        self.assertEqual((self.project / 'source.txt').read_text(encoding='utf-8'), 'still writable')
+        self.assertFalse(any('已拒绝' in result for result in self.tool_results().values()))
 
     def test_continuation_keeps_session_and_context(self):
         _, parent = self.run_pi(kind='chat', name='pi-parent')

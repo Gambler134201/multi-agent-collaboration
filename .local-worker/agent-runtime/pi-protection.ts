@@ -9,6 +9,7 @@ export default function protection(pi: any) {
   if (!file) throw new Error('缺少工作台 Pi 任务配置');
   const job = JSON.parse(fs.readFileSync(file, 'utf8'));
   const policy = require(job.policy);
+  const decide = policy.createGuard({ root: job.cwd });
   const reads = new Set(['read', 'grep', 'find', 'ls']);
   const supported = new Set([...reads, 'write', 'edit', 'bash', 'powershell']);
   pi.on('tool_call', (event: any) => {
@@ -17,7 +18,7 @@ export default function protection(pi: any) {
     if (job.kind !== 'edit' && !reads.has(name)) return { block: true, reason: '这是只读任务，不能运行写入或终端工具' };
     const args = { ...event.input };
     if (args.path !== undefined) args.file_path = args.path;
-    const reason = policy.decide(name === 'powershell' ? 'pwsh' : name, args, { root: job.cwd });
+    const reason = decide(name === 'powershell' ? 'pwsh' : name, args);
     if (reason) return { block: true, reason };
   });
   pi.on('session_start', (_event: any, ctx: any) => {
