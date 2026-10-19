@@ -4,7 +4,7 @@
  * Optional DSH native main-brain adapter for the local Model Desk workbench.
  *
  * This file is a prebuilt CommonJS Cordis plugin. It does not start the
- * workbench, call a model, read account data, or write DSH/workbench
+ * workbench, call a model, read authentication data, or write DSH/workbench
  * configuration. On every top-level Agent creation it binds that exact native
  * session (session id + session header id + realpath of the native cwd) to one
  * agent-scoped stdio MCP client for the already-running `brain_mcp_server.py`.
@@ -1060,6 +1060,24 @@ function createInstance(ctx, config) {
         yield () => disposeInstance(true);
       });
 
+      // This reads only the official host account controller's public balance
+      // projection and pushes it to the already-running local workbench.  It
+      // starts BEFORE any MCP initialization await. A slow Agent binding must
+      // not prevent account discovery/publication; neither path waits for the other.
+      try {
+        state.account = hostAccount.createAccountAdapter({
+          ctx,
+          panelUrl: config.panelUrl,
+          log: state.log,
+        });
+        state.account.start().catch(() => {
+          state.log('warn', 'DSH 账户余额适配器未启动（原始诊断已省略）。');
+        });
+      } catch {
+        state.account = null;
+        state.log('warn', 'DSH 账户余额适配器不可用（原始诊断已省略）。');
+      }
+
       let roots;
       try {
         roots = ctx.agents.roots();
@@ -1067,26 +1085,8 @@ function createInstance(ctx, config) {
         throw new Error(`ctx.agents.roots() 不可用：${safeMessage(error)}`);
       }
       if (!Array.isArray(roots)) throw new Error('ctx.agents.roots() 未返回数组');
-      // Existing chats are bound too, so enabling the plugin in an open desktop
-      // session does not require a new Agent. Concurrent created events dedupe.
+      // Existing chats are bound too; concurrent created events still dedupe.
       for (const agent of roots) await onCreated(state, { agent, source: 'plugin-load' });
-
-      // This reads only the official host account controller's public balance
-      // projection and pushes it to the already-running local workbench.  It
-      // never blocks startup, starts a service or wakes a model.
-      try {
-        state.account = hostAccount.createAccountAdapter({
-          ctx,
-          panelUrl: config.panelUrl,
-          log: state.log,
-        });
-        state.account.start().catch((error) => {
-          state.log('warn', `DSH 账户余额适配器未启动：${safeMessage(error)}`);
-        });
-      } catch (error) {
-        state.account = null;
-        state.log('warn', `DSH 账户余额适配器不可用：${safeMessage(error)}`);
-      }
     },
     dispose() {
       return disposeInstance(false);

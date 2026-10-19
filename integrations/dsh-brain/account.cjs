@@ -51,6 +51,7 @@ const SAFE_ERRORS = new Set([
   'DSH 官方余额接口返回了未知状态；未显示旧余额。',
   'DSH 登录凭据已失效，请重新登录；未显示旧余额。',
   '适配器已停用；未显示旧余额。',
+  'DSH 官方账户服务尚未就绪，正在等待服务注册；未显示旧余额。',
 ]);
 function safeText(error) {
   // SDK/network exceptions can embed headers, URLs or credentials. Never
@@ -72,6 +73,43 @@ function resolveDshVersion(ctx) {
   }
   return candidates.find((value) => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value))
     || FALLBACK_DSH_VERSION;
+}
+
+function isAccountController(value) {
+  try {
+    return !!value && ['getState', 'getBalance', 'watch']
+      .every(name => typeof value[name] === 'function');
+  } catch {
+    return false;
+  }
+}
+
+function resolveAccountController(ctx) {
+  // Only public service registries on the plugin, root and current top-level
+  // Agents. Never inspect a credential provider or recursively scan contexts.
+  const seen = new Set();
+  function from(scope, resolutionPath) {
+    if (!scope || seen.has(scope)) return null;
+    seen.add(scope);
+    try {
+      const controller = typeof scope.get === 'function' ? scope.get('accountController') : null;
+      return isAccountController(controller) ? { controller, resolutionPath } : null;
+    } catch { return null; }
+  }
+  let resolved = from(ctx, 'plugin');
+  if (resolved) return resolved;
+  try { resolved = from(ctx && ctx.root, 'root'); } catch { /* unavailable scope */ }
+  if (resolved) return resolved;
+  try {
+    const roots = ctx && ctx.agents && ctx.agents.roots();
+    if (Array.isArray(roots)) {
+      for (const agent of roots) {
+        resolved = from(agent && agent.ctx, 'agent');
+        if (resolved) return resolved;
+      }
+    }
+  } catch { /* Host roots may not be ready yet. */ }
+  return null;
 }
 
 function normalizeLocale(value) {
@@ -277,6 +315,8 @@ function createAccountAdapter(options = {}) {
   const version = options.version || resolveDshVersion(ctx);
   const locale = options.locale;
   const suppliedController = options.controller;
+  const controllerResolver = typeof options.resolveController === 'function'
+    ? options.resolveController : () => resolveAccountController(ctx);
   let controller = null;
   let publisher = options.publisher || null;
   let started = false;
@@ -294,6 +334,10 @@ function createAccountAdapter(options = {}) {
   let credentialExpired = false;
   let lastSnapshotAt = 0;
   let warnedUnavailable = false;
+  let resolutionPath = null;
+  let startPromise = null;
+  let publicationConfirmed = false;
+  let stateReported = false;
 
   function currentDate() {
     const value = now();
@@ -311,10 +355,14 @@ function createAccountAdapter(options = {}) {
   }
 
   function resolveController() {
-    if (suppliedController) return suppliedController;
-    if (!ctx || typeof ctx.get !== 'function') return null;
     try {
-      return ctx.get('accountController') || null;
+      const found = suppliedController
+        ? { controller: suppliedController, resolutionPath: 'supplied' } : controllerResolver();
+      const candidate = found && found.controller;
+      if (!isAccountController(candidate)) return null;
+      resolutionPath = ['plugin', 'root', 'agent', 'supplied'].includes(found.resolutionPath)
+        ? found.resolutionPath : 'resolver';
+      return candidate;
     } catch {
       return null;
     }
@@ -326,7 +374,13 @@ function createAccountAdapter(options = {}) {
 
   function publish(snapshot) {
     if (!publisher) return Promise.resolve(false);
-    return publisher.post(snapshot).then(() => true).catch((error) => {
+    return publisher.post(snapshot).then(() => {
+      if (!publicationConfirmed) {
+        publicationConfirmed = true;
+        log('info', 'DSH 账户快照发布通道已确认。');
+      }
+      return true;
+    }).catch((error) => {
       const at = currentMs();
       if (at - lastPublishErrorAt > PUBLISH_ERROR_LOG_MS) {
         lastPublishErrorAt = at;
@@ -381,6 +435,12 @@ function createAccountAdapter(options = {}) {
         return false;
       }
       if (disposed || runGeneration !== generation) return false;
+      if (!stateReported) {
+        stateReported = true;
+        const label = state && ['credential-stored', 'signed-out'].includes(state.status)
+          ? state.status : 'unknown';
+        log('info', `DSH 账户公开状态：${label}。`);
+      }
       if (!state || state.status !== 'credential-stored') {
         await publish(snapshot('signed-out'));
         return true;
@@ -493,26 +553,8 @@ function createAccountAdapter(options = {}) {
     }
   }
 
-  async function start() {
+  async function startOnce() {
     if (started || disposed) return false;
-    controller = resolveController();
-    if (!controller || typeof controller.getState !== 'function'
-        || typeof controller.getBalance !== 'function' || typeof controller.watch !== 'function') {
-      if (!warnedUnavailable) {
-        warnedUnavailable = true;
-        log('warn', 'DSH 官方账户控制器不可用；工作台余额保持未知。');
-      }
-      // Host services can finish loading after the brain adapter. Recheck the
-      // public service registry without polling any model/account endpoint.
-      if (refreshIntervalMs > 0 && !disposed) {
-        debounceTimer = setTimeoutFn(() => {
-          debounceTimer = null;
-          start().catch(() => log('warn', 'DSH 账户适配器暂不可用。'));
-        }, MIN_REFRESH_MS);
-        if (debounceTimer && typeof debounceTimer.unref === 'function') debounceTimer.unref();
-      }
-      return false;
-    }
     if (!publisher) {
       if (!panelUrl || typeof fetchImpl !== 'function') {
         log('warn', '没有可用的本机工作台账户通道；工作台余额保持未知。');
@@ -525,6 +567,31 @@ function createAccountAdapter(options = {}) {
         return false;
       }
     }
+    if (debounceTimer) {
+      clearTimeoutFn(debounceTimer);
+      debounceTimer = null;
+    }
+    controller = resolveController();
+    if (!controller) {
+      if (!warnedUnavailable) {
+        warnedUnavailable = true;
+        log('warn', 'DSH 官方账户控制器未找到（plugin/root/agent）；等待服务注册。');
+      }
+      // Publish an honest non-financial status even before service discovery;
+      // otherwise an old diagnostic/amount can look like a live adapter result.
+      await publish(snapshot('unavailable', {
+        error: 'DSH 官方账户服务尚未就绪，正在等待服务注册；未显示旧余额。',
+      }));
+      if (refreshIntervalMs > 0 && !disposed) {
+        debounceTimer = setTimeoutFn(() => {
+          debounceTimer = null;
+          start().catch(() => log('warn', 'DSH 账户适配器暂不可用。'));
+        }, MIN_REFRESH_MS);
+        if (debounceTimer && typeof debounceTimer.unref === 'function') debounceTimer.unref();
+      }
+      return false;
+    }
+    log('info', `DSH 官方账户控制器已解析：${resolutionPath}。`);
     started = true;
     abort = new AbortController();
     watchTask = watchState();
@@ -539,6 +606,13 @@ function createAccountAdapter(options = {}) {
       if (intervalTimer && typeof intervalTimer.unref === 'function') intervalTimer.unref();
     }
     return true;
+  }
+
+  function start() {
+    if (!startPromise) {
+      startPromise = startOnce().finally(() => { startPromise = null; });
+    }
+    return startPromise;
   }
 
   async function dispose() {
@@ -592,6 +666,8 @@ function createAccountAdapter(options = {}) {
         generation,
         controllerAvailable: !!controller,
         publisherAvailable: !!publisher,
+        resolutionPath,
+        publicationConfirmed,
       };
     },
   };
@@ -605,6 +681,7 @@ module.exports = {
   makeSnapshot,
   normalizePanelOrigin,
   resolveDshVersion,
+  resolveAccountController,
   safeText,
   _test: Object.freeze({
     SNAPSHOT_SCHEMA,

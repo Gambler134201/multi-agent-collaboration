@@ -300,16 +300,18 @@ test('a rotated panel session token is retried once without exposing it', async 
   await adapter.dispose();
 });
 
-test('missing official account controller stays unavailable and does not push', async () => {
-  let fetched = 0;
+test('missing official account controller publishes unavailable without reading an account', async () => {
+  const panel = makePanel();
   const adapter = ACCOUNT.createAccountAdapter({
     ctx: { get: (name) => { assert.equal(name, 'accountController'); return null; } },
     panelUrl: 'http://127.0.0.1:8765',
-    fetchImpl: async () => { fetched += 1; return response(500, {}); },
+    fetchImpl: panel.fetchImpl,
     refreshIntervalMs: 0,
   });
   assert.equal(await adapter.start(), false);
-  assert.equal(fetched, 0);
+  assert.deepEqual(panel.posts.map(post => post.body.status), ['unavailable']);
+  assert.deepEqual(panel.posts[0].body.wallets, []);
+  assert.match(panel.posts[0].body.error, /等待服务注册/);
   await adapter.dispose();
 });
 
@@ -377,12 +379,99 @@ test('a late-loading official controller is picked up without account polling', 
       setInterval: () => 2, clearInterval() {} },
   });
   assert.equal(await adapter.start(), false);
-  assert.equal(panel.posts.length, 0);
+  assert.deepEqual(panel.posts.map(post => post.body.status), ['unavailable']);
   assert.equal(typeof retry, 'function');
   available = controller;
   retry();
   await waitFor(() => panel.posts.some(post => post.body.status === 'ready'), 'late controller');
   await adapter.dispose();
+});
+
+test('service resolution respects plugin, root then live top-level Agent registries', () => {
+  const plugin = makeController().controller;
+  const root = makeController().controller;
+  const agent = makeController().controller;
+  const ctx = { get: () => plugin, root: { get: () => root },
+    agents: { roots: () => [{ ctx: { get: () => agent } }] } };
+  assert.deepEqual(ACCOUNT.resolveAccountController(ctx), { controller: plugin, resolutionPath: 'plugin' });
+  ctx.get = () => ({ getBalance() {} }); // Incomplete service must fall through.
+  assert.deepEqual(ACCOUNT.resolveAccountController(ctx), { controller: root, resolutionPath: 'root' });
+  ctx.root.get = () => { throw new Error('fixture-private-context-data'); };
+  assert.deepEqual(ACCOUNT.resolveAccountController(ctx), { controller: agent, resolutionPath: 'agent' });
+  ctx.agents.roots = () => [];
+  assert.equal(ACCOUNT.resolveAccountController(ctx), null);
+});
+
+test('broken context accessors are isolated and never logged', async () => {
+  const logs = [];
+  const panel = makePanel();
+  const { controller } = makeController();
+  const ctx = { get() { throw { get message() { assert.fail('read raw error'); } }; },
+    get root() { throw new Error('fixture-secret'); },
+    agents: { roots: () => [{ ctx: { get: () => controller } }] } };
+  const adapter = adapterFor(undefined, panel, { ctx, log: (...args) => logs.push(args) });
+  assert.equal(await adapter.start(), true);
+  await adapter.whenIdle();
+  assert.equal(adapter._state().resolutionPath, 'agent');
+  assert.ok(logs.some(row => row[1].includes('已解析：agent')));
+  assert.ok(logs.some(row => row[1].includes('发布通道已确认')));
+  assert.doesNotMatch(JSON.stringify(logs), /fixture-secret/);
+  assert.equal(panel.posts.at(-1).body.status, 'ready');
+  await adapter.dispose();
+});
+
+test('an injected resolver is retried, deduplicated and reports only a fixed path label', async () => {
+  const panel = makePanel();
+  const { controller } = makeController();
+  let count = 0;
+  let release;
+  let first = true;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const logs = [];
+  const adapter = adapterFor(undefined, panel, {
+    resolveController: () => {
+      count += 1;
+      return count === 1 ? null : { controller, resolutionPath: 'fixture-sensitive-data' };
+    },
+    publisher: { post: async snapshot => {
+      if (first) { first = false; await blocked; }
+      panel.posts.push({ body: snapshot });
+    } },
+    log: (...args) => logs.push(args),
+  });
+  const firstStart = adapter.start();
+  const sameStart = adapter.start();
+  assert.equal(firstStart, sameStart);
+  release();
+  assert.equal(await firstStart, false);
+  assert.equal(count, 1);
+  assert.equal(await adapter.start(), true);
+  await adapter.whenIdle();
+  assert.equal(count, 2);
+  assert.equal(panel.posts.at(-1).body.status, 'ready');
+  assert.equal(adapter._state().resolutionPath, 'resolver');
+  assert.doesNotMatch(JSON.stringify(logs), /fixture-sensitive-data/);
+  await adapter.dispose();
+});
+
+test('disposal while waiting for a service cannot schedule a late discovery retry', async () => {
+  let release;
+  let first = true;
+  let timers = 0;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const adapter = ACCOUNT.createAccountAdapter({
+    resolveController: () => null,
+    publisher: { post: () => {
+      if (first) { first = false; return blocked; }
+      return Promise.resolve();
+    } },
+    timers: { setTimeout: () => { timers += 1; }, clearTimeout() {} },
+  });
+  const starting = adapter.start();
+  await adapter.dispose();
+  release();
+  assert.equal(await starting, false);
+  assert.equal(timers, 0);
 });
 
 test('the production loopback transport never follows panel redirects', async (t) => {

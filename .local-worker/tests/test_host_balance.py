@@ -66,6 +66,16 @@ class HostBalanceTests(unittest.TestCase):
         self.assertNotIn('profile', blob.lower())
         self.assertNotIn('avatar', blob.lower())
 
+    def test_waiting_for_official_service_clears_old_balance_with_a_specific_message(self):
+        host_balance.record(snapshot('ready', BASE, [
+            {'kind': 'normal', 'currency': 'CNY', 'balance': '12.34'},
+        ]), now=BASE)
+        message = 'DSH 官方账户服务尚未就绪，正在等待服务注册；未显示旧余额。'
+        state = host_balance.record(snapshot('unavailable', BASE + timedelta(seconds=1),
+                                             error=message), now=BASE + timedelta(seconds=1))
+        self.assertEqual(state['wallets'], [])
+        self.assertEqual(state['error'], message)
+
     def test_signed_out_clears_the_previous_account_amount(self):
         host_balance.record(snapshot('ready', BASE, [
             {'kind': 'normal', 'currency': 'CNY', 'balance': '12.34'},

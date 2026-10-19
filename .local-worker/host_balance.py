@@ -80,6 +80,7 @@ def _clean_error(value):
     if not isinstance(value, str):
         raise SnapshotError('error 需要是字符串')
     safe = {'适配器已停用', '适配器已停用；未显示旧余额。',
+            'DSH 官方账户服务尚未就绪，正在等待服务注册；未显示旧余额。',
             'DSH 登录凭据已失效，请重新登录；未显示旧余额。'}
     return value if value in safe else '账户接口暂不可用，请稍后重试。'
 

@@ -19,7 +19,16 @@ const path = require('node:path');
 
 const PLUGIN_PATH = path.join(__dirname, '..', '..', 'integrations', 'dsh-brain', 'index.cjs');
 const PLUGIN = require(PLUGIN_PATH);
+const HOST_ACCOUNT = require('../../integrations/dsh-brain/account.cjs');
+const realCreateAccountAdapter = HOST_ACCOUNT.createAccountAdapter;
 const { RULE_SECTION } = PLUGIN._test;
+
+// Host tests must never publish diagnostic account data to a live workbench.
+test.beforeEach(t => {
+  t.mock.method(HOST_ACCOUNT, 'createAccountAdapter', () => ({
+    async start() {}, async dispose() {},
+  }));
+});
 
 const STATUS_SCRIPT = `'use strict';
 const fs = require('node:fs');
@@ -666,6 +675,117 @@ test('rule registration failure denies new work even with enabled workflow', asy
   assert.equal(agent.ctx.sections.length, 0);
   assert.match(guardCall(agent, publicName('brain_dispatch')), /规则|未就绪/);
   assert.equal(guardCall(agent, publicName('brain_delivery')), undefined);
+});
+
+test('account startup does not wait for an existing Agent MCP initialization', async t => {
+  const f = fixture(t);
+  const agent = makeAgent('account-before-mcp', f.project);
+  const ctx = createRootCtx([agent]);
+  let release;
+  let mounted;
+  let accountStarted = false;
+  let accountDisposed = false;
+  const mountEntered = new Promise(resolve => { mounted = resolve; });
+  const fiber = { dispose() {} };
+  agent.ctx.plugin = () => {
+    assert.equal(accountStarted, true);
+    mounted();
+    return new Promise(resolve => { release = () => resolve(fiber); });
+  };
+  t.mock.method(HOST_ACCOUNT, 'createAccountAdapter', () => ({
+    start() { accountStarted = true; return new Promise(() => {}); },
+    async dispose() { accountDisposed = true; },
+  }));
+  let applyFinished = false;
+  const applying = PLUGIN.apply(ctx, f.config).then(() => { applyFinished = true; });
+  await mountEntered;
+  assert.equal(applyFinished, false);
+  assert.equal(accountStarted, true);
+  release();
+  await applying;
+  await ctx.__disposeAll();
+  assert.equal(accountDisposed, true);
+});
+
+test('real account adapter publishes to an isolated panel while existing MCP is blocked', async t => {
+  const http = require('node:http');
+  const f = fixture(t);
+  const agent = makeAgent('account-e2e-blocked-mcp', f.project);
+  const ctx = createRootCtx([agent]);
+  const snapshots = [];
+  const metadata = [];
+  async function* watch(signal) {
+    if (signal.aborted) return;
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  }
+  agent.ctx.get = name => name === 'accountController' ? {
+    async getState() { return { status: 'credential-stored' }; },
+    async getBalance(client) {
+      metadata.push(client);
+      return { status: 'ready', value: [{ currency: 'CNY', balance: '6.28' }], bonusWallets: [] };
+    }, watch,
+  } : null;
+  let gotReady;
+  const ready = new Promise(resolve => { gotReady = resolve; });
+  const server = http.createServer(async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/session') return res.end(JSON.stringify({ token: 'ephemeral-fixture-only' }));
+    if (req.url !== '/api/host-account/snapshot' || req.headers['x-panel-token'] !== 'ephemeral-fixture-only') {
+      res.writeHead(403); return res.end('{}');
+    }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const value = JSON.parse(Buffer.concat(chunks).toString());
+    snapshots.push(value);
+    res.end('{}');
+    if (value.status === 'ready') gotReady();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.mock.method(HOST_ACCOUNT, 'createAccountAdapter', options => realCreateAccountAdapter({
+    ...options, refreshIntervalMs: 0,
+  }));
+  let releaseMount;
+  let mountStarted;
+  const mounting = new Promise(resolve => { mountStarted = resolve; });
+  agent.ctx.plugin = () => {
+    mountStarted();
+    return new Promise(resolve => { releaseMount = () => resolve({ dispose() {} }); });
+  };
+  let finished = false;
+  const applying = PLUGIN.apply(ctx, { ...f.config,
+    panelUrl: `http://127.0.0.1:${server.address().port}` }).then(() => { finished = true; });
+  await mounting;
+  try {
+    await Promise.race([ready, new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('no snapshot before MCP completion')), 2000);
+      timer.unref();
+    })]);
+    assert.equal(finished, false);
+    assert.deepEqual(snapshots.map(value => value.status), ['updating', 'ready']);
+    assert.equal(snapshots.at(-1).wallets[0].balance, '6.28');
+    assert.deepEqual(Object.keys(metadata[0]).sort(), ['locale', 'timezoneOffsetSeconds', 'version']);
+  } finally {
+    releaseMount();
+    await applying;
+    await ctx.__disposeAll();
+  }
+});
+
+test('account startup failure never exposes raw errors or prevents brain binding', async t => {
+  const f = fixture(t);
+  const agent = makeAgent('account-error-brain-ok', f.project);
+  const ctx = createRootCtx([agent]);
+  const logs = [];
+  ctx.logger.warn = message => logs.push(message);
+  t.mock.method(HOST_ACCOUNT, 'createAccountAdapter', () => ({
+    async start() { throw { get message() { assert.fail('raw SDK message read'); } }; },
+    async dispose() {},
+  }));
+  await applyPlugin(t, f, { ctx });
+  assert.equal(agent.ctx.mounts.length, 1);
+  assert.equal(guardCall(agent, publicName('brain_dispatch')), undefined);
+  assert.ok(logs.some(message => message.includes('原始诊断已省略')));
 });
 
 test('disposing during MCP startup also disposes the late fiber before dropping guard', async (t) => {
