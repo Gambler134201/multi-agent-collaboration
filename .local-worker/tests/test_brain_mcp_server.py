@@ -366,6 +366,34 @@ class EndToEndLoopTests(unittest.TestCase):
                  'evidence': [{'source': 'reviewer_test', 'detail': 'reran the test',
                                'exit_code': 0}]}]
 
+    def test_new_chat_can_read_history_but_cannot_review_or_rework(self):
+        self.client.call('brain_connect')
+        dispatched=self.client.call('brain_dispatch',{
+            'request_id':'history-1','prompt':'Fixture','kind':'edit',
+            'model_id':'mock','files':['a.py'],'acceptance':['criterion one']})
+        task_id=payload(dispatched)['task']['task_id']
+        run=self.complete(task_id)
+        before={name:(run/name).read_bytes() for name in ('task.json','review.json')}
+        other=StdioClient(['--project',str(self.project),'--host','different-host','--owner','new-brain',
+                          '--role','brain','--session-binding','user_bound','--session-id','new-chat',
+                          '--panel-url','http://127.0.0.1:%d'%self.server.server_address[1]])
+        try:
+            other.initialize()
+            self.assertFalse(other.call('brain_connect')['isError'])
+            for name in ('brain_status','brain_delivery'):
+                result=other.call(name,{'task_id':task_id})
+                self.assertFalse(result['isError'])
+                self.assertEqual(visible_payload(result)['access']['mode'],'project_read_only')
+                self.assertEqual(payload(result)['owner'],'main-a')
+            self.assertTrue(other.call('brain_review',{'task_id':task_id,'request_id':'foreign-review',
+                                                     'action':'block','notes':'must reject'})['isError'])
+            self.assertTrue(other.call('brain_rework',{'parent_task_id':task_id,'request_id':'foreign-rework'})['isError'])
+        finally:
+            other.close()
+        self.assertEqual(self.submitted,[task_id])
+        for name,data in before.items():
+            self.assertEqual((run/name).read_bytes(),data)
+
     def test_full_mock_loop_connect_preview_dispatch_deliver_return_rework_accept(self):
         described = self.client.call('brain_describe')
         self.assertEqual(visible_payload(described)['context']['role'], 'brain')

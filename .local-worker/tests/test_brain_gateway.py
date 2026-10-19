@@ -156,8 +156,12 @@ class BrokerTests(unittest.TestCase):
     def test_owner_project_and_legacy_tasks_are_never_adopted(self):
         task_id = self.dispatch(self.capability())['task']['task_id']
         other_owner = self.capability(owner='main-b', session='s-b')
+        history=brain_gateway.handle('status', {'task_id': task_id}, other_owner)
+        self.assertEqual(history['access']['mode'],'project_read_only')
+        self.assertEqual(history['owner'],'main-a')
         with self.assertRaisesRegex(brain_gateway.BrokerError, '另一个主脑'):
-            brain_gateway.handle('status', {'task_id': task_id}, other_owner)
+            brain_gateway.handle('review', {'task_id':task_id,'request_id':'foreign-review',
+                                          'action':'block','notes':'forbidden'},other_owner)
         other_project = self.capability(owner='main-a', project=self.other_project, session='s-c')
         with self.assertRaisesRegex(brain_gateway.BrokerError, '不属于当前项目'):
             brain_gateway.handle('status', {'task_id': task_id}, other_project)
@@ -244,7 +248,7 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(self.submitted.count(child_id), 1)
 
 
-    def test_same_owner_different_session_or_host_cannot_read_original(self):
+    def test_same_project_different_session_or_host_can_only_read_original(self):
         from dataclasses import replace
         original = self.context()
         cap = brain_gateway.register_connection(original.declaration())['capability']
@@ -253,8 +257,57 @@ class BrokerTests(unittest.TestCase):
                       replace(original, host='different-host')):
             other_cap = brain_gateway.register_connection(other.declaration())['capability']
             with self.subTest(host=other.host, session=other.session_reference):
+                result=brain_gateway.handle('status', {'task_id': task}, other_cap)
+                self.assertTrue(result['access']['read_only'])
                 with self.assertRaises(brain_gateway.BrokerError):
-                    brain_gateway.handle('status', {'task_id': task}, other_cap)
+                    brain_gateway.handle('rework',{'parent_task_id':task,'request_id':'foreign-rework'},other_cap)
+
+    def test_project_history_reads_do_not_change_owner_or_grant_mutation(self):
+        cap=self.capability()
+        task_id=self.dispatch(cap)['task']['task_id']
+        run=self.complete(task_id)
+        before={name:(run/name).read_bytes() for name in ('task.json','review.json')}
+        other=self.capability(owner='new-brain',session='new-chat')
+        delivery=brain_gateway.handle('delivery',{'task_id':task_id},other)
+        self.assertEqual(delivery['answer'],'mock deliverable')
+        self.assertTrue(delivery['access']['read_only'])
+        self.assertEqual(brain_gateway.handle('status',{'task_id':task_id},cap)['access']['mode'],'original_owner')
+        for operation,payload in [
+            ('review',{'task_id':task_id,'request_id':'no-review','action':'accept','criteria':self.evidence()}),
+            ('rework',{'parent_task_id':task_id,'request_id':'no-rework'}),
+        ]:
+            with self.assertRaisesRegex(brain_gateway.BrokerError,'另一个主脑'):
+                brain_gateway.handle(operation,payload,other)
+        executor=self.capability(owner='new-brain',role='executor',session='new-chat')
+        with self.assertRaises(brain_gateway.BrokerError):
+            brain_gateway.handle('delivery',{'task_id':task_id},executor)
+        for name,data in before.items():
+            self.assertEqual((run/name).read_bytes(),data)
+
+    def test_history_read_rejects_missing_or_mismatched_record_project(self):
+        cap=self.capability()
+        task_id=self.dispatch(cap)['task']['task_id']
+        run=registry.task_dir(task_id,str(self.project))
+        other=self.capability(owner='new-brain',session='new-chat')
+        original=registry.read_task(run)
+        for project in ('',str(self.other_project)):
+            task=registry.read_task(run)
+            task['brain']['project']=project
+            task['project']=project
+            registry.write_json(run/'task.json',task)
+            with self.assertRaises(brain_gateway.BrokerError):
+                brain_gateway.handle('status',{'task_id':task_id},other)
+        import copy
+        bad=copy.deepcopy(original)
+        bad['project']=str(self.other_project)
+        registry.write_json(run/'task.json',bad)
+        with self.assertRaises(brain_gateway.BrokerError):
+            brain_gateway.handle('delivery',{'task_id':task_id},other)
+        bad=copy.deepcopy(original)
+        bad['brain'].pop('binding_key',None)
+        registry.write_json(run/'task.json',bad)
+        with self.assertRaisesRegex(brain_gateway.BrokerError,'归属记录不完整'):
+            brain_gateway.handle('status',{'task_id':task_id},other)
 
     def test_duplicate_ids_are_scoped_to_responsible_conversation(self):
         first = self.dispatch(self.capability(session='first'))

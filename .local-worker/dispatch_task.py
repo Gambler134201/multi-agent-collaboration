@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import delegation_policy as policy
 import model_registry as registry
 import record_protection
+import project_scope
 
 HERE = Path(__file__).resolve().parent
 
@@ -99,6 +100,25 @@ def wait_for_task(request, task_id, progress=False, verbose=False):
         return 130
 
 
+def request_view(path, body=None):
+    """Bind explicit CLI work and known records without selecting all projects."""
+    project=(body or {}).get('project') if isinstance(body,dict) else None
+    if not project:
+        match=re.fullmatch(r'/api/(tasks|stages|goals)/([A-Za-z0-9_-]+)(?:/[^/]*)?',path)
+        if match:
+            kind,record_id=match.groups()
+            if kind=='tasks':
+                row=registry.read_task(registry.task_dir(record_id))
+            else:
+                import stage_store
+                row=(stage_store.get_stage(record_id) if kind=='stages' else stage_store.get_goal(record_id)) or {}
+            project=row.get('project')
+        elif isinstance(body,dict) and (body.get('continue_task') or body.get('rework_of')):
+            row=registry.read_task(registry.task_dir(body.get('continue_task') or body['rework_of']))
+            project=row.get('project')
+    return project_scope.parse_view({'mode':'project','project':project} if project else None)
+
+
 def connect_panel():
     runtime = json.loads((HERE / 'panel-runtime.json').read_text(encoding='utf-8'))
     base = runtime['url']
@@ -110,7 +130,8 @@ def connect_panel():
 
     def request(path, body=None):
         req = Request(base + path, data=json.dumps(body).encode('utf-8') if body is not None else None,
-                      headers={'Content-Type': 'application/json', 'X-Panel-Token': token})
+                      headers={'Content-Type': 'application/json', 'X-Panel-Token': token,
+                               'X-Model-Desk-View':project_scope.encode_view_header(request_view(path,body))})
         try:
             with opener.open(req, timeout=15) as response:
                 return json.load(response)

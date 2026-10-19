@@ -27,6 +27,7 @@ import model_registry as registry
 import panel_server as panel
 import stage_store
 import workflow_settings
+import project_scope
 
 class ReviewerPolicyToggleTests(unittest.TestCase):
     def test_native_child_model_comes_from_lifecycle_not_guessed_parent(self):
@@ -140,7 +141,8 @@ class Base(unittest.TestCase):
         return delegation_policy.load(run)
 
     def request(self, path, body=None, token=True, origin=None, method=None):
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json",
+                   'X-Model-Desk-View':project_scope.encode_view_header({'mode':'all'})}
         if token:
             headers["X-Panel-Token"] = panel.TOKEN
         if origin:

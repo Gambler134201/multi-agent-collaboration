@@ -1023,7 +1023,9 @@ class RecoveryApiTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def request(self, path, body=None):
-        headers = {'Content-Type': 'application/json', 'X-Panel-Token': panel.TOKEN}
+        import project_scope
+        headers = {'Content-Type': 'application/json', 'X-Panel-Token': panel.TOKEN,
+                   'X-Model-Desk-View':project_scope.encode_view_header({'mode':'all'})}
         data = json.dumps(body).encode() if body is not None else None
         request = Request(self.url + path, data=data, headers=headers)
         try:

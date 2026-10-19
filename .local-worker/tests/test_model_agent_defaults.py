@@ -275,8 +275,10 @@ class PanelPreferenceTests(Base):
         return server
 
     def _post(self, opener, port, path, body):
+        import project_scope
         request = Request(f'http://127.0.0.1:{port}{path}', data=json.dumps(body).encode(),
-                          headers={'Content-Type': 'application/json', 'X-Panel-Token': panel.TOKEN})
+                          headers={'Content-Type': 'application/json', 'X-Panel-Token': panel.TOKEN,
+                                   'X-Model-Desk-View':project_scope.encode_view_header({'mode':'all'})})
         with opener.open(request, timeout=5) as response:
             return json.load(response)
 

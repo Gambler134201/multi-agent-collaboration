@@ -765,7 +765,9 @@ class PanelHttpTests(Base):
         super().tearDown()
 
     def request(self, path, body=None, token=True, origin=None):
-        headers = {'Content-Type': 'application/json'}
+        import project_scope
+        headers = {'Content-Type': 'application/json',
+                   'X-Model-Desk-View':project_scope.encode_view_header({'mode':'all'})}
         if token:
             headers['X-Panel-Token'] = panel.TOKEN
         if origin:

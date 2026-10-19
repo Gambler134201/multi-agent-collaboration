@@ -60,6 +60,51 @@ class ProjectHttpTests(Base):
         with self.assertRaises(HTTPError) as e:self.opener.open(req,timeout=10)
         self.assertEqual(e.exception.code,400)
 
+    def test_missing_scope_cannot_read_global_history_or_by_id(self):
+        for query in ('','?project='+str(self.other)):
+            with mock.patch.object(panel.deepseek_billing,'enrich_models',side_effect=lambda rows:rows), \
+                 mock.patch.object(panel.codex_usage,'usage_state',return_value={'status':'unavailable'}):
+                with self.opener.open(self.url+'/api/state'+query,timeout=10) as response:
+                    result=json.load(response)
+            self.assertEqual(result['view']['mode'],'unbound')
+            self.assertEqual(result['tasks'],[])
+            self.assertIsNone(result['current_project'])
+        for path in ('/api/tasks/a','/api/tasks/b/log','/api/stages/'+self.sa['id']):
+            with self.assertRaises(HTTPError) as error:
+                self.opener.open(self.url+path,timeout=10)
+            self.assertEqual(error.exception.code,403)
+        self.assertEqual(len(self.call('/api/state',{'mode':'all'})['tasks']),3)
+
+    def test_model_occupancy_is_global_but_other_project_activity_details_are_not(self):
+        active=[{'id':'active-a','title':'private A','project':str(self.project),'model_id':'home','status':'running'},
+                {'id':'active-b','title':'private B','project':str(self.other),'model_id':'home','status':'queued'}]
+        activity={'scope':'global','total':2,'complete':True,'tasks':active}
+        with mock.patch.object(panel,'execution_activity',return_value=activity):
+            for view in ({'mode':'unbound'},{'mode':'project','project':str(self.empty)}):
+                result=self.call('/api/state',view)['execution_activity']
+                self.assertEqual(result['tasks'],[])
+                self.assertEqual(result['total'],2)
+                self.assertEqual(result['running'],1)
+                self.assertEqual(result['model_counts'],{'home':2})
+            result=self.call('/api/state',{'mode':'project','project':str(self.project)})
+            self.assertEqual([row['id'] for row in result['execution_activity']['tasks']],['active-a'])
+            self.assertNotIn('private B',json.dumps(result,ensure_ascii=False))
+            self.assertEqual(len(self.call('/api/state',{'mode':'all'})['execution_activity']['tasks']),2)
+
+    def test_existing_cli_binds_known_task_and_explicit_new_work(self):
+        import dispatch_task
+        runtime=Path(self.temp.name)/'panel-runtime.json'
+        runtime.write_text(json.dumps({'url':self.url}),encoding='utf-8')
+        with mock.patch.object(dispatch_task,'HERE',Path(self.temp.name)):
+            request=dispatch_task.connect_panel()
+            detail=request('/api/tasks/a')
+            self.assertEqual(detail['task']['id'],'a')
+            self.assertEqual(detail['view']['project'],str(self.project))
+            self.assertEqual(dispatch_task.request_view('/api/tasks',{'project':str(self.other)})['project'],str(self.other))
+            self.assertEqual(dispatch_task.request_view('/api/session')['mode'],'unbound')
+            self.assertEqual(dispatch_task.request_view('/api/tasks',{'rework_of':'a'})['project'],str(self.project))
+            self.assertEqual(dispatch_task.request_view('/api/stages/'+self.sa['id'])['project'],str(self.project))
+
     def test_folder_picker_is_explicit_authenticated_and_does_not_modify_view(self):
         import folder_picker
         view={'mode':'unbound'}

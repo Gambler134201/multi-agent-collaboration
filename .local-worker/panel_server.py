@@ -2112,7 +2112,9 @@ class Handler(BaseHTTPRequestHandler):
             raise PermissionError("请求来源不正确")
         if mutation and not secrets.compare_digest(self.headers.get("X-Panel-Token", ""), TOKEN):
             raise PanelSessionExpired("请刷新面板后重试")
-        self.project_view=project_scope.decode_view_header(self.headers.get(project_views.HEADER))
+        # Missing HTTP scope is unbound, never the internal legacy/global view.
+        self.project_view=(project_scope.decode_view_header(self.headers.get(project_views.HEADER))
+                           or project_scope.parse_view(None))
         project_views.check_request(urlparse(self.path).path,self.project_view)
 
     def do_GET(self):

@@ -32,7 +32,10 @@ def require_record(record, view):
         raise PermissionError('该记录不属于当前项目；请明确切换项目或选择全部项目')
 
 def task_record(task_id, project=None):
-    return registry.read_task(registry.task_dir(task_id, project))
+    try:
+        return registry.read_task(registry.task_dir(task_id, project))
+    except FileNotFoundError:
+        return {}  # the detail handler owns the explicit all-view 404
 
 # Request views use the same plural segment names as the API paths.
 _KIND = {'tasks': 'task', 'goals': 'goal', 'stages': 'stage'}
@@ -73,6 +76,8 @@ def check_request(path, view, body=None):
     match = re.fullmatch(r'/api/(tasks|goals|stages)/([A-Za-z0-9_-]+)(?:/[^/]*)?', path)
     loaders = {'tasks':task_record, 'goals':stage_store.get_goal, 'stages':stage_store.get_stage}
     if match:
+        if view['mode']==scope.MODE_UNBOUND:
+            raise PermissionError('尚未绑定项目；请明确选择项目或全部项目')
         kind, record_id = match.groups()
         require_record(loaders[kind](record_id, project),view)
         reassert_owner(kind, record_id, project)
@@ -171,9 +176,21 @@ def project_response(path,data,view):
     """Shape scoped aggregates; no recursive rewrites of arbitrary task content."""
     if view is None or not isinstance(data,dict) or data.get('error'):
         return data
+    if path.startswith('/api/brain/') or path in {
+            '/api/session','/api/workflow','/api/codex-usage',
+            '/api/host-account','/api/host-account/snapshot'}:
+        return data  # global/controller protocols retain their exact shape
     data={**data,'view':view}
     stats=project_stats(view) if path in {'/api/state','/api/tree','/api/goals','/api/stages','/api/recovery'} else None
     if path=='/api/state':
+        activity=data.get('execution_activity')
+        if isinstance(activity,dict) and view['mode']!=scope.MODE_ALL:
+            active=activity.get('tasks') or []
+            data['execution_activity']={**activity,
+                'running':sum(row.get('status')=='running' for row in active),
+                'model_counts':dict(Counter(row.get('model_id') for row in active if row.get('model_id'))),
+                'running_models':sorted({row.get('model_id') for row in active if row.get('model_id') and row.get('status')=='running'}),
+                'tasks':scope.filter_records(active,view), 'details_scope':view['mode']}
         data['delegation']=review_stats(data['tasks'])
         data['stages']={'stats':stats,'recovery':recovery_rows(stage_store.pending_recovery(explicit_project(view)),view)}
         data['workflow']={**data['workflow'],'daily_scope':'global'}

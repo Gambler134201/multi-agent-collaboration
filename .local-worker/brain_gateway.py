@@ -176,8 +176,8 @@ def _brain_meta(task):
     return owned, owner, project
 
 
-def _task(context, task_id):
-    """Resolve one task only inside the context project and original owner."""
+def _task(context, task_id, *, read_only=False):
+    """Read project history; mutations still require original responsibility."""
     task_id = brain_context.clean_task_id(task_id)
     run = project_storage.task_dir(context.project, task_id)
     if not run.is_dir():
@@ -192,12 +192,8 @@ def _task(context, task_id):
     owned, owner, project = _brain_meta(task)
     if not owned:
         raise BrokerError('旧任务没有主脑归属，不能由主脑接口读取、验收或整改；不会自动收养')
-    if not owner:
+    if not owner or not (task.get('brain') or {}).get('binding_key'):
         raise BrokerError('任务的主脑归属记录不完整，拒绝操作')
-    if owner != context.owner:
-        raise BrokerError('任务属于另一个主脑拥有者；拒绝跨拥有者读取或验收')
-    if (task.get('brain') or {}).get('binding_key') != context.binding_key:
-        raise BrokerError('任务属于另一个宿主或责任会话；拒绝跨会话读取或验收')
     if project:
         try:
             mismatch = project_scope.project_key(project) != context.project_key
@@ -205,7 +201,29 @@ def _task(context, task_id):
             raise BrokerError('任务的项目归属无法核实，拒绝操作') from None
         if mismatch:
             raise BrokerError('任务属于另一个项目；拒绝跨项目读取或验收')
+    else:
+        raise BrokerError('任务缺少可核对的项目归属，拒绝操作')
+    if task.get('project'):
+        try:
+            if project_scope.project_key(task['project']) != context.project_key:
+                raise BrokerError('任务的项目归属字段不一致，拒绝操作')
+        except (ValueError, OSError, TypeError):
+            raise BrokerError('任务的项目归属无法核实，拒绝操作') from None
+    if read_only and context.role == 'brain':
+        return run, task
+    if owner != context.owner:
+        raise BrokerError('任务属于另一个主脑拥有者；拒绝跨拥有者变更')
+    if (task.get('brain') or {}).get('binding_key') != context.binding_key:
+        raise BrokerError('任务属于另一个宿主或责任会话；拒绝跨会话变更')
     return run, task
+
+
+def _read_access(context, task):
+    same=((task.get('brain') or {}).get('owner', task.get('owner')) == context.owner
+          and (task.get('brain') or {}).get('binding_key') == context.binding_key)
+    return {'mode':'original_owner' if same else 'project_read_only', 'read_only':not same,
+            'note':('变更仍需原权限与任务状态校验。' if same else
+                    '同项目历史只读；不授予验收、整改、继续执行或收养权限。')}
 
 
 def _task_receipt(task):
@@ -258,6 +276,9 @@ def _describe(context, payload):
     with _LOCK:
         count = sum(1 for row in _CAPABILITIES.values() if row['context'] is context)
     return {'connected': True, 'context': context.public(), 'limits': _limits(),
+            'history_policy': {'read':'same_project_brain_tasks',
+                               'mutate':'original_owner_and_responsibility_binding',
+                               'automatic_adoption':False},
             'connection': {'capabilities_for_context': count},
             'operations': list(OPERATIONS)}
 
@@ -536,10 +557,11 @@ def _dispatch(context, payload):
 def _status(context, payload):
     _keys(payload, ('task_id',), required=('task_id',))
     import delegation_policy
-    run, task = _task(context, payload.get('task_id'))
+    run, task = _task(context, payload.get('task_id'), read_only=True)
     record, error = delegation_policy.safe_load(run)
     return {'task_id': task.get('id'), 'status': task.get('status'), 'phase': task.get('phase'),
             'owner': task.get('owner'), 'request_id': task.get('request_id'),
+            'access':_read_access(context, task),
             'project': task.get('project'), 'engine': task.get('engine'),
             'model_id': task.get('model_id'), 'model_name': task.get('model_name') or task.get('model'),
             'kind': task.get('kind'), 'files': task.get('files') or [],
@@ -554,7 +576,7 @@ def _delivery(context, payload):
     _keys(payload, ('task_id',), required=('task_id',))
     import delegation_policy
     import task_handover
-    run, task = _task(context, payload.get('task_id'))
+    run, task = _task(context, payload.get('task_id'), read_only=True)
     record, review_error = delegation_policy.safe_load(run)
     answer = ''
     for name in ('answer.txt', 'result.md'):
@@ -608,7 +630,7 @@ def _delivery(context, payload):
             'review_error': _text(review_error, 500),
             'accepted': accepted, 'acceptance_problems': problems,
             'independent_evidence': independent,
-            'delivery_state': state, 'handover': handover,
+            'delivery_state': state, 'handover': handover, 'access':_read_access(context, task),
             'note': ('执行器完成不等于验收通过；主脑需要逐条独立证据。'
                      if state == 'executor_completed_unaccepted' else
                      '交付读取不等待模型、不重复派发。')}

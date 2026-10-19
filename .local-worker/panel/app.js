@@ -499,7 +499,8 @@ function renderModels() {
   setMarkup($('models'),state.models.length ? state.models.map(model=>{
     const activity=state.execution_activity?.scope==='global'?state.execution_activity.tasks:state.tasks;
     const jobs=(activity||[]).filter(t=>t.model_id===model.id && ['running','queued','dispatching'].includes(t.status));
-    const working=jobs.some(t=>t.status==='running');
+    const jobCount=state.execution_activity?.model_counts?.[model.id]??jobs.length;
+    const working=state.execution_activity?.running_models?.includes(model.id)??jobs.some(t=>t.status==='running');
     const check=model.last_check;
     const thinking=thinkingInfo(model);
     const connection=working ? badge('running','正在执行') : !model.enabled ? badge('cancelled','已停用') : !check ? badge('unknown','未测试') : check.ok ? badge('online','连接正常') : badge('failed','连接异常');
@@ -508,7 +509,7 @@ function renderModels() {
     return `<article class="model-card ${model.id===state.default_model?'is-default':''} ${model.enabled?'':'disabled'} ${model.billing?'billing-model '+(expandedBillingModels.has(model.id)?'is-expanded':'is-collapsed'):''}">
       <div class="model-head"><div class="model-avatar ${model.provider==='local'?'':'cloud'}">${({local:'Q',deepseek:'D',glm:'G',custom:'M'})[model.provider]||'M'}</div><div class="model-title"><strong>${escapeText(model.name)}</strong><div class="provider-label">${escapeText(providerNames[model.provider])}</div></div>${model.id===state.default_model?'<span class="default-badge">默认</span>':''}${model.billing?`<span class="pricing-badge ${model.billing.pricing.period==='peak'?'peak':model.billing.pricing.period==='off_peak'?'off-peak':'unknown'}" title="${escapeText(model.billing.pricing.label)}">${({peak:'峰价',off_peak:'谷价',unknown:'待核实',third_party:'转发计价'})[model.billing.pricing.period]||'待核实'}</span>`:''}</div>
       <div class="model-info"><div class="model-metadata"><div class="model-code">${escapeText(model.model)}</div><div class="model-endpoint" title="${escapeText(model.api_base)}">${escapeText(hostname)}</div><div class="model-thinking" title="${escapeText(thinking.note)}">思考：${escapeText(thinking.label)}</div><div class="model-agent" title="新任务默认执行 Agent：本次显式指定 &gt; 模型默认 &gt; 全局默认">默认 Agent：${escapeText(modelAgentLabel(model))}</div></div>${renderBilling(model)}</div>
-      <div class="model-status">${connection}<span class="subtle">${jobs.length?`全局 ${jobs.length} 个任务`:check?.ok?`${(check.latency_ms/1000).toFixed(1)}s 测试响应`:'暂无任务'}</span></div>
+      <div class="model-status">${connection}<span class="subtle">${jobCount?`全局 ${jobCount} 个任务`:check?.ok?`${(check.latency_ms/1000).toFixed(1)}s 测试响应`:'暂无任务'}</span></div>
       <div class="model-actions"><button data-model-action="test" data-id="${escapeText(model.id)}" ${testingModels.has(model.id)?'disabled':''}>${testingModels.has(model.id)?'测试中…':'测试连接'}</button><button data-model-action="edit" data-id="${escapeText(model.id)}">编辑</button>${model.id!==state.default_model&&model.enabled?`<button class="set-default" data-model-action="default" data-id="${escapeText(model.id)}">设为默认</button>`:''}<button class="remove" data-model-action="delete" data-id="${escapeText(model.id)}">删除</button></div></article>`;
   }).join('') : '<div class="empty"><strong>还没有执行模型</strong><p>添加一个本地服务或线上模型。</p></div>');
 }
@@ -517,11 +518,12 @@ function renderExecutionActivity(){
   const box=$('execution-activity'),activity=state.execution_activity;
   if(!box)return;
   const tasks=activity?.scope==='global'&&Array.isArray(activity.tasks)?activity.tasks:[];
-  box.hidden=tasks.length===0&&activity?.complete!==false;
+  const total=activity?.total??tasks.length;
+  box.hidden=total===0&&activity?.complete!==false;
   if(box.hidden){setMarkup(box,'');return;}
-  const running=tasks.filter(t=>t.status==='running').length;
-  setMarkup(box,`<strong>全局执行：${running} 个运行中 · ${tasks.length-running} 个排队/派发中</strong>`+
-    (projectView.mode==='unbound'?'<span>尚未选择项目，历史列表为空；全局任务仍在执行，可点击下方项目定位。</span>':'<span>任务列表按当前项目显示，模型运行状态全局共享。</span>')+
+  const running=activity?.running??tasks.filter(t=>t.status==='running').length;
+  setMarkup(box,`<strong>全局执行：${running} 个运行中 · ${total-running} 个排队/派发中</strong>`+
+    '<span>模型占用全局共享；其他项目的任务明细需选择“全部项目”查看。</span>'+
     tasks.map(task=>`<div class="activity-job"><span>${escapeText(task.model_name||'执行模型')} · ${escapeText(task.title||task.id)}</span><button type="button" class="text-button" data-activity-project="${escapeText(task.project)}" ${task.project?'':'disabled'}>查看项目：${escapeText(task.project||'未记录目录')}</button></div>`).join('')+
     (activity?.complete===false?'<span>部分任务状态暂时无法读取，以上为已确认状态。</span>':''));
 }

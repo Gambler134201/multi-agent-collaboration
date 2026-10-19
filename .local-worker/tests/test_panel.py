@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import model_registry as registry
 import panel_server as panel
+import project_scope
 
 
 class MockModel(BaseHTTPRequestHandler):
@@ -70,7 +71,8 @@ class PanelTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def request(self, path, body=None, token=True, origin=None):
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json",
+                   'X-Model-Desk-View':project_scope.encode_view_header({'mode':'all'})}
         if token:
             headers["X-Panel-Token"] = panel.TOKEN
         if origin:

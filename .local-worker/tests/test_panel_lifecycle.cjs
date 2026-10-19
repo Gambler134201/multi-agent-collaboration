@@ -248,7 +248,7 @@ function createHarness(options = {}) {
             tasks: data.tasks, workspace: 'C:\\workbench', execution: '任务按顺序执行',
             agent: {name: 'DeepSeek Harness', version: '1.0', ready: true},
             execution_agents: {dsh: {name: 'DeepSeek Harness'}, pi: {name: 'Pi Agent'}},
-            execution_activity: {scope: 'project', tasks: [], complete: true},
+            execution_activity: server.activity || {scope: 'project', tasks: [], complete: true},
             workflow: {enabled: true, paid_allowed: false, enforce_paid_budget: true,
                        enforce_model_call_limit: true, task_budget_cny: 1, daily_budget_cny: 2,
                        max_model_calls: 5, daily: {settled_cny: 0.1, has_actual: true}},
@@ -506,6 +506,17 @@ async function test(name, body) {
     h.document.dispatch({type: 'pointerdown'});
     await h.advance(3000);
     assert.ok(h.stateCalls().length > before, 'working in the panel returns it to the prompt cadence');
+  });
+
+  await test('global occupancy remains visible without other-project task details', async () => {
+    const h = createHarness();
+    h.server.activity={scope:'global',total:3,running:2,complete:true,tasks:[],
+      model_counts:{'m-local':3},running_models:['m-local'],details_scope:'project'};
+    await h.boot();
+    assert.equal(h.el('execution-activity').hidden,false);
+    assert.ok(h.el('execution-activity').innerHTML.includes('2 个运行中 · 1 个排队/派发中'));
+    assert.ok(h.el('models').innerHTML.includes('全局 3 个任务'));
+    assert.ok(!h.el('execution-activity').innerHTML.includes('activity-job'));
   });
 
   await test('pagehide clears the auto timer', async () => {
