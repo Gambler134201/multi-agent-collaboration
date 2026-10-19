@@ -138,3 +138,28 @@ test('real Windows pipe and detached shared waiter deliver once with no model',
     fs.rmSync(project,{recursive:true,force:true});
   }
 });
+
+test('formal MCP dispatch, batch wait, one completion and receipt use the shared core',
+ {skip:process.platform!=='win32'||!process.env.MODEL_DESK_TEST_PYTHON},async t=>{
+  const project=fs.mkdtempSync(path.join(os.tmpdir(),'md-dsh-formal-wait-'));
+  const calls=[],identity={id:'session-formal-fixture',owner:'dsh-formal-fixture',project};
+  const agent={status:'idle',session:{seq:1},inbox:{hasPending:false},followup:msg=>calls.push(msg)};
+  const bridge=createBridge({agent,identity,isCurrent:()=>true});
+  await bridge.start();
+  try{
+    const result=await new Promise((resolve,reject)=>{
+      const child=spawn(process.env.MODEL_DESK_TEST_PYTHON,[path.join(__dirname,'dsh-task-wait-fixture.py')],
+        {cwd:project,env:{...process.env,...bridge.environment(),PYTHONIOENCODING:'utf-8'},windowsHide:true});
+      let stdout='',stderr='';child.stdout.on('data',v=>{stdout+=v});child.stderr.on('data',v=>{stderr+=v});
+      const timer=setTimeout(()=>{child.kill();reject(Error('formal fixture timeout'));},30000);
+      child.on('error',reject);child.on('close',code=>{clearTimeout(timer);resolve({code,stdout,stderr})});
+    });
+    assert.equal(result.code,0,result.stderr);assert.ok(result.stdout.includes('"receipt": true'));
+    assert.equal(calls.length,1);
+    const text=calls[0].content[0].text;
+    assert.ok(text.startsWith('[Model Desk completion event]'));
+    assert.ok(text.includes('brain_wait'));assert.ok(text.includes('action=received'));
+  }finally{
+    await bridge.dispose();fs.rmSync(project,{recursive:true,force:true});
+  }
+});

@@ -345,7 +345,8 @@ test('binds one top-level native chat and mounts one agent-scoped MCP client', a
   assert.match(text, /主脑/);
   assert.match(text, /completed 不等于 accepted/);
   assert.match(text, /最多一次整改/);
-  assert.match(text, /尚未接通自动唤醒/);
+  assert.match(text, /brain_wait/);
+  assert.match(text, /waiting=true/);
   assert.match(text, /不要周期性轮询/);
   assert.match(text, /brain_dispatch/);
   assert.match(text, /reviewer_file/);
@@ -480,6 +481,11 @@ test('switch is re-read per dispatch and is never a cached allow flag', async (t
   assert.match(guardCall(agent, publicName('brain_dispatch')), /关闭/);
   assert.equal(currentRules(agent), undefined, 'guard removes auto-dispatch rules immediately');
   assert.match(guardCall(agent, publicName('brain_rework')), /关闭/);
+  for(const name of ['brain_wakeup_probe','brain_wait']){
+    assert.match(ownerGuard(agent)({name:publicName(name),agent,args:{action:'start'}}),/关闭/);
+    for(const action of ['status','received','stop'])
+      assert.equal(ownerGuard(agent)({name:publicName(name),agent,args:{action}}),undefined);
+  }
   assert.equal(guardCall(agent, publicName('brain_status')), undefined, 'status remains available');
   assert.equal(guardCall(agent, publicName('brain_delivery')), undefined, 'delivery remains available');
   assert.equal(guardCall(agent, publicName('brain_review')), undefined, 'review/return remains available');

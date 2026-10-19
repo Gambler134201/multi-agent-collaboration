@@ -394,6 +394,7 @@ def received(project, wait_id):
     root = paths(project, wait_id)
     with registry.file_lock(root / 'state.lock'):
         data = load(project, wait_id)
+        if data.get('receipt_at'):return data
         if not (root / 'send.claim').exists() or data.get('send_attempts') != 1:
             raise ValueError('没有匹配的投递尝试，不能登记接收')
         try:
@@ -418,6 +419,12 @@ def status(project, wait_id):
         data['phase'] = 'returned'
     data['label'] = LABELS.get(data['phase'], LABELS['needs_attention'])
     return data
+
+
+def stop(project, wait_id):
+    data=load(project,wait_id)
+    (paths(project,wait_id)/'stop.flag').touch()
+    return _finish(data,'stopped','stopped')
 
 
 def process_alive(pid):
@@ -473,9 +480,7 @@ def main():
     elif args.received:
         result = received(args.project, args.received)
     elif args.stop:
-        result = load(args.project, args.stop)
-        (paths(args.project, args.stop) / 'stop.flag').touch()
-        result = _finish(result, 'stopped', 'stopped')
+        result = stop(args.project,args.stop)
     elif args.resume:
         result = resume(args.project, args.resume)
     else:

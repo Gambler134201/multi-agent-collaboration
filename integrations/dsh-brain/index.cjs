@@ -49,6 +49,7 @@ const BRAIN_TOOLS = Object.freeze([
   'brain_review',
   'brain_rework',
   'brain_wakeup_probe',
+  'brain_wait',
 ]);
 const BRAIN_TOOL_SET = new Set(BRAIN_TOOLS);
 const MUTATING_TOOLS = new Set(['brain_dispatch', 'brain_rework']);
@@ -574,8 +575,11 @@ function buildRules(config, identity) {
     '- 主脑和执行模型可以同名、同 provider，例如 DeepSeek 主脑派给独立 DeepSeek 执行会话；这不是执行器嵌套子代理，subagent deny 不排除普通执行候选。',
     `- 派发时使用稳定 request_id，并通过 ${prefix}brain_dispatch 快速取得原任务 ID。工具参数不能修改项目、角色、拥有者或会话。`,
     '- 同一 request_id 同内容会取回原任务，不同内容会被拒绝。结果未知或重复时保持原 request/task，不要换 ID 重发。',
-    '- 当前插件尚未接通自动唤醒或后台续接。派发后不要承诺“完成会自动回来”，也不要周期性轮询主脑模型；需要时由用户或后续聊天轮次读取 status/delivery。',
-    '- 仅用户明确要求诊断时使用 brain_wakeup_probe。start 确认监听后说明约30秒等待、请用户暂不发消息或关闭DSH，90秒未收到可询问状态；然后结束本轮。收到探针后先 received 确认，仅回复已收到；此探针不代表真实任务自动唤醒已启用。',
+    `- 完成本批派发后调用 ${prefix}brain_wait（action=start，task_ids 为全部原任务编号）集中订阅一次；同一聊天不要同时订阅多个批次，不要反复轮询 status，不要周期性轮询主脑模型。`,
+    '- 只有返回 waiting=true 才告诉用户“正在等待执行模型完成，完成后会自动回来验收”，然后结束本轮。监听启动失败或结果未知就保留原 task/wait，不重派、不自动重试。',
+    `- 收到固定完成事件后先告知“执行已结束，正在独立验收”，用 ${prefix}brain_wait（action=received，原 wait_id）登记，再读取 status/delivery 并检查实际成果。执行完成、通知送达和验收通过是三个不同状态。`,
+    '- 用户可在普通任务等待期间继续发消息；完成通知等待原聊天空闲再投递。关闭协作、关闭聊天或重启 DSH 后不保证唤醒；失败/取消/待恢复如实报告，不重新派发。status 只用于用户询问/诊断，stop 只停通知，不取消执行任务。',
+    '- 仅用户明确要求诊断时使用 brain_wakeup_probe。start 确认监听后说明约30秒等待、请用户暂不发消息或关闭DSH，90秒未收到可询问状态；然后结束本轮。收到探针后先 received 确认，仅回复已收到；探针通过不代表真实任务闭环已验收。',
     '',
     '### 验收与整改',
     '- 每条验收条件都需要主脑独立证据（reviewer_file / reviewer_test / reviewer_inspection）；执行器自报不能单独让条件通过。',
@@ -809,7 +813,7 @@ function guardTool(binding, exec) {
       binding.disableRulesNow();
       return '原生会话身份或项目已漂移；主脑绑定保持原归属并拒绝全部主脑工具。';
     }
-    if (MUTATING_TOOLS.has(raw) || (raw==='brain_wakeup_probe'&&exec.arguments?.action==='start')) {
+    if (MUTATING_TOOLS.has(raw) || (['brain_wakeup_probe','brain_wait'].includes(raw)&&(exec.args??exec.arguments)?.action==='start')) {
       if (binding.ruleError) return '主脑协作规则未就绪，拒绝新的派发或整改。';
       // Re-read the existing workflow_settings --status on every mutation. The
       // backend validates again; this guard never trusts a cached allow flag.

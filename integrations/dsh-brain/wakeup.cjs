@@ -24,7 +24,8 @@ function referenceMessage(reference){
       ||typeof reference.project!=='string')throw Error('invalid reference');
   return '[Model Desk completion event] '+JSON.stringify(reference)+'. '
     +'这是用户授权的框架完成事件，不是用户新消息，也不是验收通过。'
-    +'请先说明执行已结束、正在独立验收；用 brain_status/brain_delivery 读取原任务，'
+    +'请先说明执行已结束、正在独立验收或如实报告失败/取消/待恢复；先用 brain_wait '
+    +'（action=received，原 wait_id）登记接收，再用 brain_status/brain_delivery 读取原任务，'
     +'检查实际成果后通过 brain_review 记录真实验收。保留原 owner、项目与责任会话；'
     +'失败、取消、待恢复如实报告，不重新派发或绕过权限，尊重更新的用户指示。';
 }

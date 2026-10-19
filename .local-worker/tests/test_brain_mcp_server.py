@@ -55,9 +55,18 @@ class CountingHandler(BaseHTTPRequestHandler):
 class StdioClient:
     """Minimal real JSON-RPC 2.0 client over the MCP process's stdio."""
 
-    def __init__(self, args, timeout=15):
+    def __init__(self, args, timeout=15, *, cwd=None, env=None, registry_home=None):
+        command=[sys.executable,SERVER,*args]
+        if registry_home is not None:
+            # Test-only bootstrap redirects local switch reads into the same
+            # temporary fixture as the mock broker, never the live settings.
+            code=('import sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);'
+                  'import model_registry as r;r.HERE=Path(sys.argv[2]);'
+                  'r.REGISTRY=r.HERE/"models.json";r.RUNS=r.HERE/"runs";'
+                  'import brain_mcp_server as b;b.main(sys.argv[3:])')
+            command=[sys.executable,'-c',code,str(HERE),str(registry_home),*args]
         self.proc = subprocess.Popen(
-            [sys.executable, SERVER, *args], cwd=str(HERE),
+            command, cwd=str(cwd or HERE), env=env,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='replace', bufsize=1)
         self.messages = queue.Queue()

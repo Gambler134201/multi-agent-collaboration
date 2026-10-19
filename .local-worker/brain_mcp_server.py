@@ -14,10 +14,12 @@ capability stays in this process and is not returned by any tool.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import re
 import sys
+import threading
 
 import anyio
 from mcp import types
@@ -37,6 +39,7 @@ TOOL_DELIVERY = 'brain_delivery'
 TOOL_REVIEW = 'brain_review'
 TOOL_REWORK = 'brain_rework'
 TOOL_WAKE_PROBE = 'brain_wakeup_probe'
+TOOL_WAIT = 'brain_wait'
 
 TOOLS = (TOOL_CONNECT, TOOL_DESCRIBE, TOOL_CANDIDATES, TOOL_PREVIEW, TOOL_DISPATCH,
          TOOL_STATUS, TOOL_DELIVERY, TOOL_REVIEW, TOOL_REWORK)
@@ -45,6 +48,8 @@ _CONTEXT = None
 _TRANSPORT = None
 _PANEL_URL = brain_transport.DEFAULT_BASE_URL
 _TIMEOUT = 15
+_WAIT_LOCK = threading.RLock()
+_ACTIVE_WAIT = None
 
 
 def probe_available():
@@ -57,7 +62,7 @@ def probe_available():
 
 
 def available_tools():
-    return (*TOOLS,TOOL_WAKE_PROBE) if probe_available() else TOOLS
+    return (*TOOLS,TOOL_WAKE_PROBE,TOOL_WAIT) if probe_available() else TOOLS
 
 _CONNECT_HINT = ('模型工作台未连接。请先运行本机启动脚本（打开模型工作台）或 Codex 的 open_model_desk，'
                  '然后显式调用 brain_connect；本接口不会自动启动服务。')
@@ -211,11 +216,24 @@ def tool_definitions():
         tools.append(types.Tool(name=TOOL_WAKE_PROBE,title='原聊天自动唤醒探针',
             description=('仅在用户要求诊断时使用。start 后在约30秒及原聊天空闲时投递一次固定诊断事件，'
                          '应结束本轮，明确告知用户等待期间不要发消息或关闭DSH，90秒未收到可询问状态。'
-                         '不派发执行任务；本阶段不启用真实任务自动唤醒。收到事件后用received确认。'
+                         '不派发执行任务，不订阅业务任务；收到事件后用received确认。'
                          '不接受自定义消息、目标聊天、模型、项目或任意时间设置；未知结果不重试。'),
             inputSchema=_object({'action':{'type':'string','enum':['start','status','received','stop']},
                                  'probe_id':{'type':'string','pattern':'^probe-[0-9a-f]{32}$'}},required=('action',)),
             annotations=types.ToolAnnotations(title='原聊天唤醒探针',destructiveHint=False,
+                                              idempotentHint=True,openWorldHint=False)))
+        tools.append(types.Tool(name=TOOL_WAIT,title='订阅原任务完成通知',
+            description=('DSH 原聊天后台等待：先完成本批派发，再 start 一次并给出全部原 task_ids；'
+                         '不派发、不阻塞等待模型。仅 waiting=true 才告知用户正在后台等待并结束本轮，'
+                         '完成后由本地监听投递一次。收到事件用 received + 原 wait_id 登记，再独立验收。'
+                         'status 只用于用户询问或诊断，不周期轮询；stop 只停通知，不取消任务。'
+                         '失败/取消/待恢复会如实通知，不代表通过。启动或投递结果未知不重派、不自动重试。'
+                         '不接受项目、owner、目标聊天、模型或消息参数；关闭/重启 DSH 后不保证唤醒。'),
+            inputSchema=_object({'action':{'type':'string','enum':['start','status','received','stop']},
+                'task_ids':{'type':'array','minItems':1,'maxItems':32,'uniqueItems':True,
+                            'items':{'type':'string','maxLength':80}},
+                'wait_id':{'type':'string','pattern':'^wait-[0-9a-f]{24}$'}},required=('action',)),
+            annotations=types.ToolAnnotations(title='订阅原任务完成通知',destructiveHint=False,
                                               idempotentHint=True,openWorldHint=False)))
     return tools
 
@@ -254,7 +272,8 @@ def _connect():
 def _describe():
     return {'connected': _connected(), 'context': _CONTEXT.public(),
             'tools': list(available_tools()),
-            'wakeup':{'probe_available':probe_available(),'task_completion_enabled':False},
+            'wakeup':{'probe_available':probe_available(),'task_completion_enabled':probe_available(),
+                      'wait_tool':TOOL_WAIT if probe_available() else None},
             'limits': {'mutations_require_session_binding': True,
                        'brain_vs_executor_from_launch': True,
                        'project_owner_from_launch': True,
@@ -321,8 +340,77 @@ def _ok(result, text):
                                 structuredContent=result)
 
 
+def _wait(arguments):
+    """Bound local controller operation; broker read access is not mutation authority."""
+    global _ACTIVE_WAIT
+    _strict(arguments,('action','task_ids','wait_id'),'wait')
+    if not probe_available() or not _CONTEXT.mutations_allowed:
+        raise ValueError('原聊天完成通知通道未绑定')
+    action=arguments.get('action')
+    if action not in {'start','status','received','stop'}:raise ValueError('未知完成通知操作')
+    task_ids=arguments.get('task_ids');wait_id=arguments.get('wait_id')
+    if action=='start':
+        if wait_id is not None or not isinstance(task_ids,list) or not 1<=len(task_ids)<=32:
+            raise ValueError('start 需要 1 至 32 个原 task_ids，不接受 wait_id')
+        task_ids=[brain_context.clean_task_id(value) for value in task_ids]
+        if len(set(task_ids))!=len(task_ids):raise ValueError('不能重复登记任务编号')
+    elif (task_ids is not None or not isinstance(wait_id,str)
+          or not re.fullmatch(r'wait-[0-9a-f]{24}',wait_id)):
+        raise ValueError('需要原 wait_id，不接受 task_ids')
+    _call('describe',{})  # explicit connected capability must still be valid
+    import completion_wait as wait
+    with _WAIT_LOCK:
+        if action=='start':
+            import workflow_settings
+            settings=workflow_settings.snapshot()
+            if not settings.get('readable') or not settings.get('enabled'):
+                raise ValueError('协作开关未开启，未启动新通知；原任务没有取消或重派')
+            # The backend authorizes project history reads, while the core also
+            # requires the exact original owner/binding before writing anything.
+            for task_id in task_ids:
+                result=_call('status',{'task_id':task_id})
+                if (result.get('access') or {}).get('mode')!='original_owner':
+                    raise ValueError('历史只读不授予完成通知权限；需要原主脑责任会话')
+            expected=wait.batch_id(_CONTEXT.project,_CONTEXT.native_session.value,task_ids)
+            if _ACTIVE_WAIT and _ACTIVE_WAIT!=expected:
+                previous=wait.load(_CONTEXT.project,_ACTIVE_WAIT)
+                if previous.get('listener_status') in {'starting','listening','waiting_chat_idle'}:
+                    raise ValueError('当前聊天已有等待批次；请沿用原订阅或明确停止通知，不能并行订阅多个批次')
+            try:
+                data=wait.arm(_CONTEXT.project,task_ids)
+            except (OSError,ValueError,RuntimeError):
+                if not (wait.paths(_CONTEXT.project,expected)/'subscription.json').is_file():raise
+                _ACTIVE_WAIT=expected
+                return _error('后台监听启动未确认；请检查原通知，不自动恢复、重试、重派或取消任务。',
+                    outcome='unknown',wait_id=expected,task_ids=task_ids,waiting=False,automatic_retry=False)
+            _ACTIVE_WAIT=data['id']
+        else:
+            data={'status':wait.status,'received':wait.received,'stop':wait.stop}[action](_CONTEXT.project,wait_id)
+    # Deliberately do not project source hashes, PIDs, private pipe capability,
+    # binding material or task content. Receipt is never an acceptance decision.
+    public={key:data.get(key) for key in ('project','host','thread_id','task_ids','phase',
+              'listener_status','send_attempts','heartbeat_at','receipt_at','label')}
+    listening=data.get('listener_status') in {'listening','waiting_chat_idle'}
+    alive=wait.process_alive(data.get('watcher_pid')) if listening else False
+    try:
+        age=(datetime.now(timezone.utc)-datetime.fromisoformat(data.get('heartbeat_at') or '')).total_seconds()
+        fresh=0<=age<=30
+    except (ValueError,TypeError):fresh=False
+    confirmed=alive is True and fresh
+    public.update(wait_id=data['id'],waiting=listening and confirmed,
+                  received=bool(data.get('receipt_at')),automatic_retry=False,
+                  listener_health='confirmed' if confirmed else 'unconfirmed' if listening else 'inactive',
+                  records_acceptance=False,cancels_tasks=False)
+    if action=='received':public['next']='接收已登记；现在独立验收原任务，不再次登记或通知。'
+    elif action=='stop':public['next']='已停止通知，执行任务没有取消；不要重派或自动恢复通知。'
+    elif public['waiting']:public['next']='后台监听已确认；告知用户正在等待，结束本轮，完成后只唤醒一次再独立验收。'
+    else:public['next']='按实际通知状态处理；保留原 task/wait 编号，不重派、不自动重试；通知不等于验收。'
+    return _ok(public,'已返回原聊天完成通知状态；未派发、取消或验收任务。')
+
+
 def _run(name, arguments):
     arguments = arguments or {}
+    if name == TOOL_WAIT:return _wait(arguments)
     if name == TOOL_WAKE_PROBE:
         _strict(arguments,('action','probe_id'),'wakeup_probe')
         if not probe_available() or not _CONTEXT.mutations_allowed:
@@ -360,6 +448,8 @@ def _run(name, arguments):
             raise ValueError('dispatch 需要 1 到 20 条验收条件')
         result = _call('dispatch', arguments)
         task = result.get('task') or {}
+        if probe_available():result={**result,'completion_wait':{'tool':TOOL_WAIT,'action':'start',
+            'task_ids':[task.get('task_id')],'note':'完成本批派发后订阅一次；仅 waiting=true 才结束本轮等待，不重复派发。'}}
         return _ok(result, '已异步派发任务 %s；读取状态/交付不会重复派发。' % task.get('task_id'))
     if name == TOOL_STATUS:
         _strict(arguments, ('task_id',), 'status')
@@ -375,7 +465,11 @@ def _run(name, arguments):
         return _ok(_call('review', arguments), '已记录验收操作；不会自动重试。')
     if name == TOOL_REWORK:
         _strict(arguments, ('request_id', 'parent_task_id'), 'rework')
-        return _ok(_call('rework', arguments), '已派发一次整改（如原请求未重复）。')
+        result=_call('rework', arguments)
+        if probe_available():result={**result,'completion_wait':{'tool':TOOL_WAIT,'action':'start',
+            'task_ids':[(result.get('task') or {}).get('task_id')],
+            'note':'新整改任务使用新的通知批次；旧订阅不重发。仅 waiting=true 才结束本轮等待。'}}
+        return _ok(result, '已派发一次整改（如原请求未重复）。')
     raise ValueError('未知的主脑工具')
 
 
