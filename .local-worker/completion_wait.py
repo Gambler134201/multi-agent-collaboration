@@ -20,7 +20,7 @@ import subprocess
 import sys
 import time
 
-import desktop_notify as desktop
+import completion_host as desktop
 import model_registry as registry
 import project_storage as storage
 
@@ -30,7 +30,7 @@ ACTIVE = {'queued', 'running'}
 TERMINAL = {'completed', 'failed', 'cancelled'}
 STOPPED = {'delivered', 'received', 'host_rejected', 'delivery_unknown', 'stopped', 'route_refused', 'version_changed'}
 LABELS = {'waiting_execution': '正在等待执行模型完成', 'waiting_chat_idle': '执行已结束，等待聊天空闲后通知',
-          'awaiting_review': '执行已结束，待 GPT 独立验收', 'reviewing': '执行已结束，GPT 正在独立验收',
+          'awaiting_review': '执行已结束，待主脑独立验收', 'reviewing': '执行已结束，主脑正在独立验收',
           'accepted': '任务已完成，独立验收通过', 'returned': '已退回整改',
           'needs_attention': '需要处理，请检查任务与通知状态', 'stopped': '自动通知已暂停，执行任务未被取消'}
 
@@ -110,7 +110,15 @@ def task_record(project, task_id):
 
 def digest():
     return {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
-            for name in ('completion_wait.py', 'desktop_notify.py')}
+            for name in ('completion_wait.py', 'desktop_notify.py','completion_host.py','dsh_notify.py')}
+
+
+def owned_task(data,task_id):
+    task=task_record(data['project'],task_id)
+    if data.get('host','codex')=='dsh' and any((task.get('brain') or {}).get(key)!=data.get(key)
+                                               for key in ('owner','binding_key')):
+        raise ValueError('任务原主脑责任绑定已变化，拒绝通知或改写记录')
+    return task
 
 
 def preflight(project):
@@ -125,7 +133,8 @@ def preflight(project):
         raise ValueError('桌面聊天与项目绑定未确认，未启用后台通知')
     if not observed.get('turns'):
         raise ValueError('桌面回合身份未确认，未启用后台通知')
-    return {'project': project, 'thread_id': identity, 'control_turn_id': observed['turns'][0]['id']}
+    return {'project': project, 'thread_id': identity, 'control_turn_id': observed['turns'][0]['id'],
+            'host':desktop.host_id(),**desktop.authorization_context()}
 
 
 def load(project, wait_id):
@@ -134,6 +143,10 @@ def load(project, wait_id):
         raise ValueError('通知记录身份不一致')
     if data.get('thread_id') != desktop.calling_thread():
         raise ValueError('仅原聊天可以操作其通知')
+    if data.get('host','codex')!=desktop.host_id():
+        raise ValueError('通知属于另一个宿主；不会回退投递')
+    if desktop.host_id()=='dsh' and any(data.get(key)!=value for key,value in desktop.authorization_context().items()):
+        raise ValueError('DSH 通知责任归属已变化')
     task_ids = data.get('task_ids', [])
     if not isinstance(task_ids, list) or not 1 <= len(task_ids) <= 32:
         raise ValueError('通知批次身份无效')
@@ -147,7 +160,9 @@ def load(project, wait_id):
 
 
 def batch_id(project, identity, task_ids):
-    key = json.dumps([storage.key(project), identity, sorted(task_ids)], separators=(',', ':'))
+    parts=[storage.key(project), identity, sorted(task_ids)]
+    if desktop.host_id()!='codex':parts.insert(0,desktop.host_id())
+    key = json.dumps(parts, separators=(',', ':'))
     return 'wait-' + hashlib.sha256(key.encode()).hexdigest()[:24]
 
 
@@ -162,7 +177,7 @@ def project_status(data):
     value['label'] = LABELS.get(data.get('phase'), LABELS['needs_attention'])
     for task_id in data['task_ids']:
         try:
-            task = task_record(data['project'], task_id)  # Never patch a cross-project run.
+            task = owned_task(data,task_id)  # Never patch another responsibility.
             if (task.get('completion_wait') or {}).get('id') not in {None, data['id']}:
                 continue
             registry.patch_task(safe_child(data['project'], 'runs', task_id), completion_wait=value)
@@ -210,6 +225,10 @@ def arm(project, task_ids, context=None):
     project = storage.normalize(project)
     if not same_path(context['project'], project) or context['thread_id'] != desktop.calling_thread():
         raise ValueError('通知调用身份不一致')
+    if context.get('host','codex')!=desktop.host_id():raise ValueError('通知宿主不一致')
+    authorization=desktop.authorization_context()
+    if any(context.get(key)!=value for key,value in authorization.items()):
+        raise ValueError('通知责任绑定不一致')
     task_ids = sorted(set(task_ids))
     if not 1 <= len(task_ids) <= 32:
         raise ValueError('一次通知需要 1 至 32 个明确的任务编号')
@@ -222,10 +241,13 @@ def arm(project, task_ids, context=None):
             return {**existing, 'existing': True}  # Never start a duplicate watcher.
         for task_id in task_ids:
             task = task_record(project, task_id)
+            if any((task.get('brain') or {}).get(key)!=value for key,value in authorization.items()):
+                raise ValueError('只能订阅原主脑及责任会话的任务；历史只读不授予通知权限')
             owner = (task.get('completion_wait') or {}).get('id')
             if owner and owner != wait_id:
                 raise ValueError('任务已经属于另一通知批次，拒绝重复唤醒')
         data = {'schema': 1, 'id': wait_id, 'project': project, 'thread_id': context['thread_id'],
+                'host':desktop.host_id(),**authorization,
                 'control_turn_id': context['control_turn_id'], 'task_ids': task_ids,
                 'created_at': now(), 'phase': 'waiting_execution', 'listener_status': 'starting',
                 'send_attempts': 0, 'source_hashes': digest(), 'automatic_retry': False}
@@ -291,7 +313,7 @@ def run(project, wait_id, *, sleeper=time.sleep, poll_seconds=1):
                 return _finish(data, 'version_changed', 'needs_attention')
             data['heartbeat_at'] = now()
             try:
-                tasks = [task_record(project, task_id) for task_id in data['task_ids']]
+                tasks = [owned_task(data,task_id) for task_id in data['task_ids']]
                 ready = evaluate(tasks)
             except (OSError, ValueError, RuntimeError):
                 # Bounded local record retries, then one attention event. Do not
@@ -332,7 +354,7 @@ def run(project, wait_id, *, sleeper=time.sleep, poll_seconds=1):
                 if data['source_hashes'] != digest():
                     return _finish(data, 'version_changed', 'needs_attention')
                 try:
-                    ready_now = evaluate([task_record(project, task_id) for task_id in data['task_ids']])
+                    ready_now = evaluate([owned_task(data,task_id) for task_id in data['task_ids']])
                 except (OSError, ValueError, RuntimeError):
                     ready_now = 'needs_attention'
                 if ready_now is None:
@@ -375,7 +397,7 @@ def received(project, wait_id):
         if not (root / 'send.claim').exists() or data.get('send_attempts') != 1:
             raise ValueError('没有匹配的投递尝试，不能登记接收')
         try:
-            result = evaluate([task_record(project, task_id) for task_id in data['task_ids']])
+            result = evaluate([owned_task(data,task_id) for task_id in data['task_ids']])
         except (OSError, ValueError, RuntimeError):
             result = 'needs_attention'
         data.update(receipt_at=now(), listener_status='received',
@@ -387,7 +409,7 @@ def received(project, wait_id):
 
 def status(project, wait_id):
     data = load(project, wait_id)
-    tasks = [task_record(project, task_id) for task_id in data['task_ids']]
+    tasks = [owned_task(data,task_id) for task_id in data['task_ids']]
     import delegation_policy
     reviews = [delegation_policy.load(safe_child(project, 'runs', t['id'])) for t in tasks]
     if reviews and all(review and review.get('state') in {'accepted', 'final_accepted'} for review in reviews):

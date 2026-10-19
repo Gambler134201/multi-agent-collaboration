@@ -4,7 +4,7 @@
  * Optional DSH native main-brain adapter for the local Model Desk workbench.
  *
  * This file is a prebuilt CommonJS Cordis plugin. It does not start the
- * workbench, call a model, read authentication data, or write DSH/workbench
+ * workbench, read authentication data, or write DSH/workbench
  * configuration. On every top-level Agent creation it binds that exact native
  * session (session id + session header id + realpath of the native cwd) to one
  * agent-scoped stdio MCP client for the already-running `brain_mcp_server.py`.
@@ -13,10 +13,13 @@
  * Agent/session identity. Tool calls cannot change them. A first binding is
  * fixed for this plugin instance: later native identity or project drift makes
  * the binding fail closed instead of silently moving ownership.
+ * Ordinary loading/waiting never invokes a model. An explicitly requested
+ * wakeup probe admits one fixed native followup, which starts a new model turn.
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const {createBridge} = require('./wakeup.cjs');
 const { spawnSync, execFile } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { pathToFileURL, fileURLToPath } = require('node:url');
@@ -45,6 +48,7 @@ const BRAIN_TOOLS = Object.freeze([
   'brain_delivery',
   'brain_review',
   'brain_rework',
+  'brain_wakeup_probe',
 ]);
 const BRAIN_TOOL_SET = new Set(BRAIN_TOOLS);
 const MUTATING_TOOLS = new Set(['brain_dispatch', 'brain_rework']);
@@ -571,6 +575,7 @@ function buildRules(config, identity) {
     `- 派发时使用稳定 request_id，并通过 ${prefix}brain_dispatch 快速取得原任务 ID。工具参数不能修改项目、角色、拥有者或会话。`,
     '- 同一 request_id 同内容会取回原任务，不同内容会被拒绝。结果未知或重复时保持原 request/task，不要换 ID 重发。',
     '- 当前插件尚未接通自动唤醒或后台续接。派发后不要承诺“完成会自动回来”，也不要周期性轮询主脑模型；需要时由用户或后续聊天轮次读取 status/delivery。',
+    '- 仅用户明确要求诊断时使用 brain_wakeup_probe。start 确认监听后说明约30秒等待、请用户暂不发消息或关闭DSH，90秒未收到可询问状态；然后结束本轮。收到探针后先 received 确认，仅回复已收到；此探针不代表真实任务自动唤醒已启用。',
     '',
     '### 验收与整改',
     '- 每条验收条件都需要主脑独立证据（reviewer_file / reviewer_test / reviewer_inspection）；执行器自报不能单独让条件通过。',
@@ -699,6 +704,7 @@ async function mountMcp(state, binding) {
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
       PYTHONUNBUFFERED: '1',
+      ...(binding.wakeup ? binding.wakeup.environment() : {}),
     },
     cwd: binding.identity.project,
     toolCallTimeoutMs: config.toolCallTimeoutMs,
@@ -735,6 +741,7 @@ async function disposeBinding(binding) {
   binding.invalid = true;
   binding.desiredRules = false;
   binding.disposePromise = (async () => {
+    if(binding.wakeup)await binding.wakeup.dispose();
     try {
       await binding.ruleQueue;
     } catch {
@@ -802,7 +809,7 @@ function guardTool(binding, exec) {
       binding.disableRulesNow();
       return '原生会话身份或项目已漂移；主脑绑定保持原归属并拒绝全部主脑工具。';
     }
-    if (MUTATING_TOOLS.has(raw)) {
+    if (MUTATING_TOOLS.has(raw) || (raw==='brain_wakeup_probe'&&exec.arguments?.action==='start')) {
       if (binding.ruleError) return '主脑协作规则未就绪，拒绝新的派发或整改。';
       // Re-read the existing workflow_settings --status on every mutation. The
       // backend validates again; this guard never trusts a cached allow flag.
@@ -882,6 +889,19 @@ async function installBinding(state, agent, identity) {
   const binding = makeBinding(state, agent, record);
   state.bindings.set(identity.id, binding);
   try {
+    if(typeof agent.followup==='function'){
+      try{
+        binding.wakeup=createBridge({agent,identity:record,
+          isCurrent:()=>!binding.disposed&&!binding.invalid&&verifyBinding(state,binding)
+            &&isTopLevel(state.ctx,agent),
+          enabled:()=>{const status=readStatusSync(state.config);return status.readable&&status.enabled;}});
+        await binding.wakeup.start();
+      }catch(_){
+        if(binding.wakeup)await binding.wakeup.dispose();
+        binding.wakeup=null;
+        state.log('warn','原聊天唤醒探针通道未就绪；普通主脑工具保持可用。');
+      }
+    }
     binding.guardDisposer = agent.ctx.tools.guard((exec) => guardTool(binding, exec));
     binding.preStepDisposer = agent.ctx.on(
       'agent/pre-step',

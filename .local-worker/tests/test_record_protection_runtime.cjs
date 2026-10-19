@@ -66,6 +66,8 @@ const HELPER = [
   '    preset = preset_runtime.load(model, dsh_worker.EXECUTABLE)',
   '    patch = dsh_worker.build_patch(model, req["kind"], preset, record_root=project)',
   '    patch[3]["config"]["workspaceRoot"] = str(project)',
+  '    if req.get("extra_plugin"):',
+  '        patch.append({"insert": [{"name": req["extra_plugin"], "config": req.get("extra_config") or {}}]})',
   '    Path(req["patch"]).write_text(yaml.dump(patch, Dumper=preset_runtime.Dumper, allow_unicode=True, sort_keys=False), encoding="utf-8")',
   '    job = dict(dsh_worker.availability())',
   '    job.update({"task_id": req["task_id"], "kind": req["kind"], "model": model["model"], "cwd": str(project),',
@@ -441,7 +443,8 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+module.exports={makeSandbox,helper,startProvider};
+if(require.main===module)main().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exitCode = 1;
 });

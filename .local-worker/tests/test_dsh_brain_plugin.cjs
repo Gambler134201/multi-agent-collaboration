@@ -289,6 +289,24 @@ async function flush() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+test('native wake pipe is private to the bound MCP and closes on disposal',async t=>{
+  const f=fixture(t),agent=makeAgent('native-wakeup-chat',f.project);
+  agent.followup=()=>{};agent.status='idle';agent.inbox={hasPending:false};
+  const ctx=await applyPlugin(t,f,{agents:[agent]});
+  const env=agent.ctx.mounts[0].config.env;
+  assert.equal(env.MODEL_DESK_COMPLETION_HOST,'dsh');
+  assert.match(env.MODEL_DESK_DSH_WAKE_TOKEN,/^[0-9a-f]{64}$/);
+  assert.equal(env.MODEL_DESK_DSH_WAKE_SESSION,agent.id);
+  assert.ok(!JSON.stringify(currentRules(agent).text({agent,scope:agent})).includes(env.MODEL_DESK_DSH_WAKE_TOKEN));
+  // The pipe closes with this exact Agent; another Agent does not inherit it.
+  await ctx.__fire('agent/disposed',{agent});
+  assert.equal(agent.ctx.mounts[0].disposed,true);
+  await assert.rejects(new Promise((resolve,reject)=>{
+    const socket=require('node:net').connect(env.MODEL_DESK_DSH_WAKE_PIPE);
+    socket.on('connect',()=>{socket.destroy();resolve();});socket.on('error',reject);
+  }));
+});
+
 test('binds one top-level native chat and mounts one agent-scoped MCP client', async (t) => {
   const f = fixture(t);
   const agent = makeAgent('native-chat-1', f.project);

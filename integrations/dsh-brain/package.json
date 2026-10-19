@@ -1,6 +1,6 @@
 {
   "name": "model-desk-dsh-brain",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "description": "Optional DSH native main-brain adapter for the local Model Desk workbench",
   "license": "MIT",
@@ -10,6 +10,7 @@
     ".": "./index.cjs",
     "./account": "./account.cjs",
     "./account.cjs": "./account.cjs",
+    "./wakeup.cjs": "./wakeup.cjs",
     "./client": "./client.mjs",
     "./index.cjs": "./index.cjs",
     "./client.mjs": "./client.mjs",
@@ -22,6 +23,7 @@
   "files": [
     "index.cjs",
     "account.cjs",
+    "wakeup.cjs",
     "client.mjs",
     "cordis.patch.yml",
     "LICENSE",

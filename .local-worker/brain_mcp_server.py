@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 
 import anyio
@@ -34,6 +36,7 @@ TOOL_STATUS = 'brain_status'
 TOOL_DELIVERY = 'brain_delivery'
 TOOL_REVIEW = 'brain_review'
 TOOL_REWORK = 'brain_rework'
+TOOL_WAKE_PROBE = 'brain_wakeup_probe'
 
 TOOLS = (TOOL_CONNECT, TOOL_DESCRIBE, TOOL_CANDIDATES, TOOL_PREVIEW, TOOL_DISPATCH,
          TOOL_STATUS, TOOL_DELIVERY, TOOL_REVIEW, TOOL_REWORK)
@@ -42,6 +45,19 @@ _CONTEXT = None
 _TRANSPORT = None
 _PANEL_URL = brain_transport.DEFAULT_BASE_URL
 _TIMEOUT = 15
+
+
+def probe_available():
+    if _CONTEXT is None or _CONTEXT.host!='dsh' or _CONTEXT.role!='brain':return False
+    try:
+        import dsh_notify
+        config=dsh_notify.config()
+        return config['SESSION']==_CONTEXT.native_session.value and config['OWNER']==_CONTEXT.owner
+    except ValueError:return False
+
+
+def available_tools():
+    return (*TOOLS,TOOL_WAKE_PROBE) if probe_available() else TOOLS
 
 _CONNECT_HINT = ('模型工作台未连接。请先运行本机启动脚本（打开模型工作台）或 Codex 的 open_model_desk，'
                  '然后显式调用 brain_connect；本接口不会自动启动服务。')
@@ -82,7 +98,7 @@ _CRITERIA = {
 
 
 def tool_definitions():
-    return [
+    tools = [
         types.Tool(
             name=TOOL_CONNECT, title='显式连接主脑控制器',
             description=('显式连接已经运行的本机模型工作台，登记受信启动上下文并取得进程内私有连接能力。'
@@ -191,6 +207,17 @@ def tool_definitions():
                                               idempotentHint=True, openWorldHint=False),
         ),
     ]
+    if probe_available():
+        tools.append(types.Tool(name=TOOL_WAKE_PROBE,title='原聊天自动唤醒探针',
+            description=('仅在用户要求诊断时使用。start 后在约30秒及原聊天空闲时投递一次固定诊断事件，'
+                         '应结束本轮，明确告知用户等待期间不要发消息或关闭DSH，90秒未收到可询问状态。'
+                         '不派发执行任务；本阶段不启用真实任务自动唤醒。收到事件后用received确认。'
+                         '不接受自定义消息、目标聊天、模型、项目或任意时间设置；未知结果不重试。'),
+            inputSchema=_object({'action':{'type':'string','enum':['start','status','received','stop']},
+                                 'probe_id':{'type':'string','pattern':'^probe-[0-9a-f]{32}$'}},required=('action',)),
+            annotations=types.ToolAnnotations(title='原聊天唤醒探针',destructiveHint=False,
+                                              idempotentHint=True,openWorldHint=False)))
+    return tools
 
 
 # -------------------------------------------------------------------- transport
@@ -226,7 +253,8 @@ def _connect():
 
 def _describe():
     return {'connected': _connected(), 'context': _CONTEXT.public(),
-            'tools': list(TOOLS),
+            'tools': list(available_tools()),
+            'wakeup':{'probe_available':probe_available(),'task_completion_enabled':False},
             'limits': {'mutations_require_session_binding': True,
                        'brain_vs_executor_from_launch': True,
                        'project_owner_from_launch': True,
@@ -295,6 +323,20 @@ def _ok(result, text):
 
 def _run(name, arguments):
     arguments = arguments or {}
+    if name == TOOL_WAKE_PROBE:
+        _strict(arguments,('action','probe_id'),'wakeup_probe')
+        if not probe_available() or not _CONTEXT.mutations_allowed:
+            raise ValueError('原聊天唤醒诊断通道未就绪或责任会话未绑定')
+        action=arguments.get('action')
+        probe_id=arguments.get('probe_id')
+        if action not in {'start','status','received','stop'}:
+            raise ValueError('未知唤醒诊断操作')
+        if action=='start' and probe_id is not None:raise ValueError('start 不接受其他探针编号')
+        if action!='start' and (not isinstance(probe_id,str) or not re.fullmatch(r'probe-[0-9a-f]{32}',probe_id)):
+            raise ValueError('需要明确的原探针编号')
+        _call('describe',{})  # stale broker capability must be reconnected explicitly
+        import dsh_notify
+        return _ok(dsh_notify.probe(action,probe_id),'已返回原聊天唤醒诊断状态；不是任务执行或验收。')
     if name == TOOL_CONNECT:
         _strict(arguments, (), 'connect')
         return _ok(_connect(), '已显式连接本机主脑控制器；私有连接能力仅保存在本进程内。')
@@ -348,7 +390,7 @@ def build_server():
 
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict):
-        if name not in TOOLS:
+        if name not in available_tools():
             return _error('未知的主脑工具')
         try:
             return await anyio.to_thread.run_sync(lambda: _run(name, arguments))
@@ -412,6 +454,13 @@ def configure(args):
         native_session=args.native_session_id,
         operator_session=args.session_id, session_binding=args.session_binding,
         launcher=args.launcher)
+    if os.environ.get('MODEL_DESK_COMPLETION_HOST')=='dsh':
+        import dsh_notify
+        config=dsh_notify.config()
+        if (_CONTEXT.host!='dsh' or _CONTEXT.role!='brain'
+                or config['SESSION']!=_CONTEXT.native_session.value or config['OWNER']!=_CONTEXT.owner):
+            raise ValueError('DSH 通知通道与主脑启动身份不一致')
+        os.environ['MODEL_DESK_DSH_WAKE_BINDING']=_CONTEXT.binding_key
     _TRANSPORT = None
     return _CONTEXT
 

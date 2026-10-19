@@ -34,7 +34,8 @@ class DesktopTests(unittest.TestCase):
         self.base = Path(self.temp.name).resolve()
         self.root = self.base / 'workbench'
         (self.root / '.local-worker').mkdir(parents=True)
-        for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py', 'workflow_settings.py', 'host_balance.py'):
+        for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py', 'workflow_settings.py', 'host_balance.py',
+                     'completion_wait.py','desktop_notify.py','completion_host.py','dsh_notify.py'):
             (self.root / '.local-worker' / name).write_bytes(b'# temporary fixture\n')
         self.home = self.base / 'dsh-home'
         self.profile = self.home / 'profiles' / 'desktop'
@@ -104,7 +105,7 @@ class DesktopTests(unittest.TestCase):
         with tarfile.open(self.folder / 'plugin.tgz') as archive:
             manifest = json.loads(archive.extractfile('package/package.json').read())
             client = archive.extractfile('package/client.mjs').read()
-        self.assertEqual(manifest['version'], '0.2.4')
+        self.assertEqual(manifest['version'], '0.2.5')
         self.assertEqual(set(manifest['files']), set(setup.FILES) - {'package.json'})
         self.assertEqual(manifest['exports']['./client'], './client.mjs')
         self.assertEqual(manifest['exports']['./account'], './account.cjs')
