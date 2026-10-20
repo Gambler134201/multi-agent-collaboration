@@ -403,6 +403,30 @@ class EndToEndLoopTests(unittest.TestCase):
         for name,data in before.items():
             self.assertEqual((run/name).read_bytes(),data)
 
+    def test_attention_task_status_error_is_visible_without_dispatch_or_review(self):
+        self.client.call('brain_connect')
+        dispatched = self.client.call('brain_dispatch', {
+            'request_id': 'attention-status', 'prompt': 'Fixture only', 'kind': 'edit',
+            'model_id': 'mock', 'files': ['a.py'], 'acceptance': ['criterion one']})
+        task_id = payload(dispatched)['task']['task_id']
+        run = registry.task_dir(task_id, str(self.project))
+        for state in ('failed', 'cancelled', 'recovery_pending'):
+            error = 'fixture error: ' + state
+            registry.patch_task(run, status=state, error=error)
+            before = (run / 'task.json').read_bytes()
+            for tool in ('brain_status', 'brain_delivery'):
+                result = self.client.call(tool, {'task_id': task_id})
+                self.assertFalse(result['isError'], text(result))
+                self.assertEqual(visible_payload(result)['execution_error'], error)
+                self.assertEqual(visible_payload(result), payload(result))
+                if tool == 'brain_status':
+                    self.assertEqual(payload(result)['error'], error)
+                else:
+                    self.assertFalse(payload(result)['accepted'])
+            self.assertEqual((run / 'task.json').read_bytes(), before)
+        self.assertEqual(self.submitted, [task_id])
+        assert_native_projection(self, self.client.tool_responses)
+
     def test_full_mock_loop_connect_preview_dispatch_deliver_return_rework_accept(self):
         described = self.client.call('brain_describe')
         self.assertEqual(visible_payload(described)['context']['role'], 'brain')

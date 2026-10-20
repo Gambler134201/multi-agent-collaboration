@@ -254,6 +254,47 @@ class BrainHttpTests(unittest.TestCase):
             with self.assertRaises(brain_transport.OutcomeUnknown):
                 transport.call('dispatch', {'request_id':'malformed-1'})
 
+    def test_failed_task_error_is_status_data_and_delivery_exposes_it(self):
+        transport, _ = self.connect()
+        dispatched = transport.call('dispatch', {
+            'request_id': 'failed-status', 'prompt': 'Mock only', 'kind': 'edit',
+            'model_id': 'mock', 'files': ['a.py'], 'acceptance': ['criterion one']})
+        task_id = dispatched['task']['task_id']
+        run = registry.task_dir(task_id, str(self.project))
+        registry.patch_task(run, status='failed', error='expected fixture connection reset')
+        before = (run / 'task.json').read_bytes()
+        status = transport.call('status', {'task_id': task_id})
+        self.assertEqual(status['error'], 'expected fixture connection reset')
+        self.assertEqual(status['execution_error'], status['error'])
+        delivery = transport.call('delivery', {'task_id': task_id})
+        self.assertEqual(delivery['execution_error'], status['error'])
+        self.assertFalse(delivery['accepted'])
+        self.assertEqual((run / 'task.json').read_bytes(), before)
+        self.assertEqual(self.submitted, [task_id])
+
+    def test_error_envelopes_and_malformed_status_still_refused(self):
+        transport, _ = self.connect()
+        invalid = [
+            {'error': 'controller error'},
+            {'task_id': 'x', 'error': 'missing status'},
+            {'task_id': 'x', 'status': [], 'error': 'wrong status type'},
+            {'task_id': 3, 'status': 'failed', 'error': 'wrong id type'},
+            {'task_id': 'x', 'status': 'failed', 'error': {'unexpected': 'object'}},
+            {'task_id': 'x', 'status': 'failed', 'error': 'denied', 'outcome': 'rejected'},
+        ]
+        for data in invalid:
+            with self.subTest(data=data), mock.patch.object(transport, '_request', return_value=(200, data)):
+                with self.assertRaises(brain_transport.TransportError):
+                    transport.call('status', {'task_id': 'x'})
+
+    def test_task_like_error_does_not_relax_mutation_validation(self):
+        transport, _ = self.connect()
+        data = {'task': {'task_id': 'x'}, 'error': 'ambiguous response'}
+        with mock.patch.object(transport, '_request', return_value=(200, data)) as request:
+            with self.assertRaises(brain_transport.OutcomeUnknown):
+                transport.call('dispatch', {'request_id': 'task-like-error'})
+            request.assert_called_once()
+
     def test_reflected_connection_credential_is_redacted(self):
         transport, _ = self.connect()
         private = transport._capability

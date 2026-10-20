@@ -123,13 +123,22 @@ def _scrub(value, *credentials):
 
 
 def _valid_result(operation, data):
-    if not isinstance(data, dict) or data.get('error'):
+    if not isinstance(data, dict):
+        return False
+    if operation == 'status':
+        # Status exposes the executor's failure as data.error. It is not an
+        # RPC error envelope; HTTP/auth/unknown-outcome checks still run first.
+        return (isinstance(data.get('task_id'), str) and bool(data['task_id'])
+                and isinstance(data.get('status'), str) and bool(data['status'])
+                and (data.get('error') is None or isinstance(data.get('error'), str))
+                and not data.get('outcome'))
+    if data.get('error'):
         return False
     if operation in ('dispatch', 'rework'):
         return isinstance(data.get('task'), dict) and bool(data['task'].get('task_id'))
     if operation == 'review':
         return isinstance(data.get('receipt'), dict) and isinstance(data['receipt'].get('review'), dict)
-    if operation in ('status', 'delivery'):
+    if operation == 'delivery':
         return bool(data.get('task_id')) and 'status' in data
     if operation == 'candidates':
         return isinstance(data.get('models'), list)

@@ -569,6 +569,7 @@ def _status(context, payload):
             'kind': task.get('kind'), 'files': task.get('files') or [],
             'created_at': task.get('created_at'), 'started_at': task.get('started_at'),
             'ended_at': task.get('ended_at'), 'error': _text(task.get('error'), 1500),
+            'execution_error': _text(task.get('error'), 1500),
             'review': delegation_policy.panel_summary(record) if record else None,
             'review_error': _text(error, 500),
             'note': '状态读取不等待模型、不重复派发；工具超时不是任务总时限。'}
@@ -627,6 +628,7 @@ def _delivery(context, payload):
                          'changed_files': executor.get('changed_files') or [],
                          'test': executor.get('test')},
             'answer': answer[:MAX_ANSWER], 'answer_truncated': truncated,
+            'execution_error': _text(task.get('error'), 1500),
             'review_state': (record or {}).get('state'),
             'review': delegation_policy.panel_summary(record) if record else None,
             'review_error': _text(review_error, 500),
