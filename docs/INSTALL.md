@@ -155,6 +155,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -InstallRules
 
 - 仓库里的 `.local-worker\workflow-guides\*.md` 是**模板**，用 `@ROOT@` 表示自己的位置。安装时 `@ROOT@` 会被绑定成真实安装目录，规则正文和它链接的操作指南都不会残留未解析的 `@ROOT@`。
 - 操作指南的解析副本写在规则文件旁边的 `model-desk-workflow-guides\` 目录，每次安装重写。
+
+- 首次用户回复前，全局规则调用同一 Python 下的 `collaboration_status.py --project "受信调用项目的绝对目录"`，展示与通用主脑预检一致的状态行。该只读 CLI 不启动工作台/模型，不创建项目记录；关闭、未知项目、无候选和失败均有不同提示。规则更新后用新聊天验证，已有聊天不保证重载。跨主脑更新约定见 [CROSS_HOST_FEATURES.md](CROSS_HOST_FEATURES.md)。
 - 只改动 `<!-- model-desk-workflow:start/end -->` 之间的托管块；已有非托管指令原样保留，首次写入前会备份原文件。托管标记不完整时会报错并要求你先检查文件。
 - 执行器路径环境变量修改后，需要重新启动工作台和对应命令进程才能加载。
 - 规则改动后**已有会话不会自动加载**：新建会话或重载客户端。

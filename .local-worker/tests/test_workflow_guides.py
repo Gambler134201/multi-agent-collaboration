@@ -21,6 +21,9 @@ class WorkflowGuideTests(unittest.TestCase):
                          'trusted calling project', 'Never initialize Git', 'Read only the operation-specific guide'):
             self.assertIn(required, text)
         self.assertNotIn('@ROOT@', text)
+        self.assertIn('collaboration_status.py --project', text)
+        self.assertIn('show `user_signal.text`', text)
+        self.assertIn('errors mean not ready', text)
 
     def test_incomplete_markers_preserve_original(self):
         with tempfile.TemporaryDirectory() as directory:

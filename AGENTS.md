@@ -13,3 +13,7 @@ Do not publish runtime configuration, secrets, logs, sessions or account data.
 ## Git workflow
 
 Read `docs/GIT_WORKFLOW.md`. Develop on short-lived branches in isolated worktrees, inspect staged paths and diffs, and run meaningful offline checks before committing or proposing a merge. Preserve user modifications and the published portable installation. The local `baseline/*` recovery history must not be pushed or merged into public branches; migrate only reviewed changes onto branches based on `main`. Do not auto-stash, hard-reset, destructively clean or force-push. Worktree isolation does not isolate ports, accounts or databases; do not copy runtime keys/records or start real model work as a regression test. Git housekeeping does not authorize service deployment or public publishing.
+
+## Shared features across brain hosts
+
+Shared collaboration behavior belongs in the host-neutral core and must be connected and checked for every supported brain host (currently Codex and DSH). Check `docs/CROSS_HOST_FEATURES.md` when changing shared behavior. Host-specific entrypoints, accounts and wakeup hooks remain adapters; explicitly state their limits. New hosts must adopt the common startup signal and applicable shared behavior as part of their acceptance. Do not call a feature globally complete while an adapter is missing or only simulated. Keep model/Agent defaults, project isolation and user settings intact; record offline checks separately from native human verification.
