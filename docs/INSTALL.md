@@ -135,6 +135,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -RegisterMcp
 
 详细边界与自测范围见 `docs/MAIN_BRAIN_CORE.md`。
 
+### 5.2 可选：DSH 原生主脑插件
+
+在 DSH 里日常使用时，优先按 [DSH 安装与使用](DSH_USAGE.md) 安装 desktop 插件。它自动从所属原生聊天取得项目/会话身份，不需要把上面的固定项目示例配置到所有聊天。主脑插件与 DSH/Pi 执行器分开安装。
+
+当前已安装并原生验证的是 0.2.6 加配套后台修复；本开发分支准备 0.2.7 发布候选，不代表已经安装或公开发布。候选插件仍需匹配的完整工作台源码，不能只更新八文件包而保留不兼容后台；版本和验收范围见 [发布说明](DSH_RELEASE.md)。
+
 ## 6. 可选：安装全局协作规则
 
 规则是可选的，只影响当前 Windows 用户的规则目录（默认 `CODEX_HOME`，否则用户目录下的 `.codex`）。

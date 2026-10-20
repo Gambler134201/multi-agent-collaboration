@@ -1,6 +1,6 @@
 {
   "name": "model-desk-dsh-brain",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "description": "Optional DSH native main-brain adapter for the local Model Desk workbench",
   "license": "MIT",

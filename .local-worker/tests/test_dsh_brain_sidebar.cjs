@@ -122,7 +122,7 @@ function bodyProps(definition, sessionId, snapshot, calls, throws = false) {
 test('package manifest exposes the client half beside the Host bundle', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(PACKAGE, 'package.json'), 'utf8'));
   assert.equal(manifest.name, 'model-desk-dsh-brain');
-  assert.equal(manifest.version, '0.2.6');
+  assert.equal(manifest.version, '0.2.7');
   assert.equal(manifest.exports['./client'], './client.mjs');
   assert.equal(manifest.exports['.'], './index.cjs');
   assert.ok(manifest.files.includes('client.mjs'));
