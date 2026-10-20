@@ -73,6 +73,14 @@ function makeContext(snapshot) {
     subscribe: () => () => {},
   };
   const ctx = {
+    connection: {rpc: {async call(channel, endpoint, payload) {
+      assert.equal(channel, '/model-desk-dsh-brain');
+      assert.equal(endpoint, 'open');
+      const url = new URL('http://127.0.0.1:8765/?host=dsh');
+      if (payload.sessionId !== null) url.searchParams.set('project', snapshot.byId[payload.sessionId].cwd);
+      else url.searchParams.set('view', 'unbound');
+      return {ok: true, value: {url: url.toString()}};
+    }}},
     effect(fn) {
       const cleanup = fn();
       if (typeof cleanup === 'function') disposers.push(cleanup);
@@ -122,7 +130,7 @@ function bodyProps(definition, sessionId, snapshot, calls, throws = false) {
 test('package manifest exposes the client half beside the Host bundle', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(PACKAGE, 'package.json'), 'utf8'));
   assert.equal(manifest.name, 'model-desk-dsh-brain');
-  assert.equal(manifest.version, '0.2.7');
+  assert.equal(manifest.version, '0.2.8');
   assert.equal(manifest.exports['./client'], './client.mjs');
   assert.equal(manifest.exports['.'], './index.cjs');
   assert.ok(manifest.files.includes('client.mjs'));
@@ -166,7 +174,7 @@ test('the prepared origin marker becomes the browser target origin', () => {
 test('guide entry and body are registered with one Chinese sidebar type', () => {
   const react = fakeReact();
   const plugin = loadClient(react);
-  assert.deepEqual([...plugin.inject], ['slots', 'sessions', 'sidebarRightTabs']);
+  assert.deepEqual([...plugin.inject], ['slots', 'sessions', 'sidebarRightTabs', 'connection']);
   const { ctx, types, slots, disposers } = makeContext({ phase: 'ready', byId: {} });
   plugin.apply(ctx);
 
@@ -220,7 +228,7 @@ test('only an absolute native session cwd becomes an encoded project URL', () =>
   assert.equal(plugin._test.isAbsoluteProjectPath('C:work'), false);
 });
 
-test('ready body replaces itself with the native browser tab exactly once', () => {
+test('ready body replaces itself with the native browser tab exactly once', async () => {
   const react = fakeReact();
   const plugin = loadClient(react);
   const snapshot = { phase: 'ready', byId: { s1: { cwd: 'E:\\work\\one' } } };
@@ -231,6 +239,7 @@ test('ready body replaces itself with the native browser tab exactly once', () =
   const tree = slots[0].component(props);
   assert.equal(calls.length, 0, 'rendering alone does not open anything');
   for (const effect of react.effects) effect();
+  await new Promise(setImmediate);
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'browser');
   assert.equal(calls[0][1].replaceTab, true);
@@ -240,7 +249,7 @@ test('ready body replaces itself with the native browser tab exactly once', () =
   assert.equal(tree.type, 'div');
 });
 
-test('unknown identity stays unbound and offers an explicit unselected action', () => {
+test('unknown identity stays unbound and offers an explicit unselected action', async () => {
   const react = fakeReact();
   const plugin = loadClient(react);
   const snapshot = { phase: 'ready', byId: { s1: { cwd: 'relative/work' } } };
@@ -255,6 +264,7 @@ test('unknown identity stays unbound and offers an explicit unselected action', 
   const button = tree.children.find((child) => child.type === 'button');
   assert.ok(button);
   button.props.onClick();
+  await new Promise(setImmediate);
   assert.equal(calls.length, 1);
   const opened = new URL(calls[0][1].params.url);
   assert.equal(opened.searchParams.has('project'), false);
@@ -273,7 +283,7 @@ test('Windows client does not bind current-drive-rooted directories', () => {
     { cwd: '/srv/work' }, 's1', 'ready').status, 'ready');
 });
 
-test('two tabs in two sessions keep their own projects and tab actions', () => {
+test('two tabs in two sessions keep their own projects and tab actions', async () => {
   const react = fakeReact();
   const plugin = loadClient(react);
   const snapshot = {
@@ -288,12 +298,13 @@ test('two tabs in two sessions keep their own projects and tab actions', () => {
     slots[0].component(props);
   }
   for (const effect of react.effects) effect();
+  await new Promise(setImmediate);
   assert.equal(calls.length, 2);
   const projects = calls.map((call) => new URL(call[1].params.url).searchParams.get('project'));
   assert.deepEqual(projects, ['E:\\work\\one', 'E:\\work\\two']);
 });
 
-test('failure view retries with the same native target', () => {
+test('failure view retries with the same native target', async () => {
   const react = fakeReact('无法打开原生右侧栏浏览器。');
   const plugin = loadClient(react);
   const snapshot = { phase: 'ready', byId: { s1: { cwd: 'E:\\work' } } };
@@ -306,12 +317,13 @@ test('failure view retries with the same native target', () => {
   const button = tree.children.find((child) => child.type === 'button');
   assert.ok(button);
   button.props.onClick();
+  await new Promise(setImmediate);
   assert.equal(calls.length, 1);
   assert.equal(calls[0][0], 'browser');
   assert.equal(new URL(calls[0][1].params.url).searchParams.get('project'), 'E:\\work');
 });
 
-test('missing native browser becomes an explanatory failure, not an exception', () => {
+test('missing native browser becomes an explanatory failure, not an exception', async () => {
   const react = fakeReact();
   const plugin = loadClient(react);
   const snapshot = { phase: 'ready', byId: { s1: { cwd: 'E:\\work' } } };
@@ -323,7 +335,43 @@ test('missing native browser becomes an explanatory failure, not an exception', 
     slots[0].component(props);
     for (const effect of react.effects) effect();
   });
+  await new Promise(setImmediate);
   assert.equal(calls.length, 1);
   assert.equal(react.states.length, 1);
-  assert.match(react.states[0].updates[0], /原生右侧栏浏览器/);
+  assert.match(react.states[0].updates[0], /browser kind unavailable/);
+});
+
+test('native browser waits for host bootstrap confirmation and does not navigate after unmount', async () => {
+  const react = fakeReact();
+  const plugin = loadClient(react);
+  const snapshot = {phase: 'ready', byId: {s1: {cwd: 'E:\\work'}}};
+  const {ctx, slots} = makeContext(snapshot);
+  plugin.apply(ctx);
+  const calls = [];
+  const props = bodyProps(slots[0].definition, 's1', snapshot, calls);
+  let release;
+  props.ensureWorkbench = () => new Promise(resolve => {release = resolve;});
+  slots[0].component(props);
+  const cleanup = react.effects[0]();
+  assert.equal(calls.length, 0);
+  cleanup();
+  release({ok: true, value: {url: 'http://127.0.0.1:8765/?host=dsh&project=E%3A%5Cwork'}});
+  await new Promise(setImmediate);
+  assert.equal(calls.length, 0, 'a closed/switched tab cannot navigate after delayed readiness');
+});
+
+test('host startup failure stays in the explanatory view rather than opening a broken page', async () => {
+  const react = fakeReact();
+  const plugin = loadClient(react);
+  const snapshot = {phase: 'ready', byId: {s1: {cwd: 'E:\\work'}}};
+  const {ctx, slots} = makeContext(snapshot);
+  plugin.apply(ctx);
+  const calls = [];
+  const props = bodyProps(slots[0].definition, 's1', snapshot, calls);
+  props.ensureWorkbench = async () => ({ok: false, error: {message: 'another workspace owns port'}});
+  slots[0].component(props);
+  react.effects[0]();
+  await new Promise(setImmediate);
+  assert.equal(calls.length, 0);
+  assert.match(react.states[0].updates[0], /another workspace owns port/);
 });

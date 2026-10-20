@@ -232,6 +232,46 @@ class ResultTextTests(unittest.TestCase):
         self.assertEqual(visible_payload(result), data)
 
 
+class PreflightTests(unittest.TestCase):
+    def test_explicit_native_preflight_can_bootstrap_and_return_disabled_switch_honestly(self):
+        with tempfile.TemporaryDirectory() as folder:
+            context = brain.brain_context.build_context(folder, 'dsh', 'fixture',
+                operator_session='fixture-chat', session_binding='user_bound')
+            candidates = {'workflow': {'readable': True, 'enabled': False}, 'models': []}
+            with mock.patch.object(brain, '_CONTEXT', context), \
+                 mock.patch.object(brain, '_ALLOW_SERVICE_START', True), \
+                 mock.patch.object(brain, '_connected', return_value=False), \
+                 mock.patch.object(brain, '_connect') as connect, \
+                 mock.patch.object(brain, '_call', return_value=candidates), \
+                 mock.patch('panel_service.ensure_service') as start:
+                result = brain._run('brain_preflight', {})
+            data = result.structuredContent
+            self.assertFalse(data['dispatch_allowed_by_switch'])
+            self.assertFalse(data['task_dispatched'])
+            self.assertFalse(data['model_called'])
+            self.assertEqual(list(Path(folder).iterdir()), [])
+            start.assert_called_once()
+            connect.assert_called_once()
+
+    def test_ordinary_preflight_does_not_start_service(self):
+        with tempfile.TemporaryDirectory() as folder:
+            context = brain.brain_context.build_context(folder, 'other-host', 'fixture')
+            with mock.patch.object(brain, '_CONTEXT', context), \
+                 mock.patch.object(brain, '_ALLOW_SERVICE_START', False), \
+                 mock.patch.object(brain, '_connected', return_value=False), \
+                 mock.patch.object(brain, '_connect'), \
+                 mock.patch.object(brain, '_call', return_value={'workflow': {'enabled': True, 'readable': True}}), \
+                 mock.patch('panel_service.ensure_service') as start:
+                brain._run('brain_preflight', {})
+            start.assert_not_called()
+
+    def test_old_backend_without_workflow_snapshot_is_not_inferred_enabled(self):
+        with mock.patch.object(brain, '_connected', return_value=True), \
+             mock.patch.object(brain, '_call', return_value={'models': []}), \
+             self.assertRaisesRegex(ValueError, '缺少预检状态'):
+            brain._run('brain_preflight', {})
+
+
 class StdioProtocolTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -265,7 +305,7 @@ class StdioProtocolTests(unittest.TestCase):
             self.assertEqual(initialized['result']['serverInfo']['name'], 'model-desk-brain')
             tools = {tool['name']: tool for tool in client.list_tools()}
             self.assertEqual(set(tools), set(brain.TOOLS))
-            self.assertEqual(len(tools), 9)
+            self.assertEqual(len(tools), 10)
             for name, tool in tools.items():
                 self.assertFalse(tool['inputSchema'].get('additionalProperties', True),
                                  name)
@@ -433,6 +473,10 @@ class EndToEndLoopTests(unittest.TestCase):
         connected = self.client.call('brain_connect')
         self.assertFalse(connected['isError'])
         self.assertTrue(payload(connected)['connected'])
+        preflight = visible_payload(self.client.call('brain_preflight'))
+        self.assertTrue(preflight['workflow']['enabled'])
+        self.assertEqual(preflight['context']['project'], str(self.project))
+        self.assertEqual(self.submitted, [])
         self.assertNotIn('capability', json.dumps(payload(connected)).lower())
 
         candidates = payload(self.client.call('brain_candidates'))

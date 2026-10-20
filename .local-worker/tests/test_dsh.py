@@ -86,7 +86,9 @@ class DshTests(unittest.TestCase):
             project=str(registry.HERE), files=['sample.py'], dsh_session_key='desk-original', dsh_session_id='native-id')
         body = {'model_id': 'home', 'kind': 'edit', 'engine': 'dsh', 'project': str(registry.HERE),
                 'files': ['sample.py'], 'prompt': 'continue', 'continue_task': 'original'}
-        with patch.object(panel.EXECUTOR, 'submit') as queued:
+        # This checks continuation identity/scope, not a live DSH installation.
+        with patch.object(panel.EXECUTOR, 'submit') as queued, \
+             patch.object(dsh_worker, 'availability', return_value={'ready': True}):
             child = panel.submit_task(body)
             self.assertEqual(child['dsh_session_key'], 'desk-original')
             self.assertEqual(child['parent_task_id'], 'original')

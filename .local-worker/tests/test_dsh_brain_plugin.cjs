@@ -307,6 +307,76 @@ test('native wake pipe is private to the bound MCP and closes on disposal',async
   }));
 });
 
+test('native open starts only on explicit authenticated RPC and binds each session independently', async t => {
+  const f = fixture(t), a = makeAgent('open-a', f.project), b = makeAgent('open-b', f.project);
+  const ctx = createRootCtx([a, b]);
+  let starts = 0, release;
+  const handle = PLUGIN._test.createWorkbenchHandler(ctx, f.config, () => {
+    starts += 1;
+    return new Promise(resolve => {release = resolve;});
+  });
+  assert.equal(starts, 0, 'constructing/registration never starts service');
+  const first = handle('open', {sessionId: a.id});
+  const second = handle('open', {sessionId: b.id});
+  assert.equal(starts, 1, 'concurrent explicit opens share one bootstrap');
+  release({ready: true, started: true});
+  const results = await Promise.all([first, second]);
+  for (const result of results) {
+    assert.equal(result.ok, true);
+    assert.equal(new URL(result.value.url).searchParams.get('project'), f.projectReal);
+    assert.equal(new URL(result.value.url).searchParams.get('host'), 'dsh');
+  }
+  for (const payload of [{sessionId: 'missing'}, {sessionId: a.id, project: 'other'}, {sessionId: a.id, command: 'x'}]) {
+    assert.equal((await handle('open', payload)).ok, false);
+  }
+  assert.equal(starts, 1);
+});
+
+test('new chats get short activation facts; disabled collaboration injects no dispatch instruction', async t => {
+  const f = fixture(t);
+  setStatus(f, {enabled: true, readable: true, model_scope: 'local_only'});
+  const first = makeAgent('first-new-chat', f.project);
+  const second = makeAgent('second-new-chat', f.project);
+  const contexts = new Map();
+  for (const agent of [first, second]) {
+    agent.ctx.systemPrompt.context = section => {
+      contexts.set(agent, section);
+      return () => contexts.delete(agent);
+    };
+  }
+  const ctx = await applyPlugin(t, f, {agents: [first]});
+  ctx.__agents.push(second);
+  await ctx.__fire('agent/created', {agent: second});
+  for (const agent of [first, second]) {
+    const text = contexts.get(agent).text({agent, scope: agent});
+    assert.match(text, /总开关：开/);
+    assert.match(text, /local_only/);
+    assert.match(text, /brain_preflight/);
+    assert.match(text, /创作/);
+    assert.equal(contexts.get(agent).text({agent: {}, scope: agent}), '');
+  }
+  setStatus(f, {enabled: false, readable: true, model_scope: 'local_only'});
+  await firePreStep(second);
+  assert.equal(contexts.get(second).text({agent: second}), '');
+  assert.equal(guardCall(second, 'write'), undefined, 'ordinary host work is not globally blocked');
+  await ctx.__disposeAll();
+  assert.equal(contexts.size, 0);
+});
+
+test('native project drift during startup cannot open a stale project', async t => {
+  const f = fixture(t), agent = makeAgent('open-drift', f.project);
+  const ctx = createRootCtx([agent]);
+  let release;
+  const handle = PLUGIN._test.createWorkbenchHandler(ctx, f.config,
+    () => new Promise(resolve => {release = resolve;}));
+  const pending = handle('open', {sessionId: agent.id});
+  agent.session.header.cwd = f.dir;
+  release({ready: true, started: true});
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.match(result.error.message, /项目已变化/);
+});
+
 test('binds one top-level native chat and mounts one agent-scoped MCP client', async (t) => {
   const f = fixture(t);
   const agent = makeAgent('native-chat-1', f.project);

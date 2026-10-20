@@ -8,7 +8,8 @@ call can never override them.
 
 Importing this module, MCP ``initialize``, ``tools/list`` and ``brain_describe``
 perform no socket I/O and never start the workbench.  Only an explicit
-``brain_connect`` contacts an already-running local controller; the private
+``brain_connect`` contacts an already-running local controller. An explicit
+``brain_preflight`` may bootstrap it only when the trusted launcher allows it; the private
 capability stays in this process and is not returned by any tool.
 """
 from __future__ import annotations
@@ -30,6 +31,7 @@ import brain_context
 import brain_transport
 
 TOOL_CONNECT = 'brain_connect'
+TOOL_PREFLIGHT = 'brain_preflight'
 TOOL_DESCRIBE = 'brain_describe'
 TOOL_CANDIDATES = 'brain_candidates'
 TOOL_PREVIEW = 'brain_route_preview'
@@ -41,11 +43,12 @@ TOOL_REWORK = 'brain_rework'
 TOOL_WAKE_PROBE = 'brain_wakeup_probe'
 TOOL_WAIT = 'brain_wait'
 
-TOOLS = (TOOL_CONNECT, TOOL_DESCRIBE, TOOL_CANDIDATES, TOOL_PREVIEW, TOOL_DISPATCH,
+TOOLS = (TOOL_CONNECT, TOOL_PREFLIGHT, TOOL_DESCRIBE, TOOL_CANDIDATES, TOOL_PREVIEW, TOOL_DISPATCH,
          TOOL_STATUS, TOOL_DELIVERY, TOOL_REVIEW, TOOL_REWORK)
 
 _CONTEXT = None
 _TRANSPORT = None
+_ALLOW_SERVICE_START = False
 _PANEL_URL = brain_transport.DEFAULT_BASE_URL
 _TIMEOUT = 15
 _WAIT_LOCK = threading.RLock()
@@ -104,6 +107,14 @@ _CRITERIA = {
 
 def tool_definitions():
     tools = [
+        types.Tool(
+            name=TOOL_PREFLIGHT, title='主脑协作预检',
+            description=('一次取得当前项目/会话归属、协作总开关、模型范围、候选和就绪状态。'
+                         '未连接时显式连接；仅经原生 DSH 启动配置允许时可按需启动本机工作台。'
+                         '不调用模型、不派发、不修改开关或预算，不代替任务能力判断和独立验收。'),
+            inputSchema=_object({}),
+            annotations=types.ToolAnnotations(destructiveHint=False, openWorldHint=False),
+        ),
         types.Tool(
             name=TOOL_CONNECT, title='显式连接主脑控制器',
             description=('显式连接已经运行的本机模型工作台，登记受信启动上下文并取得进程内私有连接能力。'
@@ -410,6 +421,26 @@ def _wait(arguments):
 
 def _run(name, arguments):
     arguments = arguments or {}
+    if name == TOOL_PREFLIGHT:
+        _strict(arguments, (), 'preflight')
+        if not _connected():
+            if _ALLOW_SERVICE_START:
+                import panel_service
+                panel_service.ensure_service(_PANEL_URL)
+            _connect()
+        candidates = _call('candidates', {})
+        workflow = candidates.get('workflow')
+        if not isinstance(workflow, dict):
+            raise ValueError('工作台后台缺少预检状态字段；请升级匹配后台，不推断协作开关')
+        enabled = workflow.get('readable') is True and workflow.get('enabled') is True
+        return _ok({'connected': True, 'context': _CONTEXT.public(),
+                    'workflow': workflow, 'candidates': candidates,
+                    'preflight_at': datetime.now(timezone.utc).isoformat(),
+                    'dispatch_allowed_by_switch': enabled,
+                    'note': ('开关允许新派发；按任务能力/风险评估候选，明确派发或自行处理理由。'
+                             if enabled else '开关关闭或不可读，不自动派发；已有任务仍可读取和验收。'),
+                    'model_called': False, 'task_dispatched': False},
+                   '已完成主脑协作预检；未执行任务或记录验收。')
     if name == TOOL_WAIT:return _wait(arguments)
     if name == TOOL_WAKE_PROBE:
         _strict(arguments,('action','probe_id'),'wakeup_probe')
@@ -529,6 +560,8 @@ def parse_args(argv=None):
     parser.add_argument('--panel-url', default=brain_transport.DEFAULT_BASE_URL,
                         help='已运行的本机模型工作台回环地址')
     parser.add_argument('--timeout', type=int, default=15, help='单次本机 HTTP 超时秒数')
+    parser.add_argument('--allow-service-start', action='store_true',
+                        help='受信原生入口允许显式 brain_preflight 按需启动工作台；发现工具不启动')
     args = parser.parse_args(argv)
     if args.session_binding == 'user_bound' and not args.session_id:
         parser.error('--session-binding user_bound 需要同时提供 --session-id')
@@ -539,7 +572,7 @@ def parse_args(argv=None):
 
 def configure(args):
     """Validate launch paths/settings without network I/O or service startup."""
-    global _CONTEXT, _PANEL_URL, _TIMEOUT, _TRANSPORT
+    global _CONTEXT, _PANEL_URL, _TIMEOUT, _TRANSPORT, _ALLOW_SERVICE_START
     _PANEL_URL = brain_transport.normalize_base_url(args.panel_url)
     _TIMEOUT = max(1, min(int(args.timeout or 15), 120))
     _CONTEXT = brain_context.build_context(
@@ -556,6 +589,7 @@ def configure(args):
             raise ValueError('DSH 通知通道与主脑启动身份不一致')
         os.environ['MODEL_DESK_DSH_WAKE_BINDING']=_CONTEXT.binding_key
     _TRANSPORT = None
+    _ALLOW_SERVICE_START = bool(getattr(args, 'allow_service_start', False))
     return _CONTEXT
 
 

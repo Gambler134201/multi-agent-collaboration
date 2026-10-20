@@ -1,12 +1,12 @@
 #Requires -Version 7.0
-param([switch]$NoBrowser)
+param([switch]$NoBrowser, [ValidateRange(1,65535)][int]$Port = 8765)
 
 $ErrorActionPreference = 'Stop'
 try {
     $panelLauncher = Join-Path $PSScriptRoot '启动模型面板.ps1'
     # Call the PowerShell script in this process. Capturing a nested native pwsh
     # can leave its output pipe inherited by the long-running background server.
-    & $panelLauncher | Out-Null
+    & $panelLauncher -Port $Port | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw '面板启动脚本未成功完成。'
     }

@@ -97,7 +97,7 @@ window.__ModuleLoader__.load({
     }
 
     function WorkbenchBody(props) {
-      const { sessionId, useSessionList, useTabInfo } = props;
+      const { sessionId, useSessionList, useTabInfo, ensureWorkbench } = props;
       const { tab } = useTabInfo();
       const row = useSessionList((snapshot) => (
         snapshot && snapshot.byId ? snapshot.byId[sessionId] : undefined
@@ -105,20 +105,30 @@ window.__ModuleLoader__.load({
       const phase = useSessionList((snapshot) => (snapshot && snapshot.phase) || 'pending');
       const target = resolveWorkbenchTarget(row, sessionId, phase);
       const opened = React.useRef(false);
+      const requestGeneration = React.useRef(0);
       const [failure, setFailure] = React.useState(null);
 
-      const open = (url) => {
+      const open = async (url) => {
+        const generation = ++requestGeneration.current;
         try {
+          if (typeof ensureWorkbench !== 'function') throw new Error('Host workbench bootstrap unavailable');
+          const result = await ensureWorkbench(target.status === 'ready' ? sessionId : null);
+          if (requestGeneration.current !== generation) return false;
+          if (!result?.ok) throw new Error(result?.error?.message || '工作台启动未确认');
+          const ready = new URL(result.value.url);
+          if (ready.origin !== originUrl().origin || ready.searchParams.get('host') !== HOST_CONTEXT)
+            throw new Error('工作台返回了不匹配的地址');
           // Replace this transient page with the native browser tab. The tab
           // action is bound to this tab's own session, so a background session
           // cannot borrow the on-screen session's project.
           tab.actions.openTab('browser', {
-            params: { url },
+            params: { url: ready.toString() },
             replaceTab: true,
           });
           return true;
-        } catch (_error) {
-          setFailure('无法打开原生右侧栏浏览器。请确认 DSH 已启用浏览器侧栏且当前会话可用后重试。');
+        } catch (error) {
+          if (requestGeneration.current !== generation) return false;
+          setFailure(`模型工作台未就绪：${String(error?.message || '原生打开失败').slice(0, 200)}。可手动重试；无需启动 Codex。`);
           return false;
         }
       };
@@ -127,6 +137,7 @@ window.__ModuleLoader__.load({
         if (opened.current || target.status !== 'ready') return;
         opened.current = true;
         open(target.url);
+        return () => {requestGeneration.current += 1; opened.current = false;};
       }, [target.status, target.url, tab.actions]);
 
       const style = {
@@ -209,13 +220,14 @@ window.__ModuleLoader__.load({
         key: TYPE_ID,
         inject: (sessionId) => ({
           sessionId,
+          ensureWorkbench: (id) => ctx.connection.rpc.call('/model-desk-dsh-brain', 'open', {sessionId: id}),
           hooks: { sessionList: ctx.sessions.list },
         }),
       }, WorkbenchBody)), 'model-desk-dsh-brain: sidebar workbench body');
     }
 
     return {
-      inject: ['slots', 'sessions', 'sidebarRightTabs'],
+      inject: ['slots', 'sessions', 'sidebarRightTabs', 'connection'],
       apply,
       _test: Object.freeze({
         TYPE_ID,

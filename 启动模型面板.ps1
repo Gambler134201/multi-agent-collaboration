@@ -1,6 +1,17 @@
 #Requires -Version 7.0
 param([int]$Port = 8765)
 $ErrorActionPreference = 'Stop'
+$panelHashAlgorithm = [Security.Cryptography.SHA256]::Create()
+try {
+    $panelLockKey = [BitConverter]::ToString($panelHashAlgorithm.ComputeHash(
+        [Text.Encoding]::UTF8.GetBytes($PSScriptRoot.ToLowerInvariant()))).Replace('-', '')
+} finally { $panelHashAlgorithm.Dispose() }
+$panelStartupMutex = [Threading.Mutex]::new($false, ('Local\ModelDeskStartup_' + $panelLockKey))
+$panelStartupLockHeld = $false
+try {
+    try { $panelStartupLockHeld = $panelStartupMutex.WaitOne([TimeSpan]::FromSeconds(15)) }
+    catch [Threading.AbandonedMutexException] { $panelStartupLockHeld = $true }
+    if (-not $panelStartupLockHeld) { throw '工作台正在由另一个入口启动；未重复创建进程，请稍后手动重试。' }
 $panelPython = Join-Path $PSScriptRoot '.local-worker\venv\Scripts\python.exe'
 $panelScript = Join-Path $PSScriptRoot '.local-worker\panel_server.py'
 $panelRuntime = Join-Path $PSScriptRoot '.local-worker\panel-runtime.json'
@@ -37,3 +48,7 @@ for ($panelAttempt = 0; $panelAttempt -lt 30; $panelAttempt++) {
     } catch {}
 }
 throw ('面板启动失败，请查看 ' + $panelStderr)
+} finally {
+    if ($panelStartupLockHeld) { $panelStartupMutex.ReleaseMutex() }
+    $panelStartupMutex.Dispose()
+}

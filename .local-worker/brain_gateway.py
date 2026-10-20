@@ -403,6 +403,9 @@ def _candidates(context, payload):
     else:
         default_note = '手动默认模型在范围内；省略 model_id 时仍使用该默认模型。'
     return {'models': rows, 'default_model': default_model,
+            'workflow': {key: settings.get(key) for key in
+                         ('enabled', 'readable', 'model_scope', 'paid_allowed',
+                          'enforce_paid_budget', 'enforce_model_call_limit', 'execution_agent')},
             'default_model_scope_ok': bool(default_row and default_row['scope_ok']),
             'default_model_note': default_note,
             'paid_allowed': paid_allowed,

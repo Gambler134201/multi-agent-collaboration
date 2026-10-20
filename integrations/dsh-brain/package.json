@@ -1,6 +1,6 @@
 {
   "name": "model-desk-dsh-brain",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "description": "Optional DSH native main-brain adapter for the local Model Desk workbench",
   "license": "MIT",
@@ -45,6 +45,7 @@
       "platform": "web",
       "immediately": true,
       "inject": [
+        "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-api-session-controller",
         "@deepseek-ai/dsh-client-ui-sidebar-right"
       ]

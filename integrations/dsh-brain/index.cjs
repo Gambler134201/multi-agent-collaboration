@@ -3,7 +3,7 @@
 /**
  * Optional DSH native main-brain adapter for the local Model Desk workbench.
  *
- * This file is a prebuilt CommonJS Cordis plugin. It does not start the
+ * This file is a prebuilt CommonJS Cordis plugin. Loading it does not start the
  * workbench, read authentication data, or write DSH/workbench
  * configuration. On every top-level Agent creation it binds that exact native
  * session (session id + session header id + realpath of the native cwd) to one
@@ -40,6 +40,7 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 const BRAIN_TOOLS = Object.freeze([
   'brain_connect',
+  'brain_preflight',
   'brain_describe',
   'brain_candidates',
   'brain_route_preview',
@@ -407,6 +408,8 @@ function parseStatus(result) {
   return {
     readable,
     enabled,
+    modelScope: ['all','paid_only','local_only'].includes(payload.model_scope) ? payload.model_scope : 'unknown',
+    paidAllowed: payload.paid_allowed === true,
     configuredEnabled: payload.enabled === true,
     error: errorText,
   };
@@ -553,6 +556,7 @@ function buildRules(config, identity) {
   const prefix = `mcp__${config.serverName}__`;
   return [
     '## 模型工作台主脑协作规则',
+    `新会话首次响应任何用户消息之前，第一项为 ${prefix}brain_preflight；它一次返回归属、总开关、范围和候选，不以编程、创作或闲聊分类跳过。后续新执行需求每轮预检一次。`,
     '',
     `本聊天绑定的项目来自 DSH 原生会话 header.cwd（严格 realpath）：${identity.project}。`,
     '该绑定由插件按当前原生聊天固定，不接受工具参数、cwd、安装目录或最近项目改写。',
@@ -569,7 +573,9 @@ function buildRules(config, identity) {
     '- 选择 model_id 时遵循保存的执行 Agent 和候选范围；不要自行更改执行 Agent、预算、次数或 runtime 默认值。',
     '',
     '### 派发',
-    `- 首次使用先调用 ${prefix}brain_connect；工作台未运行就明确报告“不可用”，不要自动启动服务，也不要伪造连接。`,
+    `- 每条新用户需求先调用一次 ${prefix}brain_preflight；经本原生入口允许时它按需启动/复用工作台，不调用模型、不派发。失败明确报告，不能伪造连接或不断重试。`,
+    '- 在计划或首次工作说明中简要写出“协作：开/关、范围、派发/自行处理及理由”。本轮已预检不重复预检；纯完成通知沿用原任务验收流程，不为验收重新派发。',
+    '- 调查实现、较长命令处理、生成文件、创作素材、文案或模型等都应纳入执行工作评估；能力匹配且范围明确时优先派发。简单一步、独立验收、核心风险判断或执行端能力不足可自做，并说明理由。不要只凭“创作不是编程”跳过。',
     `- 需要核对时先用 ${prefix}brain_candidates 和 ${prefix}brain_route_preview；不会调用模型。`,
     '- 新任务选型以真实候选的 scope_ok、selectable_model_ids 与 default_model_note 为准；默认模型在范围外，不代表范围内没有模型。派发时明确填写已核对的 model_id，不能自行换模型或修改全局默认。',
     '- 主脑和执行模型可以同名、同 provider，例如 DeepSeek 主脑派给独立 DeepSeek 执行会话；这不是执行器嵌套子代理，subagent deny 不排除普通执行候选。',
@@ -607,6 +613,7 @@ function makeBinding(state, agent, identity) {
     desiredRules: false,
     guardDisposer: null,
     preStepDisposer: null,
+    activationDisposer: null,
     mcpFiber: null,
     mountPromise: null,
     lastStatus: null,
@@ -684,6 +691,7 @@ function makeBinding(state, agent, identity) {
 function mcpArgs(config, identity) {
   return [
     config.brainMcpServer,
+    '--allow-service-start',
     '--project', identity.project,
     '--host', 'dsh',
     '--owner', identity.owner,
@@ -774,7 +782,8 @@ async function disposeBinding(binding) {
       binding.state.log('warn', 'MCP 卸载未确认，保留拒绝守卫，不复用此绑定。');
       throw error;
     }
-    const disposers = [binding.preStepDisposer, binding.guardDisposer];
+    const disposers = [binding.activationDisposer, binding.preStepDisposer, binding.guardDisposer];
+    binding.activationDisposer = null;
     binding.preStepDisposer = null;
     binding.guardDisposer = null;
     for (const disposer of disposers) {
@@ -841,20 +850,19 @@ function onPreStep(binding, payload, next) {
     let decision;
     // Preserve the host's decision and never reject ordinary chat just because
     // the collaboration switch is off. Enforcement lives in tools.guard.
-    if (typeof next === 'function') decision = await next();
     try {
-      if (!payload || payload.agent !== binding.agent) return decision;
-      if (binding.disposed || (payload && payload.signal && payload.signal.aborted)) return decision;
+      if (!payload || payload.agent !== binding.agent) return typeof next === 'function' ? next() : decision;
+      if (binding.disposed || (payload && payload.signal && payload.signal.aborted)) return typeof next === 'function' ? next() : decision;
       if (executorMarker()) {
         binding.invalid = true;
         binding.disableRulesNow();
-        return decision;
+        return typeof next === 'function' ? next() : decision;
       }
       if (!verifyBinding(binding.state, binding)) {
         binding.invalid = true;
         binding.disableRulesNow();
         binding.state.log('warn', '原生会话身份或项目漂移；保留原绑定并停止主脑能力。');
-        return decision;
+        return typeof next === 'function' ? next() : decision;
       }
       // Refresh rule visibility at the start of a turn (or when new input was
       // claimed). Every dispatch/rework still performs its own synchronous
@@ -870,7 +878,7 @@ function onPreStep(binding, payload, next) {
       binding.disableRulesNow();
       binding.state.log('warn', `主脑 pre-step 校验失败，规则按关闭处理：${safeMessage(error)}`);
     }
-    return decision;
+    return typeof next === 'function' ? next() : decision;
   };
   return run();
 }
@@ -918,6 +926,23 @@ async function installBinding(state, agent, identity) {
     binding.mounted = true;
     binding.lastStatus = await readStatus(state.config);
     await binding.setRules(binding.lastStatus.enabled);
+    // Runtime context is refreshed by the installed DSH loop after pre-step;
+    // ordinary prompt sections were assembled before that hook. Keep the
+    // short activation fact next to the current input, not only in long rules.
+    if (typeof agent.ctx.systemPrompt.context === 'function') {
+      binding.activationDisposer = agent.ctx.systemPrompt.context({
+        name: 'model-desk-collaboration-activation', order: 9000, interpolate: false,
+        text: (context) => {
+          const status = binding.lastStatus;
+          if (context?.agent !== agent || binding.disposed || binding.invalid
+              || !status?.readable || !status.enabled || !binding.mounted) return '';
+          return `【协作预检】总开关：开｜范围：${status.modelScope}｜项目：${record.project}\n`
+            + `新会话首次响应任何用户消息前，先调用 mcp__${state.config.serverName}__brain_preflight 一次；后续新执行需求每轮一次。`
+            + '取得真实候选后决定派发或说明自做理由；创作/生成文件也属于执行评估范围。'
+            + '本轮已有预检结果不重复调用；只接收原任务完成通知时直接走独立验收，不重新派发。';
+        },
+      });
+    }
   } catch (error) {
     binding.mountError = safeMessage(error);
     state.log('warn', `主脑 MCP/规则初始化失败，按不可用处理，不启动工作台：${binding.mountError}`);
@@ -1003,6 +1028,59 @@ async function onDisposed(state, payload) {
   }
 }
 
+function ensureWorkbench(config) {
+  return new Promise((resolve, reject) => {
+    execFile(config.python, [path.join(path.dirname(config.brainMcpServer), 'panel_service.py'),
+      '--ensure', '--panel-url', config.panelUrl], {
+      cwd: path.dirname(config.brainMcpServer), encoding: 'utf8',
+      timeout: 50_000, maxBuffer: 256 * 1024, windowsHide: true,
+    }, (error, stdout) => {
+      let result;
+      try { result = JSON.parse(String(stdout || '').trim()); } catch {}
+      if (error || !result?.ready) reject(new Error(result?.error || '工作台启动未确认；不自动重试或停止已有服务。'));
+      else resolve(result);
+    });
+  });
+}
+
+function createWorkbenchHandler(ctx, config, ensure = ensureWorkbench) {
+  let opening = null;
+  return async (endpoint, payload) => {
+    try {
+      if (endpoint !== 'open' || !payload || typeof payload !== 'object' || Array.isArray(payload)
+          || Object.keys(payload).some(key => key !== 'sessionId')) throw new Error('工作台打开参数无效');
+      let project = null;
+      let sourceSession = null;
+      let sourceAgent = null;
+      if (payload.sessionId !== null) {
+        if (!validNativeSessionId(payload.sessionId)) throw new Error('原生会话标识无效');
+        const agent = ctx.agents.get(payload.sessionId);
+        if (agent && !isTopLevel(ctx, agent)) throw new Error('不是顶层原生聊天');
+        const session = agent?.session || ctx.sessions?.get?.(payload.sessionId);
+        if (!session || session.id !== payload.sessionId || session.header?.id !== payload.sessionId)
+          throw new Error('当前原生会话尚未就绪；不猜测项目');
+        project = resolveProject(session.header.cwd);
+        if (!project) throw new Error('当前原生会话项目不可核实；不沿用其他项目');
+        sourceSession = session;
+        sourceAgent = agent;
+      }
+      if (!opening) opening = ensure(config).finally(() => {opening = null;});
+      const result = await opening;
+      if (sourceSession && (sourceSession.header?.id !== payload.sessionId
+          || resolveProject(sourceSession.header.cwd) !== project
+          || (sourceAgent && (ctx.agents.get(payload.sessionId) !== sourceAgent || !isTopLevel(ctx, sourceAgent)))))
+        throw new Error('启动期间原生会话或项目已变化；未打开旧目标，请手动重试');
+      const url = new URL('/', config.panelUrl);
+      url.searchParams.set('host', 'dsh');
+      if (project) url.searchParams.set('project', project);
+      else url.searchParams.set('view', 'unbound');
+      return {ok: true, value: {url: url.toString(), project, started: result.started === true}};
+    } catch (error) {
+      return {ok: false, error: {code: 'model-desk/open-unavailable', message: safeMessage(error)}};
+    }
+  };
+}
+
 function createInstance(ctx, config) {
   const state = {
     ctx,
@@ -1017,6 +1095,8 @@ function createInstance(ctx, config) {
     cleanupDisposer: null,
     modulePromise: null,
     account: null,
+    openDisposer: null,
+    openInjection: null,
     log: (level, message) => logWith(ctx, level, message),
   };
 
@@ -1050,6 +1130,10 @@ function createInstance(ctx, config) {
       }
       state.bindings.clear();
       state.pending.clear();
+      if (typeof state.openDisposer === 'function') await Promise.resolve(state.openDisposer());
+      if (state.openInjection?.dispose) await state.openInjection.dispose();
+      state.openDisposer = null;
+      state.openInjection = null;
       const disposers = [state.createdDisposer, state.disposedDisposer];
       state.createdDisposer = null;
       state.disposedDisposer = null;
@@ -1078,6 +1162,20 @@ function createInstance(ctx, config) {
 
   return {
     async start() {
+      const registerOpen = (rpcCtx) => {
+        if (state.disposed || state.openDisposer) return;
+        const connection = rpcCtx.connection;
+        if (typeof connection?.rpc?.handle === 'function') {
+          state.openDisposer = connection.rpc.handle('/model-desk-dsh-brain',
+            createWorkbenchHandler(ctx, config));
+        }
+      };
+      try {
+        if (ctx.webServer && typeof ctx.connection?.rpc?.handle === 'function') registerOpen(ctx);
+        else if (typeof ctx.inject === 'function') state.openInjection = ctx.inject(['connection', 'webServer'], registerOpen);
+      } catch (error) {
+        state.log('warn', `工作台原生打开通道不可用；保留主脑 MCP：${safeMessage(error)}`);
+      }
       state.createdDisposer = ctx.on('agent/created', (payload) => onCreated(state, payload));
       state.disposedDisposer = ctx.on('agent/disposed', (payload) => onDisposed(state, payload));
       state.cleanupDisposer = ctx.effect(function* cleanupEffect() {
@@ -1179,4 +1277,5 @@ module.exports._test = Object.freeze({
   publicToolName,
   rawBrainTool,
   resolveProject,
+  createWorkbenchHandler,
 });
