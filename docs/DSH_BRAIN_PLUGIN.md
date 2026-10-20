@@ -378,7 +378,7 @@ Codex 只读核对所属项目记录：两项的项目/owner/责任绑定与同�
 
 本轮同时暴露独立缺陷：brain_status 的成功响应包含执行失败文本 error，客户端却把任何非空 error 当成 RPC 错误，因而报告响应结构异常。用正式 stdio MCP/临时 HTTP 控制器复现后修正：status 校验任务结构并保留执行错误，HTTP/鉴权/unknown 检查仍先执行；其他操作的错误响应与变更不重试规则不放宽。status 保留兼容 error 字段，并与 delivery 一起新增 execution_error，交付读取也能说明实际失败原因。
 
-Python 定向 73 项通过；新增 failed/cancelled/recovery_pending 的正式状态/交付文本可见性、记录不变检查，并用安装版 DSH 客户端独立验证这些返回的投影。测试仅用临时记录和模拟执行，不调用真实模型。修复需要加载新的 brain_transport；当前常驻 MCP 进程不会因文件更新自动热重载。插件八文件及 0.2.6 版本不变，用户重新打开 DSH 后只需读取原失败任务，无需再做故障注入。原生修复后的工具读取另待确认。
+Python 定向 73 项通过；新增 failed/cancelled/recovery_pending 的正式状态/交付文本可见性、记录不变检查，并用安装版 DSH 客户端独立验证这些返回的投影。测试仅用临时记录和模拟执行，不调用真实模型。修复需要加载新的 brain_transport；当前常驻 MCP 进程不会因文件更新自动热重载。插件八文件及 0.2.6 版本不变，用户重新打开 DSH 后只需读取原失败任务，无需再做故障注入。2026-10-20 用户重新打开 DSH 后，只用正式工具读取同一失败任务，确认 status 与 delivery 均正常返回，error / execution_error 一致且非空，accepted=false、executor_failed 保持；未重新派发或登记通知。该原生读取由用户报告，Codex 另核对受保护的任务/通知/配置/插件等 17 个文件 hash 未变，关闭本项读取缺陷。
 
 ### 共享执行器保护修复（不变更主脑插件 0.2.4）
 
