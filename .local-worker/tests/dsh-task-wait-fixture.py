@@ -7,7 +7,7 @@ import time
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from test_brain_mcp_server import EndToEndLoopTests,StdioClient,payload
+from test_brain_mcp_server import EndToEndLoopTests,StdioClient,payload,registry,panel
 
 
 def main():
@@ -19,6 +19,7 @@ def main():
     # leak this DSH private pipe into that intentionally unbound host.
     clean={k:v for k,v in environment.items() if not k.startswith('MODEL_DESK_DSH_WAKE_') and k!='MODEL_DESK_COMPLETION_HOST'}
     case=EndToEndLoopTests('runTest')
+    owned_markers=[]
     with patch.dict(os.environ,clean,clear=True):case.setUp()
     try:
         case.client.close();case.project=project
@@ -39,6 +40,13 @@ def main():
             assert not result['isError'],result
             task_ids.append(payload(result)['task']['task_id'])
             assert payload(result)['completion_wait']['tool']=='brain_wait'
+            if index==0:
+                # Real reproduction: A is already executing when B arrives.
+                # Earlier fixtures left both queued and missed this guard.
+                registry.patch_task(registry.task_dir(task_ids[0],str(project)),
+                    status='running',started_at=registry.now())
+                with panel.ACTIVE_LOCK:panel.ACTIVE[task_ids[0]]=object()
+                owned_markers.append(task_ids[0])
         result=case.client.call('brain_wait',{'action':'start','task_ids':task_ids})
         assert not result['isError'],result
         subscription=payload(result);assert subscription['waiting'],subscription
@@ -52,7 +60,6 @@ def main():
             stopped=payload(case.client.call('brain_wait',{'action':'stop','wait_id':wait_id}))
             assert stopped['listener_status']=='stopped' and not stopped['cancels_tasks']
         if scenario in {'failed','cancelled','recovery_pending'}:
-            from test_brain_mcp_server import registry
             run=registry.task_dir(task_ids[1],str(project))
             registry.patch_task(run,status=scenario,phase='isolated fixture '+scenario,
                 ended_at=None if scenario=='recovery_pending' else registry.now())
@@ -97,7 +104,10 @@ def main():
         assert environment['MODEL_DESK_DSH_WAKE_TOKEN'] not in public
         print(json.dumps({'scenario':scenario,'formal_mcp':True,'mock_dispatches':len(task_ids),
             'completion_attempts':data['send_attempts'],'receipt':receipt['received'],'accepted':False,'real_models':False}))
-    finally:case.tearDown()
+    finally:
+        with panel.ACTIVE_LOCK:
+            for task_id in owned_markers:panel.ACTIVE.pop(task_id,None)
+        case.tearDown()
 
 
 if __name__=='__main__':main()

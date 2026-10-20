@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -13,6 +14,7 @@ import delegation_policy as policy
 import model_registry as registry
 import panel_server as panel
 import project_storage
+import brain_requests
 
 PROJECT = None
 
@@ -83,6 +85,69 @@ class BrokerTests(unittest.TestCase):
                  'evidence': [{'source': 'reviewer_file', 'detail': 'inspected a.py'}]}]
 
     # ------------------------------------------------------------------ tests
+
+    def test_current_queue_running_edit_allows_next_task_but_executes_serially(self):
+        from concurrent.futures import ThreadPoolExecutor
+        started = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        executed = []
+
+        def execute(task_id):
+            run = registry.task_dir(task_id, str(self.project))
+            with panel.ACTIVE_LOCK:
+                panel.ACTIVE[task_id] = object()
+            try:
+                registry.patch_task(run, status='running', started_at=registry.now())
+                executed.append(task_id)
+                if len(executed) == 1:
+                    started.set()
+                    if not release.wait(8):
+                        raise AssertionError('fixture release timeout')
+                registry.patch_task(run, status='completed', ended_at=registry.now())
+                if len(executed) == 2:
+                    finished.set()
+            finally:
+                with panel.ACTIVE_LOCK:
+                    panel.ACTIVE.pop(task_id, None)
+
+        capability = self.capability()
+        with ThreadPoolExecutor(max_workers=1) as pool, mock.patch.object(panel, 'EXECUTOR', pool), \
+             mock.patch.object(panel, 'execute_task', side_effect=execute):
+            try:
+                a = self.dispatch(capability, 'queue-a')['task']['task_id']
+                self.assertTrue(started.wait(3))
+                b = self.dispatch(capability, 'queue-b', files=['b.py'])['task']['task_id']
+                queued = registry.read_task(registry.task_dir(b, str(self.project)))
+                self.assertEqual(queued['status'], 'queued')
+                self.assertEqual(executed, [a])
+            finally:
+                release.set()
+            self.assertTrue(finished.wait(3))
+        self.assertEqual(executed, [a, b])
+
+    def test_unmanaged_running_edit_is_proven_rejection_not_unknown(self):
+        capability = self.capability()
+        a = self.dispatch(capability, 'foreign-a')['task']['task_id']
+        run = registry.task_dir(a, str(self.project))
+        task = registry.patch_task(run, status='running')
+        with self.assertRaisesRegex(brain_gateway.BrokerError, '未创建新任务'):
+            self.dispatch(capability, 'foreign-b', files=['b.py'])
+        state = brain_requests.status(str(self.project), task['brain']['binding_key'], 'foreign-b')
+        self.assertEqual(state['state'], 'rejected')
+        self.assertEqual(state['task_id'], '')
+        with self.assertRaises(brain_gateway.BrokerError):
+            self.dispatch(capability, 'foreign-b', files=['b.py'])
+        self.assertEqual(self.submitted, [a])
+
+    def test_unclassified_dispatch_valueerror_remains_unknown_and_is_not_replayed(self):
+        capability = self.capability()
+        with mock.patch.object(panel, 'submit_task', side_effect=ValueError('fixture unknown')) as submit:
+            with self.assertRaises(brain_requests.UnknownOutcome):
+                self.dispatch(capability, 'unknown-value')
+            with self.assertRaises(brain_requests.UnknownOutcome):
+                self.dispatch(capability, 'unknown-value')
+            submit.assert_called_once()
 
     def test_registration_returns_private_capability_and_public_context_only(self):
         registered = brain_gateway.register_connection(self.context().declaration())

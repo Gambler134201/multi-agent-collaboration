@@ -62,6 +62,10 @@ class ReviewRefused(ValueError):
     """
 
 
+class DispatchRefused(ValueError):
+    """A proven refusal before task creation/queue submission, never mid-effect."""
+
+
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="model-task")
 ACTIVE = {}
 ACTIVE_LOCK = threading.Lock()
@@ -1245,8 +1249,15 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         # The workbench record directory is control-plane evidence and is never a
         # writable dispatch target, even when a caller names it explicitly.
         record_protection.validate_files(files, project_path)
-        if any(t.get("project") == project and t["status"] == "running" for t in public_tasks()):
-            raise ValueError("这个项目正在执行任务，请等待完成后再分派")
+        running = [t for t in public_tasks()
+                   if t.get('project') == project and t.get('status') == 'running']
+        # The existing single-worker executor safely queues B behind A. Only
+        # this controller's in-process ACTIVE map proves that a running task is
+        # already owned by that queue. Unmanaged work must still block edits.
+        with ACTIVE_LOCK:
+            unmanaged = any(t.get('id') not in ACTIVE for t in running)
+        if unmanaged:
+            raise DispatchRefused('这个项目有不属于当前工作台队列的运行任务，请等待结束后再分派；未创建新任务')
     parent = None
     if continue_id:
         parent = json.loads((registry.task_dir(continue_id) / "task.json").read_text(encoding="utf-8"))

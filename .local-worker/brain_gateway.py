@@ -538,8 +538,9 @@ def _dispatch(context, payload):
         raise BrokerError('主脑派发需要 Agent 执行器（DSH/Pi），当前模型解析到 %s；不会静默回退'
                           % route.get('engine'))
 
+    import panel_server as panel
+
     def effect():
-        import panel_server as panel
         row = panel.submit_task(body, trusted=context,
                                 authority=brain_context.issue_authority(context),
                                 request_id=request_id)
@@ -547,7 +548,8 @@ def _dispatch(context, payload):
 
     row = brain_requests.run_once(
         context.project, context.binding_key, 'dispatch', request_id, journal_payload,
-        effect, recover=lambda: _find_task_receipt(context, request_id))
+        effect, recover=lambda: _find_task_receipt(context, request_id),
+        reject_on=(panel.DispatchRefused,))
     receipt = row.get('receipt') or {}
     return {'operation': OP_DISPATCH, 'request_id': request_id, 'owner': context.owner,
             'reused': bool(row.get('reused')), 'receipt': receipt, 'task': receipt,
