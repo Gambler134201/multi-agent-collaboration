@@ -351,6 +351,37 @@ def _ok(result, text):
                                 structuredContent=result)
 
 
+def _preflight_signal(context, workflow, candidates):
+    """User-visible snapshot; provider health and task quality are not probed."""
+    def one_line(value):
+        return re.sub(r'[\x00-\x1f\x7f|｜]+', ' ', str(value or '')).strip()[:100]
+
+    project = one_line(context.project)
+    scope = one_line((candidates.get('scope') or {}).get('label') or workflow.get('model_scope'))
+    ready_ids = candidates.get('dispatch_ready_model_ids')
+    ready_ids = ready_ids if isinstance(ready_ids, list) else []
+    rows = candidates.get('models') or []
+    models = [row for row in rows if isinstance(row, dict)
+              and row.get('model_id') in ready_ids and row.get('dispatch_ready') is True]
+    if workflow.get('readable') is not True:
+        state, line = 'unavailable', '🔴 协作未就绪｜无法读取协作开关'
+    elif workflow.get('enabled') is not True:
+        state, line = 'disabled', '⚪ 协作已关闭｜本轮不自动派发'
+    elif not context.mutations_allowed:
+        state, line = 'unavailable', '🔴 协作未就绪｜当前会话未取得派发权限'
+    elif not models:
+        state, line = 'no_executor', '🟡 协作已连接｜当前范围没有可派发的执行模型'
+    else:
+        state = 'ready'
+        names = '、'.join(one_line(row.get('name') or row['model_id']) for row in models[:4])
+        if len(models) > 4:
+            names += '等 %d 个' % len(models)
+        line = '🟢 多 Agent 协作已就绪｜执行模型：' + names
+    return {'state': state, 'text': line + '｜项目：' + project + '｜范围：' + scope,
+            'show_on': 'first_user_response_after_preflight',
+            'meaning': '仅表示本次连接、开关、责任绑定与候选预检结果；未调用执行模型，不保证模型接口可达或任务质量。'}
+
+
 def _wait(arguments):
     """Bound local controller operation; broker read access is not mutation authority."""
     global _ACTIVE_WAIT
@@ -433,14 +464,16 @@ def _run(name, arguments):
         if not isinstance(workflow, dict):
             raise ValueError('工作台后台缺少预检状态字段；请升级匹配后台，不推断协作开关')
         enabled = workflow.get('readable') is True and workflow.get('enabled') is True
+        signal = _preflight_signal(_CONTEXT, workflow, candidates)
         return _ok({'connected': True, 'context': _CONTEXT.public(),
                     'workflow': workflow, 'candidates': candidates,
+                    'user_signal': signal,
                     'preflight_at': datetime.now(timezone.utc).isoformat(),
                     'dispatch_allowed_by_switch': enabled,
                     'note': ('开关允许新派发；按任务能力/风险评估候选，明确派发或自行处理理由。'
                              if enabled else '开关关闭或不可读，不自动派发；已有任务仍可读取和验收。'),
                     'model_called': False, 'task_dispatched': False},
-                   '已完成主脑协作预检；未执行任务或记录验收。')
+                   signal['text'])
     if name == TOOL_WAIT:return _wait(arguments)
     if name == TOOL_WAKE_PROBE:
         _strict(arguments,('action','probe_id'),'wakeup_probe')

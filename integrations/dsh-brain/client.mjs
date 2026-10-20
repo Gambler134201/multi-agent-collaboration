@@ -220,7 +220,7 @@ window.__ModuleLoader__.load({
         key: TYPE_ID,
         inject: (sessionId) => ({
           sessionId,
-          ensureWorkbench: (id) => ctx.connection.rpc.call('/model-desk-dsh-brain', 'open', {sessionId: id}),
+          ensureWorkbench: (id) => ctx.connection.rpc.call('/api', 'model-desk-dsh-brain/open', {sessionId: id}),
           hooks: { sessionList: ctx.sessions.list },
         }),
       }, WorkbenchBody)), 'model-desk-dsh-brain: sidebar workbench body');

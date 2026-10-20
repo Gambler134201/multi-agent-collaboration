@@ -557,6 +557,8 @@ function buildRules(config, identity) {
   return [
     '## 模型工作台主脑协作规则',
     `新会话首次响应任何用户消息之前，第一项为 ${prefix}brain_preflight；它一次返回归属、总开关、范围和候选，不以编程、创作或闲聊分类跳过。后续新执行需求每轮预检一次。`,
+    '首次预检结束后，在给用户的第一条可见回复开头单独一行原样展示 user_signal.text，然后继续处理需求。不能先说“已就绪”再查；没有预检成功结果就显示“🔴 协作未就绪｜”及真实原因，不凭插件已加载或开关已开猜测就绪。',
+    '就绪信号仅确认本次连接/开关/责任绑定/执行候选，不代表已经派发、模型接口实测可达或任务已验收。只在首次响应展示一次；后续状态发生变化时再明确提示，不在每条回复重复刷屏。',
     '',
     `本聊天绑定的项目来自 DSH 原生会话 header.cwd（严格 realpath）：${identity.project}。`,
     '该绑定由插件按当前原生聊天固定，不接受工具参数、cwd、安装目录或最近项目改写。',
@@ -934,10 +936,13 @@ async function installBinding(state, agent, identity) {
         name: 'model-desk-collaboration-activation', order: 9000, interpolate: false,
         text: (context) => {
           const status = binding.lastStatus;
-          if (context?.agent !== agent || binding.disposed || binding.invalid
-              || !status?.readable || !status.enabled || !binding.mounted) return '';
+          if (context?.agent !== agent || binding.disposed || binding.invalid || !binding.mounted) return '';
+          if (!status?.readable) return '【协作状态提示】首次用户回复开头显示“🔴 协作未就绪｜无法读取协作开关”；不自动派发。后续仅状态变化时提示。';
+          if (!status.enabled) return '【协作状态提示】首次用户回复开头显示“⚪ 协作已关闭｜本轮不自动派发”；不调用协作预检、不启动后台、不自动派发。后续仅状态变化时提示。';
+          if (!binding.ruleActive) return '【协作状态提示】首次用户回复开头显示“🔴 协作未就绪｜协作规则未加载”；不声称已就绪，不自动派发。';
           return `【协作预检】总开关：开｜范围：${status.modelScope}｜项目：${record.project}\n`
             + `新会话首次响应任何用户消息前，先调用 mcp__${state.config.serverName}__brain_preflight 一次；后续新执行需求每轮一次。`
+            + '首次预检成功后，在给用户的第一条可见回复开头单独一行原样展示 user_signal.text；失败显示“🔴 协作未就绪｜”及真实原因。预检之前不得声称已就绪。后续仅状态变化时提示。'
             + '取得真实候选后决定派发或说明自做理由；创作/生成文件也属于执行评估范围。'
             + '本轮已有预检结果不重复调用；只接收原任务完成通知时直接走独立验收，不重新派发。';
         },
@@ -1081,6 +1086,23 @@ function createWorkbenchHandler(ctx, config, ensure = ensureWorkbench) {
   };
 }
 
+function workbenchFetchRoute(handler) {
+  // Desktop's owned transport forwards /api, not arbitrary Host channels.
+  // Exact Fetch routes run behind Connection's existing trust/auth admission;
+  // do not replace the API Gateway's sole shared RPC interceptor.
+  return {path: '/api/model-desk-dsh-brain/open', methods: ['POST'], requestBody: 'buffered',
+    async fetch(request) {
+      let message;
+      try { message = await request.json(); } catch { return new Response('invalid JSON', {status: 400}); }
+      if (!message || message.type !== 'client-request' || typeof message.rpcId !== 'string'
+          || message.method !== 'model-desk-dsh-brain/open')
+        return new Response('invalid workbench RPC envelope', {status: 400});
+      const result = await handler('open', message.payload);
+      if (!result.ok) result.error.details = {};
+      return Response.json({type: 'server-response', rpcId: message.rpcId, result});
+    }};
+}
+
 function createInstance(ctx, config) {
   const state = {
     ctx,
@@ -1165,13 +1187,12 @@ function createInstance(ctx, config) {
       const registerOpen = (rpcCtx) => {
         if (state.disposed || state.openDisposer) return;
         const connection = rpcCtx.connection;
-        if (typeof connection?.rpc?.handle === 'function') {
-          state.openDisposer = connection.rpc.handle('/model-desk-dsh-brain',
-            createWorkbenchHandler(ctx, config));
+        if (typeof connection?.fetch?.register === 'function') {
+          state.openDisposer = connection.fetch.register(workbenchFetchRoute(createWorkbenchHandler(ctx, config)));
         }
       };
       try {
-        if (ctx.webServer && typeof ctx.connection?.rpc?.handle === 'function') registerOpen(ctx);
+        if (typeof ctx.connection?.fetch?.register === 'function') registerOpen(ctx);
         else if (typeof ctx.inject === 'function') state.openInjection = ctx.inject(['connection', 'webServer'], registerOpen);
       } catch (error) {
         state.log('warn', `工作台原生打开通道不可用；保留主脑 MCP：${safeMessage(error)}`);
@@ -1278,4 +1299,5 @@ module.exports._test = Object.freeze({
   rawBrainTool,
   resolveProject,
   createWorkbenchHandler,
+  workbenchFetchRoute,
 });

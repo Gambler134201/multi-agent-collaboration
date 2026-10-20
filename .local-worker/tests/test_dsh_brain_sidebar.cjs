@@ -74,8 +74,8 @@ function makeContext(snapshot) {
   };
   const ctx = {
     connection: {rpc: {async call(channel, endpoint, payload) {
-      assert.equal(channel, '/model-desk-dsh-brain');
-      assert.equal(endpoint, 'open');
+      assert.equal(channel, '/api');
+      assert.equal(endpoint, 'model-desk-dsh-brain/open');
       const url = new URL('http://127.0.0.1:8765/?host=dsh');
       if (payload.sessionId !== null) url.searchParams.set('project', snapshot.byId[payload.sessionId].cwd);
       else url.searchParams.set('view', 'unbound');
@@ -130,7 +130,7 @@ function bodyProps(definition, sessionId, snapshot, calls, throws = false) {
 test('package manifest exposes the client half beside the Host bundle', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(PACKAGE, 'package.json'), 'utf8'));
   assert.equal(manifest.name, 'model-desk-dsh-brain');
-  assert.equal(manifest.version, '0.2.8');
+  assert.equal(manifest.version, '0.2.9');
   assert.equal(manifest.exports['./client'], './client.mjs');
   assert.equal(manifest.exports['.'], './index.cjs');
   assert.ok(manifest.files.includes('client.mjs'));

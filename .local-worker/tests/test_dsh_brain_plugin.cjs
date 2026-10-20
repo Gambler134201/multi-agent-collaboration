@@ -352,15 +352,51 @@ test('new chats get short activation facts; disabled collaboration injects no di
     assert.match(text, /总开关：开/);
     assert.match(text, /local_only/);
     assert.match(text, /brain_preflight/);
+    assert.match(text, /第一条可见回复开头/);
+    assert.match(text, /user_signal.text/);
+    assert.match(text, /预检之前不得声称已就绪/);
     assert.match(text, /创作/);
     assert.equal(contexts.get(agent).text({agent: {}, scope: agent}), '');
   }
   setStatus(f, {enabled: false, readable: true, model_scope: 'local_only'});
   await firePreStep(second);
-  assert.equal(contexts.get(second).text({agent: second}), '');
+  const disabledText = contexts.get(second).text({agent: second});
+  assert.match(disabledText, /协作已关闭/);
+  assert.match(disabledText, /不调用协作预检、不启动后台、不自动派发/);
+  assert.ok(!disabledText.includes('已就绪'));
+  setStatus(f, {enabled: true, readable: false});
+  await firePreStep(second);
+  assert.match(contexts.get(second).text({agent: second}), /协作未就绪/);
   assert.equal(guardCall(second, 'write'), undefined, 'ordinary host work is not globally blocked');
   await ctx.__disposeAll();
   assert.equal(contexts.size, 0);
+});
+
+test('workbench exact API route preserves native RPC envelopes and never claims shared interceptor', async () => {
+  let calls = 0;
+  const route = PLUGIN._test.workbenchFetchRoute(async (endpoint, payload) => {
+    calls += 1;
+    assert.equal(endpoint, 'open');
+    assert.equal(payload.sessionId, 'native-chat');
+    return {ok: true, value: {url: 'http://127.0.0.1:8765/?host=dsh'}};
+  });
+  assert.equal(route.path, '/api/model-desk-dsh-brain/open');
+  assert.deepEqual(route.methods, ['POST']);
+  const invoke = body => route.fetch(new Request('http://native-host' + route.path, {
+    method: 'POST', body: JSON.stringify(body), headers: {'content-type': 'application/json'},
+  }));
+  const message = {type: 'client-request', rpcId: 'fixture-rpc', method: 'model-desk-dsh-brain/open', payload: {sessionId: 'native-chat'}};
+  const response = await invoke(message);
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.rpcId, message.rpcId);
+  assert.equal(result.type, 'server-response');
+  assert.equal(result.result.ok, true);
+  assert.equal((await invoke({...message, method: 'other'})).status, 400);
+  assert.equal(calls, 1, 'invalid envelopes never reach bootstrap');
+  const failed = PLUGIN._test.workbenchFetchRoute(async () => ({ok: false, error: {code: 'model-desk/open-unavailable', message: 'not ready'}}));
+  const failure = await (await failed.fetch(new Request('http://native-host'+route.path, {method: 'POST', body: JSON.stringify(message)}))).json();
+  assert.deepEqual(failure.result.error.details, {}, 'native RPC error schema requires details');
 });
 
 test('native project drift during startup cannot open a stale project', async t => {

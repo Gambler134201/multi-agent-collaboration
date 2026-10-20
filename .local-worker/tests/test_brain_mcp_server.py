@@ -233,6 +233,25 @@ class ResultTextTests(unittest.TestCase):
 
 
 class PreflightTests(unittest.TestCase):
+    def test_readiness_signal_needs_switch_binding_and_consistent_dispatch_candidate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            context = brain.brain_context.build_context(folder, 'dsh', 'fixture',
+                operator_session='fixture-chat', session_binding='user_bound')
+            workflow = {'readable': True, 'enabled': True, 'model_scope': 'local_only'}
+            candidates = {'dispatch_ready_model_ids': ['home'], 'models': [
+                {'model_id': 'home', 'name': 'Qwen\n不应变成新行', 'dispatch_ready': True}]}
+            signal = brain._preflight_signal(context, workflow, candidates)
+            self.assertEqual(signal['state'], 'ready')
+            self.assertTrue(signal['text'].startswith('🟢 多 Agent 协作已就绪'))
+            self.assertNotIn('\n', signal['text'])
+            self.assertIn(context.project, signal['text'])
+            self.assertEqual(brain._preflight_signal(context, {**workflow, 'readable': False}, candidates)['state'], 'unavailable')
+            self.assertEqual(brain._preflight_signal(context, {**workflow, 'enabled': False}, candidates)['state'], 'disabled')
+            self.assertEqual(brain._preflight_signal(context, workflow, {'models': candidates['models']})['state'], 'no_executor')
+            unknown = brain.brain_context.build_context(folder, 'dsh', 'fixture')
+            self.assertEqual(brain._preflight_signal(unknown, workflow, candidates)['state'], 'unavailable')
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
     def test_explicit_native_preflight_can_bootstrap_and_return_disabled_switch_honestly(self):
         with tempfile.TemporaryDirectory() as folder:
             context = brain.brain_context.build_context(folder, 'dsh', 'fixture',
@@ -249,6 +268,8 @@ class PreflightTests(unittest.TestCase):
             self.assertFalse(data['dispatch_allowed_by_switch'])
             self.assertFalse(data['task_dispatched'])
             self.assertFalse(data['model_called'])
+            self.assertEqual(data['user_signal']['state'], 'disabled')
+            self.assertIn('协作已关闭', data['user_signal']['text'])
             self.assertEqual(list(Path(folder).iterdir()), [])
             start.assert_called_once()
             connect.assert_called_once()
