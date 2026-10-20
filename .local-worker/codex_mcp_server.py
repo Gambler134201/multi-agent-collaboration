@@ -21,7 +21,6 @@ import json
 import os
 import queue
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -70,19 +69,11 @@ class PanelError(Exception):
 
 def find_pwsh() -> str:
     """Absolute native PowerShell used to start the existing launcher."""
-    override = os.environ.get("MODEL_DESK_PWSH")
-    candidates = [Path(override)] if override else []
-    home = os.environ.get("USERPROFILE") or os.environ.get("HOME")
-    if home:
-        candidates.append(Path(home) / ".cache" / "codex-runtimes" / "codex-primary-runtime"
-                          / "dependencies" / "native" / "powershell" / "pwsh.exe")
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    found = shutil.which("pwsh.exe") or shutil.which("pwsh")
-    if found:
-        return found
-    raise PanelError("未找到本机 pwsh，无法启动模型工作台。")
+    from powershell_runtime import find_pwsh as resolve
+    try:
+        return resolve()
+    except ValueError as error:
+        raise PanelError(str(error)) from None
 
 
 # --------------------------------------------------------------------- validation

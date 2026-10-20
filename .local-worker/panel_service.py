@@ -3,7 +3,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import threading
 from urllib.error import URLError, HTTPError
@@ -11,6 +10,7 @@ from urllib.parse import urlparse
 from urllib.request import build_opener, ProxyHandler, HTTPRedirectHandler
 
 import brain_transport
+from powershell_runtime import find_pwsh
 
 ROOT = Path(__file__).resolve().parent.parent
 _LOCK = threading.Lock()
@@ -54,9 +54,7 @@ def ensure_service(base_url):
             if os.path.normcase(os.path.realpath(found)) != os.path.normcase(str(ROOT.resolve())):
                 raise ValueError('端口属于另一份工作台；保留原服务，不重启、不替换')
             return {'ready': True, 'started': False, 'url': base_url}
-        pwsh = shutil.which('pwsh.exe') or shutil.which('pwsh')
-        if not pwsh:
-            raise ValueError('需要原生 PowerShell 7，不会改用其他 shell')
+        pwsh = find_pwsh()
         launcher = ROOT / '打开模型工作台.ps1'
         if not launcher.is_file():
             raise ValueError('工作台启动脚本不存在')

@@ -29,7 +29,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_missing_service_uses_hidden_native_opener_with_configured_port(self):
         with mock.patch.object(service, 'workspace', side_effect=[None, str(self.root)]), \
-             mock.patch.object(service.shutil, 'which', return_value='native-pwsh'), \
+             mock.patch.object(service, 'find_pwsh', return_value='native-pwsh'), \
              mock.patch.object(service.subprocess, 'run', return_value=mock.Mock(returncode=0)) as run:
             result = service.ensure_service('http://127.0.0.1:9123')
         command = run.call_args.args[0]
@@ -48,7 +48,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_unconfirmed_start_is_not_retried(self):
         with mock.patch.object(service, 'workspace', return_value=None), \
-             mock.patch.object(service.shutil, 'which', return_value='native-pwsh'), \
+             mock.patch.object(service, 'find_pwsh', return_value='native-pwsh'), \
              mock.patch.object(service.subprocess, 'run', return_value=mock.Mock(returncode=1)) as run, \
              self.assertRaises(ValueError):
             service.ensure_service('http://127.0.0.1:8765')
@@ -63,7 +63,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_missing_pwsh_does_not_fall_back_to_another_shell(self):
         with mock.patch.object(service, 'workspace', return_value=None), \
-             mock.patch.object(service.shutil, 'which', return_value=None), \
+             mock.patch.object(service, 'find_pwsh', side_effect=ValueError('missing native PowerShell')), \
              mock.patch.object(service.subprocess, 'run') as run, self.assertRaises(ValueError):
             service.ensure_service('http://127.0.0.1:8765')
         run.assert_not_called()

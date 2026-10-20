@@ -1,8 +1,16 @@
 # DSH 独立启动与新会话协作预检修复
 
-日期：2026-10-20。当前候选插件：0.2.10。开发分支：`codex/dsh-startup-preflight`。
+日期：2026-10-20。当前候选插件：0.2.11。开发分支：`codex/standalone-panel-startup`。
 
-## 0.2.10：真实框架依赖注册修复（尚未部署）
+## 0.2.11：移除冷启动对宿主 PATH 的依赖（尚未部署）
+
+用户已确认 0.2.10 右侧入口和首轮状态信号成功；但关闭 Codex 后重新单独打开 DSH，冷启动报告缺少原生 PowerShell 7。这台机器只有本机缓存中的副本，DSH 没有继承 Codex 添加的 PATH。此前已有后台时的复用未覆盖这一情况。
+
+新增 `powershell_runtime.py`，让 Codex MCP、公共 `panel_service.py`、目录选择器共用解析逻辑。显式路径优先，系统安装、PATH 和已存在的本机副本作为发现入口；不读取账号文件、不修改 PATH、不启动所属宿主、不自动安装，也不换 Windows PowerShell 5。启动脚本保留 `#Requires -Version 7.0`。插件发布清单包含解析器哈希。
+
+`probe_panel_cold_start.py` 在临时目录建立无模型/无用户记录的 fixture：真实原生 PowerShell、两个真实启动脚本、仅 System32 的 PATH、无 CODEX_* 环境变量，首次冷启动成功，第二次复用成功，并等待 fixture 进程退出后清理。未触碰真实工作台端口或任务。此结果不替代安装后用户关闭 Codex 的 DSH 原生验证。
+
+## 0.2.10：真实框架依赖注册修复（已部署，原生入口及状态信号通过）
 
 - 用户原生反馈 0.2.9 请求已变成 `/api/model-desk-dsh-brain/open`，仍返回 404。前一项离线检查直接调用了注册方法，漏测了插件作用域获取连接服务的过程。
 - 在已安装的真实 Cordis 中，插件只声明 `agents` 依赖，却在该作用域直接读取 `ctx.connection?.fetch`；框架对未注入服务的读取会抛错（公开实现为 `cannot get property ... without inject`），可选链不能避开，外层捕获后没有执行后续注入，导致没有入口路由。假 Context 未实施该约束。

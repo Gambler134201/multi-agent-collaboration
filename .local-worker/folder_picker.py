@@ -4,22 +4,14 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import subprocess
 import threading
 import time
 
 import project_scope
+from powershell_runtime import find_pwsh
 
 HERE = Path(__file__).resolve().parent
-
-
-def find_pwsh():
-    bundled = Path(os.environ.get('USERPROFILE', '')) / '.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe'
-    found = str(bundled) if bundled.is_file() else shutil.which('pwsh.exe')
-    if not found:
-        raise ValueError('未找到 PowerShell 7，无法打开系统目录选择器')
-    return found
 
 
 def native_pick(initial=None):

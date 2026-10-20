@@ -29,7 +29,7 @@ ENV_NAME = 'MODEL_DESK_DSH_BRAIN_CONFIG'
 FILES = ('index.cjs', 'account.cjs', 'wakeup.cjs', 'client.mjs', 'package.json', 'cordis.patch.yml', 'README.md', 'LICENSE')
 RUNTIME_FILES = ('brain_mcp_server.py','brain_context.py','brain_transport.py','brain_gateway.py',
                  'workflow_settings.py','host_balance.py','completion_wait.py','desktop_notify.py',
-                 'completion_host.py','dsh_notify.py','panel_service.py')
+                 'completion_host.py','dsh_notify.py','panel_service.py','powershell_runtime.py')
 CLIENT_ORIGIN_MARKER = b'"__MODEL_DESK_PANEL_ORIGIN__"'
 CLI_RELATIVE = 'dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js'
 SUPPORTED_DSH = '0.2.1-rc.2'

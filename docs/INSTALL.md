@@ -159,6 +159,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -InstallRules
 - 首次用户回复前，全局规则调用同一 Python 下的 `collaboration_status.py --project "受信调用项目的绝对目录"`，展示与通用主脑预检一致的状态行。该只读 CLI 不启动工作台/模型，不创建项目记录；关闭、未知项目、无候选和失败均有不同提示。规则更新后用新聊天验证，已有聊天不保证重载。跨主脑更新约定见 [CROSS_HOST_FEATURES.md](CROSS_HOST_FEATURES.md)。
 - 只改动 `<!-- model-desk-workflow:start/end -->` 之间的托管块；已有非托管指令原样保留，首次写入前会备份原文件。托管标记不完整时会报错并要求你先检查文件。
 - 执行器路径环境变量修改后，需要重新启动工作台和对应命令进程才能加载。
+- 原生启动和系统目录选择共用 PowerShell 7 解析器，支持系统安装、PATH、已存在的本机运行时副本，或 `MODEL_DESK_PWSH` 指定的 `pwsh.exe` 绝对路径。已有缓存副本可在 Codex 关闭后使用；缓存被删除则需另行安装或指定路径。缺少依赖时不会自动安装或改用其他 shell。
 - 规则改动后**已有会话不会自动加载**：新建会话或重载客户端。
 - 通知/等待链路（`--notify-on-completion`）依赖本机桌面环境，请按 `.local-worker\workflow-guides\waiting.md`（安装后的副本）在你的机器上自行验证；不要假定别人机器上的验证结果适用。
 
