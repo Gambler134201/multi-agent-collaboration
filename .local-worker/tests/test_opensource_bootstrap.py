@@ -49,7 +49,15 @@ def unconfigured_runtimes():
     """Pretend the user has not configured any external runtime yet."""
     saved = {name: os.environ.pop(name, None) for name in LOCATION_VARIABLES}
     try:
-        yield
+        # Pi intentionally captures these paths when its process starts.
+        # Clearing os.environ alone cannot simulate a fresh unconfigured
+        # process after pi_worker was imported on a configured machine.
+        home = runtime_paths.UNSET
+        with patch.object(pi_worker, 'PI_HOME', home), \
+                patch.object(pi_worker, 'PACKAGE', home / runtime_paths.PI_PACKAGE_DIR), \
+                patch.object(pi_worker, 'NODE', home / runtime_paths.PI_NODE), \
+                patch.object(pi_worker, 'CLI', home / runtime_paths.PI_CLI):
+            yield
     finally:
         for name, value in saved.items():
             if value is not None:
