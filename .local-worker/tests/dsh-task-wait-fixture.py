@@ -11,6 +11,8 @@ from test_brain_mcp_server import EndToEndLoopTests,StdioClient,payload
 
 
 def main():
+    scenario=sys.argv[1] if len(sys.argv)>1 else 'batch'
+    assert scenario in {'batch','busy','failed','cancelled','recovery_pending','unknown','stop'}
     project=Path.cwd()
     environment=dict(os.environ)
     # The base fixture initially creates an unrelated generic client; do not
@@ -46,27 +48,55 @@ def main():
         case.complete(task_ids[0]);time.sleep(1.2)
         waiting=payload(case.client.call('brain_wait',{'action':'status','wait_id':wait_id}))
         assert waiting['waiting'] and waiting['send_attempts']==0,waiting
-        case.complete(task_ids[1])
+        if scenario=='stop':
+            stopped=payload(case.client.call('brain_wait',{'action':'stop','wait_id':wait_id}))
+            assert stopped['listener_status']=='stopped' and not stopped['cancels_tasks']
+        if scenario in {'failed','cancelled','recovery_pending'}:
+            from test_brain_mcp_server import registry
+            run=registry.task_dir(task_ids[1],str(project))
+            registry.patch_task(run,status=scenario,phase='isolated fixture '+scenario,
+                ended_at=None if scenario=='recovery_pending' else registry.now())
+        else:case.complete(task_ids[1])
         record=project/'.model-desk/notifications'/wait_id/'subscription.json'
+        if scenario=='busy':
+            deadline=time.monotonic()+8
+            while time.monotonic()<deadline:
+                data=json.loads(record.read_text(encoding='utf-8'))
+                if data['listener_status']=='waiting_chat_idle':break
+                time.sleep(.1)
+            assert data['listener_status']=='waiting_chat_idle' and data['send_attempts']==0
+            print('MODEL_DESK_FIXTURE_RELEASE_IDLE',flush=True)
+        terminal='delivery_unknown' if scenario=='unknown' else 'stopped' if scenario=='stop' else 'delivered'
         deadline=time.monotonic()+8
         while time.monotonic()<deadline:
             data=json.loads(record.read_text(encoding='utf-8'))
-            if data['listener_status']=='delivered':break
+            if data['listener_status']==terminal:break
             time.sleep(.1)
-        assert data['listener_status']=='delivered',data['listener_status']
-        assert data['send_attempts']==1
-        result=case.client.call('brain_wait',{'action':'received','wait_id':wait_id})
-        receipt=payload(result)
-        assert receipt['received'] and receipt['phase']=='reviewing',result
+        assert data['listener_status']==terminal,data['listener_status']
+        attempts=0 if scenario=='stop' else 1
+        assert data['send_attempts']==attempts
+        if scenario in {'unknown','stop'}:
+            time.sleep(1.2)
+            result=case.client.call('brain_wait',{'action':'start','task_ids':task_ids})
+            receipt=payload(result)
+            assert not receipt['waiting'] and receipt['listener_status']==terminal
+            assert receipt['send_attempts']==attempts and not receipt['received']
+        else:
+            result=case.client.call('brain_wait',{'action':'received','wait_id':wait_id})
+            receipt=payload(result)
+            expected_phase='needs_attention' if scenario in {'failed','cancelled','recovery_pending'} else 'reviewing'
+            assert receipt['received'] and receipt['phase']==expected_phase,result
         assert receipt['records_acceptance'] is False
-        for task_id in task_ids:
+        for index,task_id in enumerate(task_ids):
             delivery=payload(case.client.call('brain_delivery',{'task_id':task_id}))
             assert delivery['accepted'] is False
+            expected=scenario if index==1 and scenario in {'failed','cancelled','recovery_pending'} else 'completed'
+            assert delivery['status']==expected,delivery['status']
         assert case.submitted==task_ids
         public=json.dumps(receipt)
         assert environment['MODEL_DESK_DSH_WAKE_TOKEN'] not in public
-        print(json.dumps({'formal_mcp':True,'mock_dispatches':len(task_ids),
-            'completion_attempts':data['send_attempts'],'receipt':True,'accepted':False,'real_models':False}))
+        print(json.dumps({'scenario':scenario,'formal_mcp':True,'mock_dispatches':len(task_ids),
+            'completion_attempts':data['send_attempts'],'receipt':receipt['received'],'accepted':False,'real_models':False}))
     finally:case.tearDown()
 
 

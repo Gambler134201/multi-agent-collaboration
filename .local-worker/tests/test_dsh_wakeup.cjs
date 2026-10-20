@@ -139,27 +139,40 @@ test('real Windows pipe and detached shared waiter deliver once with no model',
   }
 });
 
-test('formal MCP dispatch, batch wait, one completion and receipt use the shared core',
+for(const scenario of ['batch','busy','failed','cancelled','recovery_pending','unknown','stop']){
+test('formal MCP completion pipeline: '+scenario,
  {skip:process.platform!=='win32'||!process.env.MODEL_DESK_TEST_PYTHON},async t=>{
   const project=fs.mkdtempSync(path.join(os.tmpdir(),'md-dsh-formal-wait-'));
   const calls=[],identity={id:'session-formal-fixture',owner:'dsh-formal-fixture',project};
-  const agent={status:'idle',session:{seq:1},inbox:{hasPending:false},followup:msg=>calls.push(msg)};
+  const agent={status:scenario==='busy'?'running':'idle',session:{seq:1},inbox:{hasPending:false},
+    followup:msg=>{calls.push(msg);if(scenario==='unknown')throw Error('fixture_only_unconfirmed')}};
   const bridge=createBridge({agent,identity,isCurrent:()=>true});
   await bridge.start();
+  let releasedIdle=false,callsBeforeIdle=null;
   try{
     const result=await new Promise((resolve,reject)=>{
-      const child=spawn(process.env.MODEL_DESK_TEST_PYTHON,[path.join(__dirname,'dsh-task-wait-fixture.py')],
+      const child=spawn(process.env.MODEL_DESK_TEST_PYTHON,[path.join(__dirname,'dsh-task-wait-fixture.py'),scenario],
         {cwd:project,env:{...process.env,...bridge.environment(),PYTHONIOENCODING:'utf-8'},windowsHide:true});
-      let stdout='',stderr='';child.stdout.on('data',v=>{stdout+=v});child.stderr.on('data',v=>{stderr+=v});
+      let stdout='',stderr='';child.stdout.on('data',v=>{
+        stdout+=v;
+        if(!releasedIdle&&stdout.includes('MODEL_DESK_FIXTURE_RELEASE_IDLE')){
+          releasedIdle=true;callsBeforeIdle=calls.length;agent.status='idle';
+        }
+      });child.stderr.on('data',v=>{stderr+=v});
       const timer=setTimeout(()=>{child.kill();reject(Error('formal fixture timeout'));},30000);
       child.on('error',reject);child.on('close',code=>{clearTimeout(timer);resolve({code,stdout,stderr})});
     });
-    assert.equal(result.code,0,result.stderr);assert.ok(result.stdout.includes('"receipt": true'));
-    assert.equal(calls.length,1);
-    const text=calls[0].content[0].text;
-    assert.ok(text.startsWith('[Model Desk completion event]'));
-    assert.ok(text.includes('brain_wait'));assert.ok(text.includes('action=received'));
+    assert.equal(result.code,0,result.stderr);
+    assert.ok(result.stdout.includes('"scenario": "'+scenario+'"'));
+    if(scenario==='busy')assert.equal(callsBeforeIdle,0);
+    assert.equal(calls.length,scenario==='stop'?0:1);
+    if(calls.length){
+      const text=calls[0].content[0].text;
+      assert.ok(text.startsWith('[Model Desk completion event]'));
+      assert.ok(text.includes('brain_wait'));assert.ok(text.includes('action=received'));
+    }
   }finally{
     await bridge.dispose();fs.rmSync(project,{recursive:true,force:true});
   }
 });
+}
