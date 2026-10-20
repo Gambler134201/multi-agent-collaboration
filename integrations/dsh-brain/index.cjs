@@ -1188,12 +1188,21 @@ function createInstance(ctx, config) {
         if (state.disposed || state.openDisposer) return;
         const connection = rpcCtx.connection;
         if (typeof connection?.fetch?.register === 'function') {
-          state.openDisposer = connection.fetch.register(workbenchFetchRoute(createWorkbenchHandler(ctx, config)));
+          const dispose = connection.fetch.register(workbenchFetchRoute(createWorkbenchHandler(rpcCtx, config)));
+          state.openDisposer = dispose;
+          rpcCtx.effect(() => () => {
+            if (state.openDisposer === dispose) state.openDisposer = null;
+          }, 'model-desk-dsh-brain: open route dependency lifetime');
         }
       };
       try {
-        if (typeof ctx.connection?.fetch?.register === 'function') registerOpen(ctx);
-        else if (typeof ctx.inject === 'function') state.openInjection = ctx.inject(['connection', 'webServer'], registerOpen);
+        // Cordis rejects service reads outside the declared injection scope.
+        // Even an optional property read (ctx.connection?.fetch) can prevent us
+        // from reaching deferred registration, regardless of startup order.
+        // Always let injection own acquisition/release; no WebServer is needed
+        // to register the carrier-neutral exact API route.
+        if (typeof ctx.inject !== 'function') throw new Error('原生依赖注入 API 不可用');
+        state.openInjection = ctx.inject(['connection', 'agents', 'sessions'], registerOpen);
       } catch (error) {
         state.log('warn', `工作台原生打开通道不可用；保留主脑 MCP：${safeMessage(error)}`);
       }

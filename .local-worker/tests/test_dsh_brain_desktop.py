@@ -107,7 +107,7 @@ class DesktopTests(unittest.TestCase):
         with tarfile.open(self.folder / 'plugin.tgz') as archive:
             manifest = json.loads(archive.extractfile('package/package.json').read())
             client = archive.extractfile('package/client.mjs').read()
-        self.assertEqual(manifest['version'], '0.2.9')
+        self.assertEqual(manifest['version'], '0.2.10')
         self.assertEqual(set(manifest['files']), set(setup.FILES) - {'package.json'})
         self.assertEqual(manifest['exports']['./client'], './client.mjs')
         self.assertEqual(manifest['exports']['./account'], './account.cjs')

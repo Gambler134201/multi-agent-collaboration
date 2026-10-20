@@ -1,8 +1,17 @@
 # DSH 独立启动与新会话协作预检修复
 
-日期：2026-10-20。当前候选插件：0.2.9。开发分支：`codex/dsh-startup-preflight`。
+日期：2026-10-20。当前候选插件：0.2.10。开发分支：`codex/dsh-startup-preflight`。
 
-## 0.2.9 后续修正（尚未部署）
+## 0.2.10：真实框架依赖注册修复（尚未部署）
+
+- 用户原生反馈 0.2.9 请求已变成 `/api/model-desk-dsh-brain/open`，仍返回 404。前一项离线检查直接调用了注册方法，漏测了插件作用域获取连接服务的过程。
+- 在已安装的真实 Cordis 中，插件只声明 `agents` 依赖，却在该作用域直接读取 `ctx.connection?.fetch`；框架对未注入服务的读取会抛错（公开实现为 `cannot get property ... without inject`），可选链不能避开，外层捕获后没有执行后续注入，导致没有入口路由。假 Context 未实施该约束。
+- 改为无条件 `ctx.inject(['connection', 'agents', 'sessions'], registerOpen)`，注册及请求处理均使用注入作用域。`sessions` 支持发出首条消息前已有原生会话、尚无 Agent 的工作台打开。精确 API 路由注册不依赖 WebServer，因此删除多余的等待条件。服务释放时清空旧路由 disposer，替换服务后能够重新注册；插件卸载移除本入口。
+- 扩展 `probe_dsh_workbench_transport.cjs`，用 DSH 自带真实 Context/Service 与 Connection 公共实现验证原生插件 `apply`，覆盖先服务/先插件两种顺序、连接服务撤销/重建、插件卸载及没有 Agent 的新聊天打开。该探针可用第三个参数指定旧版插件目录做反例：已安装的 0.2.9 因路由数 0 失败，0.2.10 全部通过。账户适配器、Peer 和外部启动进程为隔离 fixture，不读取配置/认证/历史，不启动模型或工作台。
+- 在 Windows 上通过 Python `subprocess.run(..., CREATE_NO_WINDOW)` 等待 Electron 诊断进程真正结束并检查退出码，避免 PowerShell 对 GUI 可执行文件的调用提前返回、只收集部分异步输出。
+- 这仍不是运行中 DSH GUI 的端到端验收；安装后需人工确认右侧入口及首次消息状态信号。
+
+## 0.2.9 后续修正（已安装，原生入口失败）
 
 - 0.2.8 已安装并核对八文件，但用户原生截图显示 `/model-desk-dsh-brain/open` 返回 HTTP 405。桌面转发支持 `/api`，不能用单独的 Host HTTP channel 假设桌面也会转发。
 - 改为 `/api/model-desk-dsh-brain/open` 精确 Fetch 路由；浏览器继续使用官方 RPC 编解码，Host 精确路由保持原有认证与 owner 检查，不替换 Gateway 的唯一共享拦截器。用已安装 DSH 的真实 Connection 公共代码离线验证成功/错误信封、非 owner 拒绝与清理；不读取认证文件，也不把此验证称作 GUI 通过。
