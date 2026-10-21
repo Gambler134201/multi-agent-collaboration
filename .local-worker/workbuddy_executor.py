@@ -67,7 +67,8 @@ def installation(home=None):
         with p.open('rb') as stream:
             fingerprint.update(hashlib.file_digest(stream, 'sha256').digest())
     return {'home': str(root), 'executable': str(exe), 'cli': str(cli),
-            'version': package['version'], 'fingerprint': fingerprint.hexdigest()}
+            'version': package['version'], 'product_name': product_meta['productName'],
+            'fingerprint': fingerprint.hexdigest()}
 
 
 def availability(home=None):
@@ -81,7 +82,7 @@ def availability(home=None):
                 'account_verified': False, 'message': 'WorkBuddy 安装不可用或版本未经验证；未调用模型'}
 
 
-def process_environment(config_home, *, isolated=False):
+def process_environment(config_home, *, isolated=False, installation_info=None):
     root = Path(config_home)
     if not root.is_absolute() or not root.is_dir():
         raise ValueError('WorkBuddy 配置目录必须明确指定为已存在的绝对目录')
@@ -89,12 +90,25 @@ def process_environment(config_home, *, isolated=False):
     # This module never opens auth storage or copies tokens into an environment.
     env = {k: v for k, v in os.environ.items() if not any(part in k.upper()
            for part in ('TOKEN', 'SECRET', 'API_KEY', 'CODEBUDDY', 'WORKBUDDY',
-                        'MODEL_DESK', 'CODEX', 'ELECTRON', 'NODE_', 'ACC_PRODUCT', 'PROXY'))}
+                        'MODEL_DESK', 'CODEX', 'ELECTRON', 'NODE_', 'ACC_PRODUCT', 'PROXY', 'CLIENT_INFO_'))}
     env.update({'CODEBUDDY_CONFIG_DIR': str(root), 'WORKBUDDY_CONFIG_DIR': str(root),
                 'ELECTRON_RUN_AS_NODE': '1', 'CODEBUDDY_FORCE_LITE_WB_BUNDLE': '1',
                 'CODEBUDDY_DISABLE_COMPILE_CACHE': '1', 'CODEBUDDY_DISABLE_CUSTOM_MODELS_FILE': '1',
                 'DISABLE_TELEMETRY': '1', 'CODEBUDDY_DISABLE_IDE': '1',
                 'SERVER__PORT': '0', 'SERVER__HOST': '127.0.0.1'})
+    if installation_info and installation_info.get('product_name'):
+        if installation_info.get('product_name') != 'WorkBuddy' or installation_info.get('version') != SUPPORTED_VERSION:
+            raise ValueError('WorkBuddy 产品身份或版本未经验证；未启动进程')
+        # Match the installed product's public identity, rather than inheriting
+        # another caller's telemetry/product context. This is NOT desktop host
+        # authority, account authorization or a credential-protection bootstrap.
+        env.update({'CLIENT_INFO_PLATFORM': 'WorkBuddy',
+                    'CLIENT_INFO_PLATFORM_VERSION': installation_info['version'],
+                    'CLIENT_INFO_PRODUCT_NAME': installation_info['product_name'],
+                    'CLIENT_INFO_PRODUCT_VERSION': installation_info['version'],
+                    'CLIENT_INFO_IDE_TYPE': 'WorkBuddy',
+                    'CLIENT_INFO_PLUGIN_NAME': 'model-desk-workbuddy-executor',
+                    'CLIENT_INFO_PLUGIN_VERSION': '0.1.0'})
     if isolated:
         env.update({k: str(root) for k in ('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA')})
     else:
@@ -212,7 +226,7 @@ class NativeChatClient:
         self.inbox = queue.Queue()
         self.tainted = False
         self.process = popen(command(info, model_id), cwd=self.project,
-                             env=process_environment(config_home, isolated=isolated),
+                             env=process_environment(config_home, isolated=isolated, installation_info=info),
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, encoding='utf-8', errors='replace',
                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

@@ -104,6 +104,47 @@ class WorkBuddyExecutorTests(unittest.TestCase):
         self.assertNotIn('MODEL_DESK_DSH_BRAIN_CONFIG', env)
         self.assertEqual(env['USERPROFILE'], str(self.root))
 
+    def test_parent_product_and_machine_context_is_not_inherited(self):
+        with patch.dict(os.environ, {'CLIENT_INFO_PRODUCT_NAME': 'another-product',
+                                   'CLIENT_INFO_MACHINE_ID': 'private-device',
+                                   'CLIENT_INFO_PLUGIN_NAME': 'another-caller'}):
+            env = wb.process_environment(self.root, isolated=True)
+        self.assertNotIn('CLIENT_INFO_PRODUCT_NAME', env)
+        self.assertNotIn('CLIENT_INFO_MACHINE_ID', env)
+        self.assertNotIn('CLIENT_INFO_PLUGIN_NAME', env)
+
+    def test_public_product_identity_keeps_adapter_identity_and_authentication_defaults(self):
+        env = wb.process_environment(self.root, isolated=True,
+              installation_info={'product_name': 'WorkBuddy', 'version': wb.SUPPORTED_VERSION})
+        self.assertEqual(env['CLIENT_INFO_PRODUCT_NAME'], 'WorkBuddy')
+        self.assertEqual(env['CLIENT_INFO_PRODUCT_VERSION'], wb.SUPPORTED_VERSION)
+        self.assertEqual(env['CLIENT_INFO_PLUGIN_NAME'], 'model-desk-workbuddy-executor')
+        self.assertNotIn('CODEBUDDY_HOST', env)
+        self.assertNotIn('CLIENT_INFO_MACHINE_ID', env)
+        self.assertNotIn('CODEBUDDY_DISABLE_REQUEST_VALIDATION', env)
+        self.assertNotIn('CODEBUDDY_SIDECAR_CREDENTIAL_BOOTSTRAP_SOCKET', env)
+
+    def test_spawned_client_receives_public_product_context(self):
+        captured = {}
+        def spawn(args, **kwargs):
+            captured.update(kwargs['env'])
+            return subprocess.Popen(args, **kwargs)
+        c = wb.NativeChatClient({'executable': sys.executable, 'cli': str(self.script),
+              'product_name': 'WorkBuddy', 'version': wb.SUPPORTED_VERSION},
+              self.root, self.root, isolated=True, popen=spawn)
+        self.addCleanup(c.close)
+        c.connect()
+        self.assertEqual(captured['CLIENT_INFO_PRODUCT_NAME'], 'WorkBuddy')
+        self.assertEqual(captured['CLIENT_INFO_PLUGIN_NAME'], 'model-desk-workbuddy-executor')
+        self.assertFalse(c.prompt_sent)
+
+    def test_unknown_product_identity_cannot_start_process(self):
+        for info in [{'product_name': 'CodeBuddy', 'version': wb.SUPPORTED_VERSION},
+                     {'product_name': 'WorkBuddy', 'version': 'unknown'}]:
+            with self.subTest(info=info), self.assertRaises(ValueError):
+                wb.NativeChatClient({**info, 'executable': sys.executable, 'cli': str(self.script)},
+                                   self.root, self.root, popen=lambda *a, **k: self.fail('spawned'))
+
     def test_authorization_preserves_local_only(self):
         with self.assertRaises(ValueError):
             wb.authorize_native_chat({**PERMITTED, 'model_scope': 'local_only'})
