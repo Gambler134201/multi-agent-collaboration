@@ -428,11 +428,32 @@ class NativeChatClient:
         return {'session_id': session_id, 'models': self.models, 'account_verified': False,
                 'current_model_id': current, 'project': self.project, 'model_called': False}
 
+    def wait_file_tools(self, timeout=20):
+        import workbuddy_tools
+        deadline = time.monotonic() + timeout
+        expected = Path(self.tool_job).parent / 'workbuddy-tools-proof.json'
+        while True:
+            if getattr(self, 'cancel_check', lambda: False)():
+                raise Cancelled('WorkBuddy 工具初始化期间任务已取消')
+            try:
+                return workbuddy_tools.verify(self.tool_job)
+            except FileNotFoundError as error:
+                if Path(error.filename) != expected:
+                    raise
+            except workbuddy_tools.ToolsNotReady:
+                pass
+            # Metadata readiness only: no prompt, retry, tool call or guard reset.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProtocolError('WorkBuddy 文件工具未在初始化窗口内就绪；未发送提示词')
+            time.sleep(min(.05, remaining))
+
     def chat(self, model_id, prompt, settings, *, timeout=0):
+        task_deadline = time.monotonic() + timeout if timeout else None
         authorize_native_chat(settings)
         if self.tool_job is not None:
             import workbuddy_tools
-            if workbuddy_tools.verify(self.tool_job).get('writes_paused'):
+            if self.wait_file_tools(min(20, timeout) if timeout else 20).get('writes_paused'):
                 raise ProtocolError('本任务此前触发工具拒绝；不能重新请求模型绕过暂停')
         if self.prompt_sent:
             raise ValueError('候选一次只支持一个新会话轮次；不会重派或隐式续接')
@@ -453,6 +474,10 @@ class NativeChatClient:
                 if isinstance(content, dict) and content.get('type') == 'text' and isinstance(content.get('text'), str):
                     answer.append(content['text'])
 
+        if task_deadline:
+            timeout = task_deadline - time.monotonic()
+            if timeout <= 0:
+                raise ProtocolError('任务时限已到；未发送提示词')
         self.prompt_sent = True
         if getattr(self, 'on_prompt', None):
             self.on_prompt()  # Persist conservatively BEFORE the prompt can reach the wire.

@@ -24,6 +24,10 @@ class ToolRefused(ValueError):
     pass
 
 
+class ToolsNotReady(ValueError):
+    """Matching tool evidence exists, but tools/list has not completed yet."""
+
+
 def revision():
     return hashlib.sha256(Path(__file__).read_bytes() +
                           (HERE / 'record_protection.py').read_bytes()).hexdigest()
@@ -84,8 +88,10 @@ class FileTools:
 
     def save_proof(self):
         # Control-plane evidence; never exposed as a writable model target.
-        (self.run / 'workbuddy-tools-proof.json').write_text(
-            json.dumps(self.proof(), ensure_ascii=False), encoding='utf-8')
+        target = self.run / 'workbuddy-tools-proof.json'
+        temporary = target.with_name(target.name + '.' + uuid.uuid4().hex + '.tmp')
+        temporary.write_text(json.dumps(self.proof(), ensure_ascii=False), encoding='utf-8')
+        os.replace(temporary, target)
 
     def list_tools(self):
         self.listed = True
@@ -198,8 +204,10 @@ def verify(job_file):
     tools = FileTools(job_file)
     proof = json.loads((tools.run / 'workbuddy-tools-proof.json').read_text(encoding='utf-8'))
     expected = tools.proof()
-    if any(proof.get(k) != expected[k] for k in ('task_id', 'nonce', 'project', 'revision', 'job_hash', 'tools')) or proof.get('tools_listed') is not True:
+    if any(proof.get(k) != expected[k] for k in ('task_id', 'nonce', 'project', 'revision', 'job_hash', 'tools')):
         raise ValueError('WorkBuddy 未返回匹配本任务的文件工具加载证据')
+    if proof.get('tools_listed') is not True:
+        raise ToolsNotReady('本任务文件工具尚未完成 tools/list')
     return proof
 
 

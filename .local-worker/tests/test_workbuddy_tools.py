@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock
 
@@ -21,6 +22,54 @@ class FileToolTests(unittest.TestCase):
         self.run = self.root / '.model-desk/runs/fixture'
         self.job = tools.prepare(self.run, self.root, 'fixture', ['a.txt'], ['context.txt'])
         self.files = tools.FileTools(self.job)
+
+    def readiness_client(self):
+        client = object.__new__(wb.NativeChatClient)
+        client.tool_job, client.session_id = self.job, 'fixture-session'
+        client.project, client.models = str(self.root), [{'model_id': 'fixture-model'}]
+        client.prompt_sent, client.diagnostics = False, []
+        client.cancel_check = lambda: False
+        client.request = Mock(side_effect=lambda method, params, **kwargs:
+            {'configOptions': [{'id': 'model', 'currentValue': 'fixture-model'}]}
+            if method == 'session/set_config_option' else {'stopReason': 'end_turn'})
+        return client
+
+    def test_delayed_tools_list_finishes_before_the_only_prompt(self):
+        client = self.readiness_client()
+        timer = threading.Timer(.1, self.files.list_tools)
+        timer.start()
+        try:
+            result = client.chat('fixture-model', 'fixture', {'paid_allowed': True, 'model_scope': 'all',
+                'enforce_paid_budget': False, 'enforce_model_call_limit': False})
+        finally:
+            timer.join()
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual([c.args[0] for c in client.request.call_args_list],
+                         ['session/set_config_option', 'session/prompt'])
+        self.assertTrue(tools.verify(self.job)['tools_listed'])
+
+    def test_not_listed_timeout_sends_no_prompt(self):
+        self.files.save_proof()
+        client = self.readiness_client()
+        with self.assertRaisesRegex(wb.ProtocolError, '未发送提示词'):
+            client.chat('fixture-model', 'fixture', {'paid_allowed': True, 'model_scope': 'all',
+                'enforce_paid_budget': False, 'enforce_model_call_limit': False}, timeout=.05)
+        client.request.assert_not_called()
+        self.assertFalse(client.prompt_sent)
+
+    def test_readiness_never_waits_past_foreign_or_corrupt_evidence(self):
+        self.files.list_tools()
+        p=self.run/'workbuddy-tools-proof.json'
+        proof=json.loads(p.read_text(encoding='utf-8'));proof['task_id']='foreign'
+        p.write_text(json.dumps(proof),encoding='utf-8')
+        client=self.readiness_client()
+        with self.assertRaises(ValueError):client.wait_file_tools(.1)
+        client.request.assert_not_called()
+
+    def test_readiness_observes_cancellation_before_native_request(self):
+        client=self.readiness_client();client.cancel_check=lambda:True
+        with self.assertRaises(wb.Cancelled):client.wait_file_tools(.1)
+        client.request.assert_not_called()
 
     def test_utf8_write_read_and_unique_edit(self):
         self.files.call('write_file', {'path': 'a.txt', 'content': '你好\r\nline'})
