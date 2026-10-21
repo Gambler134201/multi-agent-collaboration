@@ -62,7 +62,26 @@ const directory=path.resolve(__dirname,'../panel');
       assert.deepEqual(writes.find(w=>w.path==='/api/workflow').body,{endpoint_settings:{id:'pi',values:{enabled:false}}});
       assert.equal(fixture.workflow.enabled,true);
       await page.locator('[data-endpoint-expand="workbuddy"]').click();
-      assert.match(await page.locator('#endpoint-settings-workbuddy').textContent(),/正式队列尚未接入/);
+      assert.match(await page.locator('#endpoint-settings-workbuddy').textContent(),/无命令/);
+      const native={...model,id:'workbuddy-deepseek-flash',provider:'workbuddy',model:'deepseek-v4.1-flash',
+        name:'WorkBuddy native fixture',default_agent:'workbuddy',api_base:''};
+      fixture.models.push(native);
+      agents.workbuddy={name:'WorkBuddy',ready:true,configuration:{model_fields:[]}};
+      const endpoint=fixture.execution_endpoints.rows.find(e=>e.id==='workbuddy');
+      Object.assign(endpoint,{enabled:true,ready:true,model:native,models:[native],runtime:agents.workbuddy});
+      await page.evaluate(()=>refresh());
+      await page.locator('[data-native-setup] input[name="home"]').fill('C:\\native-fixture');
+      await page.evaluate(()=>refresh());
+      assert.equal(await page.locator('[data-native-setup] input[name="home"]').inputValue(),'C:\\native-fixture');
+      await page.locator('#new-task').click();
+      await page.locator('#task-route').selectOption('manual');
+      await page.locator('#task-model').selectOption(native.id);
+      const nativeBody=await page.evaluate(()=>taskBody());
+      assert.equal(nativeBody.model_id,native.id);
+      assert.equal(nativeBody.engine,undefined,'native model must own the engine, not an API override');
+      assert.equal(await page.locator('#task-test').isDisabled(),true);
+      assert.match(await page.locator('#task-agent-hint').textContent(),/WorkBuddy 登录账户/);
+      await page.locator('#task-dialog .dialog-footer .close-dialog').click();
       for(const width of [1100,736,390]){
         await page.setViewportSize({width,height:1000});
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${host} ${width}px overflow`);

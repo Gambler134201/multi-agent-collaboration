@@ -1,14 +1,14 @@
 """Execution-agent selection, independent of provider/model routing."""
 from copy import deepcopy
 
-AGENTS = ('dsh', 'pi')
-ENGINES = ('dsh', 'pi', 'direct', 'aider')
+AGENTS = ('dsh', 'pi', 'workbuddy')
+ENGINES = ('dsh', 'pi', 'workbuddy', 'direct', 'aider')
 DEFAULT = 'dsh'
 # Explicit form value meaning "omit the override and let the selected model (then
 # the global default) decide".  It is accepted as the absence of an override, not
 # as an execution engine.
 TASK_DEFAULT = 'model_default'
-LABELS = {'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'direct': '直接调用', 'aider': 'Aider'}
+LABELS = {'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy', 'direct': '直接调用', 'aider': 'Aider'}
 
 # Each adapter declares its own controls. Model connection forms never interpret
 # another adapter's configuration. The legacy DSH storage key stays compatible
@@ -22,6 +22,8 @@ CONFIGURATION = {
                               'note': '原生模式保留工具并精简提示；使用 DSH 实际预设。不会改变 Pi 或其他 Agent。'}]},
     'pi': {'description': 'Pi 使用工作台管理的独立会话配置，目前没有需要手动设置的额外选项。模型、思考等级和用量限制继续使用工作台设置。',
            'model_fields': []},
+    'workbuddy': {'description': '使用 WorkBuddy 登录账户的 DeepSeek V4.1 Flash；仅限定文件读写，无命令/子代理/会话续接。积分与人民币费用未知。',
+                 'model_fields': []},
 }
 
 
@@ -44,7 +46,7 @@ def validate_configuration(engine, values):
 
 def normalize(value):
     if not isinstance(value, str) or value.strip().lower() not in AGENTS:
-        raise ValueError('执行 Agent 无效；请选择 DeepSeek Harness 或 Pi Agent')
+        raise ValueError('执行 Agent 无效；请选择已支持的执行端')
     return value.strip().lower()
 
 
@@ -82,15 +84,23 @@ def resolution(body, settings, model=None):
     """
     explicit = requested_engine(body)
     if explicit is not None:
+        validate_model(explicit, model)
         return explicit, 'explicit'
     if model is not None:
         import model_agent_defaults
-        return model_agent_defaults.effective(model, settings)
+        value = model_agent_defaults.effective(model, settings)
+        validate_model(value[0], model)
+        return value
     return selected(settings), 'global'
 
 
 def resolve(body, settings, model=None):
     return resolution(body, settings, model=model)[0]
+
+
+def validate_model(engine, model):
+    if model is not None and (engine == 'workbuddy') != (model.get('provider') == 'workbuddy'):
+        raise ValueError('WorkBuddy 仅执行其原生账户模型；不能与 API 模型或其他执行端互换')
 
 
 def has_session(task):
@@ -105,6 +115,9 @@ def session_fields(task):
 
 
 def availability(engine):
+    if engine == 'workbuddy':
+        import workbuddy_worker
+        return workbuddy_worker.availability()
     if engine == 'pi':
         import pi_worker
         return pi_worker.availability()

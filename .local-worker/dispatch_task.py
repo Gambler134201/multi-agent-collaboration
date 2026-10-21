@@ -150,7 +150,7 @@ def main():
     parser.add_argument('--route', choices=['auto', 'manual'])
     parser.add_argument('--routing-file', type=Path, help='UTF-8 JSON: category, complexity, input_tokens, output_tokens, expected_calls, eligible_model_ids, assessment, acceptance')
     parser.add_argument('--preview', action='store_true', help='Only evaluate the route; never call a model')
-    parser.add_argument('--engine', choices=['dsh', 'pi', 'aider', 'direct'], default=None,
+    parser.add_argument('--engine', choices=['dsh', 'pi', 'workbuddy', 'aider', 'direct'], default=None,
                         help='本次显式覆盖；省略时按所选模型的默认 Agent，其次全局默认')
     parser.add_argument('--kind', choices=['chat', 'edit'], default='edit')
     parser.add_argument('--project')

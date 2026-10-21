@@ -58,6 +58,10 @@ class ThinkingUnavailable(ThinkingError):
 
 
 def profile(model):
+    if model.get('provider') == 'workbuddy':
+        return {'adapter': 'workbuddy-native', 'supported': ['default'], 'selected': 'default',
+                'label': 'WorkBuddy 原生默认', 'status': STATUS_UNKNOWN,
+                'note': '原生模型设置由 WorkBuddy 管理；工作台不向其发送 API 思考参数。'}
     selected = model.get('thinking_level', 'default')
     if deepseek_billing.is_official(model):
         info = {'adapter': 'deepseek', 'supported': ['default', 'off', 'low', 'high', 'max'],
@@ -271,6 +275,8 @@ def _try_store(model, info):
 def probe_and_store(model_id):
     """Explicit panel action: probe and persist engine metadata for one model."""
     model = registry.get_model(model_id, require_enabled=False)
+    if model.get('provider') == 'workbuddy':
+        raise ValueError('WorkBuddy 没有工作台 API 元数据探测接口，请使用原生默认')
     info = probe(model)
     result = _try_store(model, info)
     if not result['stored']:

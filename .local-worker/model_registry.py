@@ -224,11 +224,18 @@ def get_model(model_id=None, require_enabled=True):
         raise ValueError("请选择一个已配置的执行模型")
     if require_enabled and not row.get("enabled", True):
         raise ValueError("这个模型已停用")
+    if row.get('provider') == 'workbuddy':
+        if row.get('secret') or row.get('api_key_env'):
+            raise ValueError('WorkBuddy 原生模型不能保存 API 密钥')
+        row['api_key'] = ''
+        return row
     row["api_key"] = protect(row["secret"], True) if row.get("secret") else os.environ.get(row.get("api_key_env", ""), "")
     return row
 
 
 def upsert_model(body, model_id=None):
+    if body.get('provider') == 'workbuddy':
+        return upsert_native_model(body, model_id)
     name = str(body.get("name", "")).strip()
     api_base = str(body.get("api_base", "")).strip().rstrip("/")
     model = str(body.get("model", "")).strip()
@@ -256,6 +263,8 @@ def upsert_model(body, model_id=None):
         previous = next((m for m in data["models"] if m["id"] == model_id), None)
         if model_id and previous is None:
             raise ValueError("模型不存在")
+        if previous and previous.get('provider') == 'workbuddy':
+            raise ValueError('原生账户模型不能转换为 API 模型；请另行添加连接')
         model_id = model_id or uuid4().hex[:12]
         secret = previous.get("secret", "") if previous else ""
         if body.get("clear_key"):
@@ -283,6 +292,9 @@ def upsert_model(body, model_id=None):
         else:
             default_agent = model_agent_defaults.normalize(
                 previous.get('default_agent') if previous else None)
+        import execution_engines
+        if default_agent != model_agent_defaults.FOLLOW_GLOBAL:
+            execution_engines.validate_model(default_agent, {'provider': provider})
         import thinking_config
         thinking_level = body.get('thinking_level', previous.get('thinking_level', 'default') if previous else 'default')
         thinking_info = previous.get('thinking_info') if previous and previous['api_base'] == api_base and previous['model'] == model else None
@@ -331,6 +343,38 @@ def upsert_model(body, model_id=None):
             data["default_model"] = next((m["id"] for m in data["models"] if m["enabled"]), None)
         if not data["default_model"] and row["enabled"]:
             data["default_model"] = model_id
+        write_json(REGISTRY, data)
+    return public_model(row)
+
+
+def upsert_native_model(body, model_id=None):
+    import workbuddy_worker
+    if (set(body) - {'provider', 'name', 'model', 'enabled', 'default_agent'} or
+            body.get('model', workbuddy_worker.MODEL) != workbuddy_worker.MODEL or
+            body.get('default_agent', 'workbuddy') != 'workbuddy' or
+            type(body.get('enabled', True)) is not bool):
+        raise ValueError('WorkBuddy 只接受固定原生模型与启用状态，不接受 API/价格/子代理设置')
+    ident = model_id or workbuddy_worker.MODEL_ROW
+    if ident != workbuddy_worker.MODEL_ROW:
+        raise ValueError('WorkBuddy 原生模型标识固定；不能改用已有 API 模型')
+    with registry_lock():
+        data = read_registry()
+        previous = next((m for m in data['models'] if m['id'] == ident), None)
+        if previous and previous.get('provider') != 'workbuddy':
+            raise ValueError('这个标识已属于 API 模型，不能转换账户来源')
+        row = {'id': ident, 'name': str(body.get('name') or 'WorkBuddy · DeepSeek V4.1 Flash')[:100],
+               'provider': 'workbuddy', 'model': workbuddy_worker.MODEL, 'default_agent': 'workbuddy',
+               'api_base': '', 'secret': '', 'api_key_env': '',
+               'enabled': body.get('enabled', previous.get('enabled', True) if previous else True),
+               'bypass_proxy': False, 'created_at': previous['created_at'] if previous else now(),
+               'max_input_tokens': 32768, 'max_output_tokens': 4096,
+               'thinking_level': 'default', 'agent_preset': 'standard', 'last_check': None,
+               'max_task_complexity': 'simple', 'preferred_tasks': ['单文件修改', '文案/文档', '信息整理'],
+               'capability_notes': 'WorkBuddy 原生账户积分；限定文件读写，无命令。请主脑独立验收。',
+               'cost_preference': 'balanced', 'pricing_cny': None,
+               'subagent': model_capabilities.normalize_block(None, None)}
+        data['models'] = [row if m['id'] == ident else m for m in data['models']] if previous else data['models'] + [row]
+        # Never change the user's existing manual default as part of integration.
         write_json(REGISTRY, data)
     return public_model(row)
 

@@ -467,6 +467,13 @@ def _forecast(task):
 
 
 def _cost_facts(task):
+    if task.get('engine') == 'workbuddy':
+        return {'schema': None, 'known': False, 'settled_cny': None,
+                'recorded_settled_cny': None, 'settled_calls': None,
+                'unsettled_cny': None, 'reserved_cny': None, 'reserved_is_real_cost': False,
+                'unknown_calls': None, 'billing_source': 'workbuddy-native-account',
+                'label': 'WorkBuddy 原生积分未返回',
+                'note': '原生积分、实际底层请求次数及人民币费用未知；不并入 API 人民币账单，不显示为零费用。'}
     settled = _number(task.get("cost_settled_cny"))
     settled_calls = _int_or_none(task.get("cost_settled_calls")) or 0
     unknown_calls = _int_or_none(task.get("cost_unknown_calls")) or 0
@@ -788,6 +795,8 @@ def safe_error(exc, key=""):
 
 def probe_model(model_id):
     model = registry.get_model(model_id, require_enabled=False)
+    if model.get('provider') == 'workbuddy':
+        raise ValueError('WorkBuddy 不使用 API 连接测试；请派发明确授权的原生账户测试任务')
     start = time.monotonic()
     try:
         # Actual generation test: /models alone doesn't establish inference availability.
@@ -907,6 +916,8 @@ def scope_gate(model, settings, task_id=None, engine=None):
 def discover(body):
     if body.get("id") and not body.get("api_base"):
         model = registry.get_model(body["id"], require_enabled=False)
+        if model.get('provider') == 'workbuddy':
+            raise ValueError('WorkBuddy 原生模型固定为 DeepSeek V4.1 Flash，不调用 API 模型列表')
     else:
         base = str(body.get("api_base", "")).strip().rstrip("/")
         url = urlparse(base)
@@ -942,6 +953,8 @@ def execute_task(task_id):
             command = [str(PYTHON), str(HERE / "dsh_worker.py"), "--run-id", task_id]
         elif state.get("engine") == "pi":
             command = [str(PYTHON), str(HERE / "pi_worker.py"), "--run-id", task_id]
+        elif state.get('engine') == 'workbuddy':
+            command = [str(PYTHON), str(HERE / 'workbuddy_worker.py'), '--run-id', task_id]
         elif state["kind"] == "chat":
             command = [str(PYTHON), str(HERE / "chat_worker.py"), "--run-id", task_id]
         else:
@@ -1198,6 +1211,11 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     if engine in execution_engines.AGENTS and not execution_engines.availability(engine)['ready']:
         raise ValueError(execution_engines.LABELS[engine] + ' 执行器未就绪；不会切换到其他执行器')
     body['engine'] = engine
+    native_connection = None
+    if engine == 'workbuddy':
+        import workbuddy_worker
+        workbuddy_worker.validate_task(body, settings)
+        native_connection = workbuddy_worker.configuration()
     thinking_config.validate(model)
     # A stale failed connection check must not permanently exclude a capable
     # local model: recheck reachability read-only (no inference) before the real
@@ -1387,6 +1405,7 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         'timeout': timeout, 'test_command': str(body.get("test_command", "")).strip() or None,
         'stage_id': stage_id or None, 'goal_id': goal_id or None,
         'request_output_tokens': request_output_tokens,
+        'workbuddy_connection': native_connection,
         'connectivity_check': {'source': 'pre_dispatch',
                                'rechecked': bool(connectivity['checked']),
                                'blocked': bool(connectivity['blocked']),
@@ -1443,6 +1462,16 @@ def cancel_task(task_id, reason="", actor="main"):
                                             "reason": str(reason or "")[:1000]})
     with ACTIVE_LOCK:
         process = ACTIVE.get(task_id)
+    if state.get('engine') == 'workbuddy':
+        # The CLI is owned by WorkBuddy's host, not a child of this Python
+        # process. The worker observes cancelled.flag and closes its exact lease.
+        # Never taskkill the GUI or pretend the native cleanup already finished.
+        if state['status'] == 'queued':
+            registry.patch_task(run, status='cancelled', ended_at=registry.now())
+        else:
+            registry.patch_task(run, phase='正在取消 WorkBuddy 原生会话')
+        return {'ok': True, 'cancellation_pending': state['status'] == 'running',
+                'cancel_record': registry.read_task(run).get('cancel_record')}
     if process and process.poll() is None:
         if state.get("engine") in {"dsh", "pi"}:
             # Let acpx send ACP cancellation and flush session persistence first.
@@ -1836,6 +1865,9 @@ def recover_task(task_id, body=None, actor="main"):
     state = registry.read_task(run)
     if state.get("status") != "recovery_pending":
         raise ValueError("只有待恢复的任务需要显式恢复；当前状态：" + str(state.get("status")))
+    if state.get('engine') == 'workbuddy':
+        import workbuddy_worker
+        workbuddy_worker.recovery_guard(state)
     review = delegation_policy.load(run)
     if review and review.get("state") in {"accepted", "final_accepted"}:
         raise ValueError("任务已通过独立验收，不能恢复原执行；请新建任务")
@@ -2448,7 +2480,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": safe_error(exc)}, 400)
 
 
-WORKER_SCRIPTS = ("run_worker.py", "chat_worker.py", "dsh_worker.py", "pi_worker.py")
+WORKER_SCRIPTS = ("run_worker.py", "chat_worker.py", "dsh_worker.py", "pi_worker.py", "workbuddy_worker.py")
 # A real worker process always starts *before* the record's ``started_at`` is
 # written, so a process created later than the record cannot be that worker
 # (a reused PID).  The tolerance only absorbs clock jitter; a slow startup

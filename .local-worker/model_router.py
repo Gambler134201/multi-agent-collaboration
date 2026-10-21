@@ -542,7 +542,14 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                                 % (est_output, model_output))
             rates = rates_for(model, moment)
             cap = None
-            if is_paid(model):
+            native = model.get('provider') == 'workbuddy'
+            if native:
+                import workbuddy_worker
+                workbuddy_worker.validate_task(body, settings)
+                if mode == 'auto' and req['eligible_model_ids'] is None:
+                    raise ValueError('WorkBuddy 原生积分费用未知；自动路由需主脑明确列入 eligible_model_ids，或手动选择')
+                warnings.append('WorkBuddy 积分和实际底层请求数未返回；成本未知，不按免费或最低价排序')
+            if is_paid(model) and not native:
                 if not settings.get('paid_allowed'):
                     raise ValueError('付费执行未开启')
                 if agent not in execution_engines.AGENTS:
@@ -575,6 +582,9 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                           'input_source': {'declared': capacity['declared'], 'estimates': capacity['estimates'],
                                            'minimum': capacity['minimum'], 'cache_fraction': req['cache_fraction']},
                           'source': '请求时单价快照 + 预计输入/输出/次数；这是预测，不是实际账单'}
+            if native:
+                prediction = {'kind': 'unknown', 'estimated_cost_cny': None, 'base_cost_cny': None,
+                              'source': 'WorkBuddy 原生积分；未取得可核对金额，不能等同于零费用'}
             # Estimates rank models and inform the user; usage-based caps are
             # checked at the gateway. A worst-case forecast is not spending.
             matches = [tag for tag in model.get('preferred_tasks', []) if any(term in tag for term in CATEGORIES[req['category']])]
@@ -586,7 +596,8 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
             if scope != model_scope.ALL:
                 reason += '执行模型范围：' + model_scope.LABELS[scope] + '；'
             reason += ('匹配标签：' + '、'.join(matches) + '；') if matches else '主脑候选或未设置标签；'
-            reason += f"{rates['label'] if rates else '无单价'}，预计总成本 ¥{estimate:.4f}"
+            reason += ('WorkBuddy 登录账户原生积分，费用未知' if native else
+                       f"{rates['label'] if rates else '无单价'}，预计总成本 ¥{estimate:.4f}")
             if warnings:
                 reason += '；' + warnings[0]
             if risk['verified_samples']:
@@ -594,7 +605,7 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                            f"（置信 {risk['confidence']}）")
             elif risk['basis'] == 'unverified_legacy_default':
                 reason += "，无独立验收样本；未知失败不用于放大价格"
-            candidates.append({'model': model, 'estimated_cost_cny': float(estimate), 'budget_cny': float(cap) if cap is not None else 0,
+            candidates.append({'model': model, 'estimated_cost_cny': None if native else float(estimate), 'budget_cny': float(cap) if cap is not None else 0,
                                'reason': reason, 'retry_factor': retry_factor, 'matched_tags': matches,
                                'warnings': warnings, 'risk': risk, 'prediction': prediction,
                                'pricing': pricing_info(model), 'engine': agent,
@@ -604,7 +615,7 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
     if not candidates:
         message = '；'.join(f"{row['model_name']}：{row['reason']}" for row in excluded) or '没有可用模型'
         raise ValueError('需要主脑重新拆分任务或人工调整：' + message)
-    candidates.sort(key=lambda row: (row['estimated_cost_cny'], is_paid(row['model']), {'economy': 0, 'balanced': 1, 'quality': 2}.get(row['model'].get('cost_preference'), 1), -len(row['matched_tags'])))
+    candidates.sort(key=lambda row: (row['estimated_cost_cny'] is None, row['estimated_cost_cny'] or 0, is_paid(row['model']), {'economy': 0, 'balanced': 1, 'quality': 2}.get(row['model'].get('cost_preference'), 1), -len(row['matched_tags'])))
     selected = candidates[0]
     model = selected['model']
     observed = cost_observations(history, model['id'], req['category'])

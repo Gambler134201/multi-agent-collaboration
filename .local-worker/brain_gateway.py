@@ -354,6 +354,13 @@ def _candidates(context, payload):
         except ValueError as error:
             endpoint_error = str(error)
         selectable = bool(enabled and scope_ok and agent.get('ready') and not endpoint_error)
+        native_policy_error = ''
+        if model.get('provider') == 'workbuddy':
+            import workbuddy_executor
+            try:
+                workbuddy_executor.authorize_native_chat(settings)
+            except ValueError as error:
+                native_policy_error = str(error)
         reasons = []
         if endpoint_error:
             reasons.append(endpoint_error)
@@ -381,8 +388,10 @@ def _candidates(context, payload):
             'selectable': selectable,
             'selectable_reason': '；'.join(reasons),
             'paid_allowed': paid_allowed,
-            'dispatch_ready': bool(selectable and (not paid or paid_allowed)),
-            'authorization_note': ('付费执行未开启；这是独立授权，不是范围或候选排除。'
+            'dispatch_ready': bool(selectable and (not paid or paid_allowed) and not native_policy_error),
+            'execution_capabilities': agent.get('capabilities'),
+            'billing_source': 'workbuddy-native-account' if model.get('provider') == 'workbuddy' else 'model-api',
+            'authorization_note': native_policy_error or ('付费执行未开启；这是独立授权，不是范围或候选排除。'
                                    if paid and not paid_allowed else ''),
             'max_input_tokens': model.get('max_input_tokens'),
             'max_output_tokens': model.get('max_output_tokens'),
@@ -500,8 +509,8 @@ def _preview(context, payload):
         route = _choose_route(context, body)
     except ValueError as error:
         raise BrokerError(str(error)) from None
-    if route.get('engine') not in ('dsh', 'pi'):
-        raise BrokerError('主脑派发需要 Agent 执行器（DSH/Pi），当前模型解析到 %s；不会静默回退'
+    if route.get('engine') not in ('dsh', 'pi', 'workbuddy'):
+        raise BrokerError('主脑派发需要 Agent 执行器，当前模型解析到 %s；不会静默回退'
                           % route.get('engine'))
     return {'preview': _public_route(route), 'project': context.project}
 
@@ -547,8 +556,8 @@ def _dispatch(context, payload):
     if title:
         body['title'] = title
     route = _choose_route(context, body)
-    if route.get('engine') not in ('dsh', 'pi'):
-        raise BrokerError('主脑派发需要 Agent 执行器（DSH/Pi），当前模型解析到 %s；不会静默回退'
+    if route.get('engine') not in ('dsh', 'pi', 'workbuddy'):
+        raise BrokerError('主脑派发需要 Agent 执行器，当前模型解析到 %s；不会静默回退'
                           % route.get('engine'))
 
     import panel_server as panel
@@ -569,6 +578,17 @@ def _dispatch(context, payload):
             'next': '用 brain_status / brain_delivery 读取，不等待模型。'}
 
 
+def _native_execution(task):
+    if task.get('engine') != 'workbuddy':
+        return None
+    native = task.get('workbuddy') or {}
+    return {'session_id': task.get('workbuddy_session_id'), 'model': task.get('model'),
+            'version': task.get('executor_version'), 'billing_source': 'workbuddy-native-account',
+            'credits_used': None, 'actual_model_calls': None, 'cost_cny': None,
+            'cleanup': native.get('cleanup'), 'prompt_attempted': bool(native.get('prompt_attempted')),
+            'outcome_unknown': bool(native.get('outcome_unknown'))}
+
+
 def _status(context, payload):
     _keys(payload, ('task_id',), required=('task_id',))
     import delegation_policy
@@ -583,6 +603,7 @@ def _status(context, payload):
             'created_at': task.get('created_at'), 'started_at': task.get('started_at'),
             'ended_at': task.get('ended_at'), 'error': _text(task.get('error'), 1500),
             'execution_error': _text(task.get('error'), 1500),
+            'native_execution': _native_execution(task),
             'review': delegation_policy.panel_summary(record) if record else None,
             'review_error': _text(error, 500),
             'note': '状态读取不等待模型、不重复派发；工具超时不是任务总时限。'}
@@ -641,6 +662,8 @@ def _delivery(context, payload):
                          'changed_files': executor.get('changed_files') or [],
                          'test': executor.get('test')},
             'answer': answer[:MAX_ANSWER], 'answer_truncated': truncated,
+            'engine': task.get('engine'), 'model_id': task.get('model_id'),
+            'native_execution': _native_execution(task),
             'execution_error': _text(task.get('error'), 1500),
             'review_state': (record or {}).get('state'),
             'review': delegation_policy.panel_summary(record) if record else None,

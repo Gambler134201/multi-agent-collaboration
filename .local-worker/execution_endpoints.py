@@ -55,14 +55,16 @@ def gate(engine, model, settings, *, controls=None, automatic=False):
     row = controls['endpoints'].get(key)
     if row and not row['enabled']:
         raise ValueError(LABELS[key] + ' 执行端已禁用；不会切换到其他执行端')
-    if key == 'workbuddy':
-        raise ValueError('WorkBuddy 原生文件验证已通过，但正式队列尚未接入；不会改用 API 或 Auto')
+    execution_engines.validate_model(key, model)
     if automatic and row and row['current_model'] and model.get('id') != row['current_model']:
         raise ValueError(LABELS[key] + ' 当前模型为 ' + row['current_model'] + '；此模型未选作该执行端的当前模型')
     return key
 
 
 def update(endpoint, body, settings):
+    if endpoint == 'workbuddy' and isinstance(body, dict) and set(body) == {'native_setup'}:
+        import workbuddy_worker
+        return workbuddy_worker.configure(body['native_setup'])
     if endpoint not in IDS or not isinstance(body, dict) or not body or set(body) - {'enabled', 'current_model'}:
         raise ValueError('执行端设置无效')
     if 'enabled' in body and type(body['enabled']) is not bool:
@@ -70,7 +72,7 @@ def update(endpoint, body, settings):
     if 'current_model' in body:
         selected = body['current_model']
         if selected is not None:
-            if endpoint == 'workbuddy' or not isinstance(selected, str):
+            if not isinstance(selected, str):
                 raise ValueError('当前模型无效')
             models = registry.list_models()['models']
             model = next((m for m in models if m['id'] == selected), None)
@@ -113,6 +115,6 @@ def public_rows(models, settings, agents=None):
                                          '当前模型已停用，请启用或重新选择' if selected and not selected.get('enabled', True) else ''),
                      'billing_source': 'workbuddy-native-account' if key == 'workbuddy' else 'model-provider',
                      'balance': None,
-                     'message': '原生文件验证已通过；正式队列待接入，积分未同步' if key == 'workbuddy' else info.get('message', '')})
+                     'message': info.get('message', '')})
     return {'rows': rows, 'unassigned_models': [m for m in models if m['id'] not in assigned],
             'readable': controls['readable'], 'error': controls['error']}

@@ -117,7 +117,7 @@ class EndpointTests(unittest.TestCase):
         self.assertFalse(native['ready'])
         self.assertIsNone(native['balance'])
         self.assertEqual(native['billing_source'], 'workbuddy-native-account')
-        with self.assertRaisesRegex(ValueError, '正式队列'):
+        with self.assertRaisesRegex(ValueError, '互换'):
             ep.gate('workbuddy', self.local, self.settings)
 
     def test_invalid_model_agent_is_visible_not_silently_reassigned(self):

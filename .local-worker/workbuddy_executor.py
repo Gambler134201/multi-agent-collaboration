@@ -1,6 +1,6 @@
-"""WorkBuddy-native ACP discovery and isolated chat transport candidate.
+"""WorkBuddy-native ACP discovery and isolated chat transport.
 
-This module is not registered as a ready Model Desk execution engine yet.
+Formal queue readiness and lifecycle are handled by workbuddy_worker.
 In particular it must not route existing API models through WorkBuddy's account,
 or claim that an installation/model catalogue proves a logged-in account.
 """
@@ -29,6 +29,10 @@ class OutcomeUnknown(ProtocolError):
     """A written request has no authoritative response; do not resend it."""
 
 
+class Cancelled(ProtocolError):
+    """Controller cancellation; the owned native lease still needs cleanup."""
+
+
 def _asar_package(archive):
     with archive.open('rb') as stream:
         header = stream.read(16)
@@ -46,7 +50,7 @@ def _asar_package(archive):
 
 
 def installation(home=None):
-    value = str(home if home is not None else os.environ.get(HOME_ENV, 'E:/workbuddy'))
+    value = str(home if home is not None else os.environ.get(HOME_ENV, ''))
     root = Path(value)
     if not root.is_absolute() or not root.is_dir():
         raise ValueError('WorkBuddy 安装目录必须是已存在的绝对目录')
@@ -76,7 +80,7 @@ def availability(home=None):
         info = installation(home)
         return {**info, 'installed': True, 'engine': 'workbuddy', 'ready': False,
                 'stage': 'native-chat-transport-candidate', 'account_verified': False,
-                'message': '已识别 WorkBuddy；原生积分执行、记录保护和工作台派发尚未全部验收，暂不列为可派发 Agent'}
+                'message': '已识别 WorkBuddy 安装；正式派发状态由 worker 结合原生宿主与用户配置核实'}
     except (OSError, ValueError, KeyError, struct.error):
         return {'installed': False, 'ready': False, 'engine': 'workbuddy',
                 'account_verified': False, 'message': 'WorkBuddy 安装不可用或版本未经验证；未调用模型'}
@@ -236,6 +240,7 @@ class NativeChatClient:
         self.diagnostics = []
         self.inbox = queue.Queue()
         self.tainted = False
+        self.cancel_check = lambda: False
         self.process = popen(command(info, model_id), cwd=self.project,
                              env=process_environment(config_home, isolated=isolated, installation_info=info),
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -280,6 +285,8 @@ class NativeChatClient:
             pass
 
     def request(self, method, params, *, timeout=20, event=None):
+        if self.cancel_check():
+            raise Cancelled('WorkBuddy 任务已请求取消')
         if self.tainted:
             raise OutcomeUnknown('本连接已有未知结果；不能继续或自动重发')
         if method not in {'initialize', 'session/new', 'session/set_config_option', 'session/prompt'}:
@@ -295,10 +302,14 @@ class NativeChatClient:
             raise OutcomeUnknown('WorkBuddy 请求发送结果未知；未重发') from None
         deadline = time.monotonic() + timeout if timeout else None
         while True:
+            if self.cancel_check():
+                raise Cancelled('WorkBuddy 任务已请求取消')
             remaining = max(0, deadline - time.monotonic()) if deadline else None
             try:
-                value = self.inbox.get(timeout=remaining)
+                value = self.inbox.get(timeout=min(remaining, .2) if remaining is not None else .2)
             except queue.Empty:
+                if deadline is None or time.monotonic() < deadline:
+                    continue
                 self.tainted = True
                 raise OutcomeUnknown('WorkBuddy 请求未返回权威结果；未重发') from None
             if isinstance(value, BaseException):
@@ -442,6 +453,8 @@ class NativeChatClient:
                     answer.append(content['text'])
 
         self.prompt_sent = True
+        if getattr(self, 'on_prompt', None):
+            self.on_prompt()  # Persist conservatively BEFORE the prompt can reach the wire.
         result = self.request('session/prompt', {'sessionId': self.session_id,
             'prompt': [{'type': 'text', 'text': prompt}]}, timeout=timeout, event=update)
         stop_reason = result.get('stopReason')

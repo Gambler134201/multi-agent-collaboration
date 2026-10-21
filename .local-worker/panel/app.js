@@ -2,6 +2,7 @@
 const expandedEndpoints = new Set();
 let endpointSaving = false;
 let modelEditorEndpoint = null;
+let nativeSetupDraft = null;
 
 function closeInlineModelEditor() {
   if(!modelEditorEndpoint)return;
@@ -12,6 +13,14 @@ function closeInlineModelEditor() {
 
 function endpointModelAction(model,action,label){
   return `<button type="button" class="text-button" data-model-action="${action}" data-id="${escapeText(model.id)}">${label}</button>`;
+}
+
+function renderNativeSettings(endpoint,model){
+  const config=nativeSetupDraft||endpoint.runtime?.configuration_values||{};
+  return `<p class="field-hint">WorkBuddy 登录账户 · 固定 DeepSeek V4.1 Flash。限定文件读写，无命令、子代理或原会话续接；主脑独立测试与验收。积分/实际请求数未返回，启用强制金额或请求次数上限时拒绝调用。</p>
+    <form data-native-setup><label>WorkBuddy 安装目录<input name="home" value="${escapeText(config.home||'')}" required placeholder="选择包含 WorkBuddy.exe 的安装目录"></label><label>原生配置目录<input name="profile" value="${escapeText(config.profile||'')}" required placeholder="当前用户的 .workbuddy 目录"></label><p class="field-hint">只校验公开安装信息，不读取认证文件。保存不调用模型，不切换其他执行端。</p><button type="submit" class="button secondary" ${endpointSaving?'disabled':''}>保存原生连接</button></form>
+    ${endpoint.message?`<p class="field-hint">${escapeText(endpoint.message)}</p>`:''}
+    ${model?.id&&model.id!==state.default_model?endpointModelAction(model,'default','设为手动默认'):''}`;
 }
 
 function renderEndpointCards(){
@@ -28,7 +37,7 @@ function renderEndpointCards(){
   setMarkup($('models'),rows.map(endpoint=>{
     const native=endpoint.id==='workbuddy',model=endpoint.model,group=endpoint.models||[],open=expandedEndpoints.has(endpoint.id);
     const runtime=endpoint.runtime||{},jobs=(state.tasks||[]).filter(t=>t.engine===endpoint.id&&['running','queued'].includes(t.status));
-    let status=!endpoint.enabled?badge('cancelled','已禁用'):native?badge('recovery_pending','待接入队列'):!endpoint.ready?badge('unknown','执行器未就绪'):!group.some(m=>m.enabled)?badge('unknown','未配置可用模型'):badge('online','执行器就绪');
+    let status=!endpoint.enabled?badge('cancelled','已禁用'):!endpoint.ready?badge('unknown','执行器未就绪'):!group.some(m=>m.enabled)?badge('unknown','未配置可用模型'):badge('online','执行器就绪');
     if(endpoint.selection_error)status=badge('failed','模型选择需修正');
     const name=native?'DeepSeek V4.1 Flash':model?.name||(group.length?'按任务选择':'尚未配置模型');
     const modelCode=native?'deepseek-v4.1-flash':model?.model||`${group.length} 个已配置模型`;
@@ -37,10 +46,10 @@ function renderEndpointCards(){
       <div class="endpoint-head"><div class="endpoint-mark" aria-hidden="true">${({pi:'Pi',dsh:'DSH',workbuddy:'WB'})[endpoint.id]}</div><div><h3>${escapeText(endpoint.name)}</h3><span class="subtle">${native?'登录账户模型 / 原生积分':'API / 本地模型'}</span></div></div>
       <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
       <div class="endpoint-current"><span class="label">${native?'指定原生模型':'当前模型 · 自动路由'}</span><strong>${escapeText(name)}</strong><div class="model-code">${escapeText(modelCode)}</div></div>
-      ${wallet}<div class="endpoint-status">${status}<span class="subtle">${jobs.length?`${jobs.length} 个本项目活动任务`:native?'原生文件验证已通过':model?.last_check?.ok?'最近连接测试通过':'未验证当前连接'}</span></div>
+      ${wallet}<div class="endpoint-status">${status}<span class="subtle">${jobs.length?`${jobs.length} 个本项目活动任务`:native?'原生账户 · 以派发预检为准':model?.last_check?.ok?'最近连接测试通过':'未验证当前连接'}</span></div>
       <button type="button" class="button secondary endpoint-expand" data-endpoint-expand="${endpoint.id}" aria-expanded="${open}" aria-controls="endpoint-settings-${endpoint.id}">模型与参数设置<span aria-hidden="true">${open?'−':'＋'}</span></button>
       <section class="endpoint-settings" id="endpoint-settings-${endpoint.id}" ${open?'':'hidden'} aria-label="${escapeText(endpoint.name)}模型与参数">
-        ${native?'<p class="field-hint">固定 DeepSeek V4.1 Flash，不回退到 Auto。原生聊天与限定文件写/改/读已实测；正式队列尚未接入，不计为可派发候选。不使用 DeepSeek API Key。</p>':`
+        ${native?renderNativeSettings(endpoint,model):`
         <label>自动路由使用模型<select data-endpoint-model="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><option value="">按任务选择（保留原有路由）</option>${endpoint.current_model&&!group.some(m=>m.id===endpoint.current_model)?`<option selected value="${escapeText(endpoint.current_model)}">已保存模型不可用，请重新选择</option>`:''}${group.map(m=>`<option value="${escapeText(m.id)}" ${endpoint.current_model===m.id?'selected':''} ${m.enabled?'':'disabled'}>${escapeText(m.name)}${m.enabled?'':'（已停用）'}</option>`).join('')}</select></label>
         <p class="field-hint">选择后自动路由使用此模型；手动任务可明确指定此执行端的其他模型。已有任务保持原模型。</p>
         ${endpoint.selection_error?`<p class="form-error">${escapeText(endpoint.selection_error)}</p>`:''}
@@ -56,12 +65,14 @@ async function saveEndpoint(id,patch){
   endpointSaving=true;renderModels();
   // /api/workflow already exists in resident MCP proxies. Keep its envelope
   // strictly separate from workflow values so loaded Codex panels work too.
-  try{await api('/api/workflow',{endpoint_settings:{id,values:patch}});toast('执行端设置已保存，现有运行任务继续；排队任务启动前检查开关');}
+  try{await api('/api/workflow',{endpoint_settings:{id,values:patch}});if(patch.native_setup)nativeSetupDraft=null;toast('执行端设置已保存，现有运行任务继续；排队任务启动前检查开关');}
   catch(error){toast(error.message,true);}
   finally{endpointSaving=false;await refresh();}
 }
 
 function setupEndpointCards(){
+  $('models').addEventListener('input',event=>{const form=event.target.closest('[data-native-setup]');if(form)nativeSetupDraft={home:form.elements.home.value,profile:form.elements.profile.value};});
+  $('models').addEventListener('submit',event=>{if(!event.target.matches('[data-native-setup]'))return;event.preventDefault();const form=event.target;saveEndpoint('workbuddy',{native_setup:{home:form.elements.home.value.trim(),profile:form.elements.profile.value.trim()}});});
   $('models').addEventListener('click',event=>{
     const button=event.target.closest('button');if(!button)return;
     if(button.dataset.endpointToggle){const row=state.execution_endpoints?.rows.find(e=>e.id===button.dataset.endpointToggle);if(row)saveEndpoint(row.id,{enabled:!row.enabled});}
@@ -128,7 +139,7 @@ function setMarkup(node, markup) {
   return true;
 }
 const statusNames = {queued:'等待执行',running:'执行中',completed:'执行完成',failed:'失败',cancelled:'已停止',recovery_pending:'待恢复'};
-const providerNames = {local:'本地 / 自建服务',deepseek:'DeepSeek',glm:'GLM / 智谱',custom:'兼容接口'};
+const providerNames = {workbuddy:'WorkBuddy 原生账户',local:'本地 / 自建服务',deepseek:'DeepSeek',glm:'GLM / 智谱',custom:'兼容接口'};
 let state = {models:[],tasks:[],default_model:null,observability:{},tree:null}, token = '', selectedTask = null, taskFilter = 'all', detailTab = 'result';
 let detailPrompt = '', promptTask = null, pendingDelete = null, toastTimer;
 let continuingTask=null;
@@ -346,12 +357,12 @@ function changeProjectView(view){
   markPanelActivity();startAutoPoll();
 }
 window.addEventListener('modeldesk-project-context',event=>changeProjectView(event.detail));
-const engineNames={dsh:'DeepSeek Harness',pi:'Pi Agent',direct:'直接调用',aider:'Aider'};
+const engineNames={workbuddy:'WorkBuddy',dsh:'DeepSeek Harness',pi:'Pi Agent',direct:'直接调用',aider:'Aider'};
 const defaultAgent=()=>state.workflow?.execution_agent||'dsh';
 const registeredAgents=()=>state.execution_agents||{dsh:{name:'DeepSeek Harness'},pi:{name:'Pi Agent'}};
 const agentIds=()=>Object.keys(registeredAgents());
 const MODEL_AGENT_FOLLOW='follow_global';
-const MODEL_AGENT_VALUES=[MODEL_AGENT_FOLLOW,'dsh','pi'];
+const MODEL_AGENT_VALUES=[MODEL_AGENT_FOLLOW,'dsh','pi','workbuddy'];
 const modelAgentPreference=model=>model?.default_agent||MODEL_AGENT_FOLLOW;
 const modelAgentValid=model=>model?.default_agent_valid!==false&&MODEL_AGENT_VALUES.includes(modelAgentPreference(model));
 const effectiveModelAgent=model=>{
@@ -444,6 +455,7 @@ function money(value,currency='CNY') {
 // Usage-based cost is confirmed only after a usage report settled; never show ¥0 as if it were a verified total.
 function settledCost(value,known){return known?money(value):'待核对';}
 function taskCostText(task){
+  if(task?.engine==='workbuddy')return 'WorkBuddy 积分未返回 · 人民币费用未知';
   const known=Number.isFinite(task?.cost_settled_cny)&&((task.cost_settled_calls||0)>0||task.cost_settled_cny>0);
   const parts=[`按用量计算费用 ${settledCost(Number(task?.cost_settled_cny)||0,known)}`];
   if(task?.cost_unknown_calls>0)parts.push(`待核对 ${task.cost_unknown_calls} 次`);
@@ -1020,7 +1032,8 @@ function renderDetail() {
     ${task.review?`<section class="route-note" aria-label="独立验收"><strong>${escapeText(task.review.label)}</strong><small>自动整改 ${task.review.rework_count??'—'} / ${task.review.max_auto_rework??1} 次</small>${task.review.problems?`<p>退回原因：${escapeText(task.review.problems)}</p>`:''}${task.review.blocked_reason?`<p>受阻原因：${escapeText(task.review.blocked_reason)}</p>`:''}${task.review.error?`<p>${escapeText(task.review.error)}</p>`:''}${task.review.reviewer_notes?`<p>${escapeText(task.review.reviewer_notes)}</p>`:''}${task.review.criteria?.length?`<ul>${task.review.criteria.map(c=>`<li>${escapeText(c.text)} · ${escapeText({pass:'通过',fail:'未通过',unknown:'待检查'}[c.status]||c.status)}</li>`).join('')}</ul>`:''}</section>`:!active?'<p class="session-note">尚未记录独立验收结论；执行状态不代表质量验收。</p>':''}
     ${task.kind==='edit'&&task.changed_files?.length?`<div><span class="label">已修改文件</span><div class="chips">${task.changed_files.map(f=>`<span class="chip">${escapeText(f)}</span>`).join('')}</div></div>`:''}
     ${task.kind==='chat'&&task.files?.length?`<div><span class="label">只读上下文文件</span><div class="chips">${task.files.map(f=>`<span class="chip">${escapeText(f)}</span>`).join('')}</div><p class="field-hint">这些文件用于代码索引与交接文件范围；只读权限由 kind/engine 沙箱保证，不是可修改文件。</p></div>`:''}
-    ${task.route?`<div class="route-note"><strong>${task.route.mode==='auto'?'自动路由':'手动指定'}</strong> · ${escapeText(task.route.reason)}<small>${task.route.requirements?.assessment?escapeText(task.route.requirements.assessment)+' · ':''}${task.model_calls||0} 次模型请求 · ${taskCostText(task)}${task.route.budget_cny?' / '+money(task.route.budget_cny):''}${task.budget_error?' · '+escapeText(task.budget_error):''}</small></div>`:''}
+    ${task.route?`<div class="route-note"><strong>${task.route.mode==='auto'?'自动路由':'手动指定'}</strong> · ${escapeText(task.route.reason)}<small>${task.route.requirements?.assessment?escapeText(task.route.requirements.assessment)+' · ':''}${task.engine==='workbuddy'?'原生底层请求次数未返回':`${task.model_calls||0} 次模型请求`} · ${taskCostText(task)}${task.route.budget_cny?' / '+money(task.route.budget_cny):''}${task.budget_error?' · '+escapeText(task.budget_error):''}</small></div>`:''}
+    ${task.engine==='workbuddy'?`<p class="session-note">WorkBuddy 原生会话 · 限定文件工具；无命令执行 · 清理状态：${escapeText(task.workbuddy?.cleanup||'待核实')} · ${escapeText(task.workbuddy_session_id||'会话待确认')}</p>`:''}
     ${task.engine==='pi'?`<p class="session-note">Pi Agent ${escapeText(task.executor_version||'')} · 记录目录保护：${task.record_protection?'已验证':'待验证'}</p>`:''}
     ${task.engine==='dsh'?`<p class="session-note">Agent：${escapeText(presetNames[task.agent_preset]||task.agent_preset||'历史配置')} · ${task.preset_verified?'实际绑定已验证':task.agent_preset?'等待执行验证':'预设未记录'} · <span title="${escapeText(thinking.note)}">思考等级：${escapeText(thinking.label)}</span> · 权限：${escapeText({'danger-full-access':'完全权限','workspace-write':'项目内写入','read-only':'只读'}[task.sandbox_mode]||'历史任务未记录')}</p>`:''}
     ${(task.pi_session_id||task.dsh_session_id)?`<p class="session-note">${task.parent_task_id?'已续接原会话':'独立会话'} · ${escapeText(task.pi_session_id||task.dsh_session_id)}</p>`:''}
@@ -1126,6 +1139,7 @@ async function refreshState() {
 let modelSavedConnectionDraft='';
 function modelConnectionDraft(body){const {default_agent,...connection}=body;return JSON.stringify(connection);}
 function openModel(id=null, endpoint=null) {
+  if(state.models.find(m=>m.id===id)?.provider==='workbuddy'){expandedEndpoints.add('workbuddy');renderModels();return;}
   closeInlineModelEditor();
   $('model-form').reset();$('model-error').textContent='';$('discovered-models').innerHTML='';$('model-id').value=id||'';
   const model=state.models.find(m=>m.id===id);$('model-dialog-title').textContent=model?'编辑执行模型':'添加执行模型';
@@ -1174,6 +1188,8 @@ function renderThinkingNote(){
   $('model-thinking-note').textContent=known+(p.note||'')+' 选择仅影响工作台的新任务，不修改服务端全局设置；更改后请新建会话。';
 }
 function taskAgentHint(){
+  const nativeModel=state.models.find(m=>m.id===$('task-model').value);
+  if($('task-route').value!=='auto'&&nativeModel?.provider==='workbuddy')return '使用 WorkBuddy 登录账户 DeepSeek V4.1 Flash；无命令/子代理/续接。积分与实际请求数未知，测试由主脑独立运行。';
   const control=$('task-engine'),selected=control.value,automatic=$('task-route').value==='auto';
   if(continuingTask)return `继续使用原任务的 ${engineNames[continuingTask.engine]||continuingTask.engine}、原模型与原会话；当前模型偏好不会迁移已有任务。`;
   if(selected==='direct')return '本次显式使用“直接询问模型”。它不使用 Agent 会话，也不会被模型默认或全局默认替换。';
@@ -1188,7 +1204,12 @@ function taskAgentHint(){
     ?`本次不额外指定：该模型跟随全局默认，将使用 ${globalName}；显式选择可覆盖本次任务。`
     :`本次不额外指定：将使用该模型保存的默认 Agent（${engineNames[effectiveModelAgent(model)]||effectiveModelAgent(model)}）；显式选择可覆盖本次任务。`;
 }
-function updateTaskAgentHint(){$('task-agent-hint').textContent=taskAgentHint();}
+function updateTaskAgentHint(){
+  $('task-agent-hint').textContent=taskAgentHint();
+  const native=$('task-route').value!=='auto'&&state.models.find(m=>m.id===$('task-model').value)?.provider==='workbuddy';
+  $('task-test').disabled=native;$('task-request-output').disabled=native;
+  $('task-session-hint').textContent=native?'新建 WorkBuddy 独立会话；暂不支持原会话续接，后续任务或整改使用新会话。':continuingTask?`继续同一 ${engineNames[continuingTask.engine]||continuingTask.engine} 会话，保留原任务 Agent/模型/项目。`:'按所选模型的默认 Agent 新建独立会话；任务结束后可以继续追问。';
+}
 function taskFields(){
   const editing=$('task-kind').value==='edit',automatic=$('task-route').value==='auto',control=$('task-engine');
   $('edit-fields').hidden=!editing;$('project-field').hidden=false;
@@ -1215,6 +1236,8 @@ function taskBody(){
   // "使用模型默认" must omit the field so the backend resolves the final
   // model's preference; sending the current global value would be a fake
   // explicit override.  A continuation is pinned by the server to its parent.
+  const native=body.route_mode!=='auto'&&state.models.find(m=>m.id===body.model_id)?.provider==='workbuddy';
+  if(native){body.test_command='';body.request_output_tokens=null;}
   const engine=$('task-engine').value;
   if(!continuingTask&&engine&&engine!=='model_default')body.engine=engine;
   return body;
@@ -1229,7 +1252,7 @@ function openTask(parent=null) {
   const inScope=inScopeModels(enabled);
   if(!inScope.length){toast(`执行模型范围「${scopeLabel()}」下没有已启用的模型；请在模型范围与预算中调整范围或启用相应模型。`,true);return;}
   continuingTask=parent;
-  $('task-engine').innerHTML='<option value="model_default">使用模型默认（推荐）</option>'+Object.entries(registeredAgents()).map(([id,info])=>`<option value="${escapeText(id)}">${escapeText(info.name||id)} · 工具与会话</option>`).join('')+'<option value="direct">直接询问模型 · 简单咨询</option><option value="aider">Aider · 文件修改</option>';
+  $('task-engine').innerHTML='<option value="model_default">使用模型默认（推荐）</option>'+Object.entries(registeredAgents()).map(([id,info])=>`<option value="${escapeText(id)}">${escapeText(info.name||id)} · ${id==='workbuddy'?'限定文件 / 新会话':'工具与会话'}</option>`).join('')+'<option value="direct">直接询问模型 · 简单咨询</option><option value="aider">Aider · 文件修改</option>';
   $('task-form').reset();$('task-error').textContent='';$('task-model').innerHTML=enabled.map(m=>`<option value="${escapeText(m.id)}"${modelInScope(m)?'':' disabled'}>${escapeText(m.name)}${modelInScope(m)?'':'（范围外，不可选）'}</option>`).join('');$('task-model').value=parent?.model_id||(inScope.some(m=>m.id===state.default_model)?state.default_model:inScope[0].id);
   $('task-engine').value=parent?.engine||'model_default';$('task-kind').value=parent?.kind||'chat';$('task-project').value=parent?.project||(projectView.mode==='project'?projectView.project:'');$('task-files').value=(parent?.files||[]).join('\n');$('task-title').value=parent?'继续 · '+parent.title:'';
   $('task-route').querySelector('[value="auto"]').disabled=!state.workflow?.enabled;

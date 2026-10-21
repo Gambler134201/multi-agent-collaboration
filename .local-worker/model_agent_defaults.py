@@ -15,9 +15,9 @@ from copy import deepcopy
 
 FIELD = 'default_agent'
 FOLLOW_GLOBAL = 'follow_global'
-AGENT_VALUES = ('dsh', 'pi')
+AGENT_VALUES = ('dsh', 'pi', 'workbuddy')
 VALUES = (FOLLOW_GLOBAL, *AGENT_VALUES)
-LABELS = {FOLLOW_GLOBAL: '跟随全局默认', 'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent'}
+LABELS = {FOLLOW_GLOBAL: '跟随全局默认', 'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy'}
 SOURCE_LABELS = {'explicit': '本次显式指定', 'model': '模型指定', 'global': '跟随全局默认'}
 INVALID_MESSAGE = ('模型默认执行 Agent 无效；请选择“跟随全局默认 / DeepSeek Harness / Pi Agent”，'
                    '不会自动改用其他 Agent')
@@ -66,7 +66,10 @@ def effective(model, settings):
     import execution_engines
     value = stored(model)
     if value == FOLLOW_GLOBAL:
-        return execution_engines.selected(settings), 'global'
+        agent = execution_engines.selected(settings)
+        execution_engines.validate_model(agent, model)
+        return agent, 'global'
+    execution_engines.validate_model(value, model)
     return value, 'model'
 
 
@@ -125,6 +128,10 @@ def update(model_id, value):
                     if isinstance(item, dict) and item.get('id') == model_id), None)
         if row is None:
             raise ValueError('模型不存在')
+        import execution_engines
+        if normalized == FOLLOW_GLOBAL and row.get('provider') == 'workbuddy':
+            raise ValueError('WorkBuddy 原生模型必须固定使用 WorkBuddy 执行端')
+        execution_engines.validate_model(normalized, row)
         row[FIELD] = normalized
         registry.write_json(registry.REGISTRY, data)
     return registry.public_model(row)

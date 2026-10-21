@@ -26,7 +26,7 @@ Codex 沿用现有本地 CLI 派发，无需建立 DSH 使用的 broker 会话�
 
 ## 执行端独立开关
 
-执行端卡片、自动路由模型选择和启用状态由公共 `execution_endpoints` 维护；Codex/DSH 共用相同路由、候选、启动前与恢复检查。禁用不取消已运行任务，不更换既有 Agent 或模型，不修改范围和预算。两宿主模拟页面检查与原生人工确认必须分开记录。WorkBuddy 目前仅有待接入队列的卡片，不是已完成的正式执行端。详见 [EXECUTION_ENDPOINTS.md](EXECUTION_ENDPOINTS.md)。
+执行端卡片、自动路由模型选择和启用状态由公共 `execution_endpoints` 维护；Codex/DSH 共用相同路由、候选、启动前与恢复检查。禁用不取消已运行任务，不更换既有 Agent 或模型，不修改范围和预算。WorkBuddy 原生执行队列已接入这两个主脑的公共控制器；仅对话/限定文件、固定原生模型、未知费用和安全恢复限制同步适用。两宿主模拟检查与真实任务验收分开记录，正式真实任务仍待验证。WorkBuddy 作为主脑仍未适配完成。详见 [EXECUTION_ENDPOINTS.md](EXECUTION_ENDPOINTS.md)。
 
 ## 原生 PowerShell 7 依赖
 

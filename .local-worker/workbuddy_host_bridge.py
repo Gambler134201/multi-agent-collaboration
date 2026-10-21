@@ -1,4 +1,4 @@
-"""Experimental 5.8.2 native-host lease transport; never registered as ready.
+"""Verified 5.8.2 native-host lease transport for task-owned sessions.
 
 Only an already running, same-profile WorkBuddy sidecar is used. No PID/auth
 files, ping/userinfo endpoints, existing-session lists or bootstrap keys are
@@ -257,7 +257,7 @@ class NativeHostClient(wb.NativeChatClient):
 
 
 def create_client(info, project, profile, model_id, *, names=None, pipe_factory=WindowsPipe,
-                  tool_job=None):
+                  tool_job=None, on_lease=None):
     """Create one native-host-owned lease; built-ins remain disabled, no prompt."""
     project = Path(project)
     if not project.is_absolute() or not project.is_dir():
@@ -271,6 +271,8 @@ def create_client(info, project, profile, model_id, *, names=None, pipe_factory=
         if args != wb.command(info, model_id) or Path(kwargs['cwd']).resolve() != project.resolve():
             raise ValueError('Native lease command or project mismatch')
         control = LeaseControl(pipe_factory(channel, info['executable']), session_id)
+        if on_lease:
+            on_lease({'state': 'creating', 'session_id': session_id, 'channel': channel})
         env = dict(kwargs['env'])
         # This process is physically spawned by the verified native WorkBuddy
         # host. The brain owner/caller remains Model Desk; no keys are supplied.
@@ -287,6 +289,9 @@ def create_client(info, project, profile, model_id, *, names=None, pipe_factory=
                     not re.fullmatch(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', result['runtimeId'])):
                 raise wb.OutcomeUnknown('Native lease identity not confirmed; no attachment: ' + session_id)
             control.runtime_id = result['runtimeId']
+            if on_lease:
+                on_lease({'state': 'created', 'session_id': session_id, 'channel': channel,
+                          'runtime_id': control.runtime_id, 'pid': result['pid']})
             data = pipe_factory(expected_data, info['executable'], expected_pid=control.pipe.server_pid)
             try:
                 child = data.verified_process(result['pid'], info['executable'])
