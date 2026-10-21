@@ -187,7 +187,11 @@ def prepare(run, project, task_id, files, readonly_files=()):
 def server_config(job_file):
     FileTools(job_file)  # Validate before native host creation.
     return {'name': 'modeldesk-files', 'command': sys.executable,
-            'args': [str(Path(__file__).resolve()), '--job', str(Path(job_file).resolve())], 'env': []}
+            'args': [str(Path(__file__).resolve()), '--job', str(Path(job_file).resolve())], 'env': [],
+            # 5.8.2's ACP converter explicitly supports this per-server field.
+            # ToolSearch is disabled with all other built-ins; these three
+            # scoped tools must therefore be included directly in model tools.
+            '_meta': {'defer_loading': False}}
 
 
 def verify(job_file):

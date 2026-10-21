@@ -176,6 +176,22 @@ class FileToolTests(unittest.TestCase):
         with self.assertRaises(wb.ProtocolError):
             client._file_permission(self.request())
 
+    def test_only_scoped_file_server_disables_deferral_without_changing_native_defaults(self):
+        for job in (None, self.job):
+            process = Mock(stdout=io.StringIO(), stderr=io.StringIO())
+            spawn = Mock(return_value=process)
+            client = wb.NativeChatClient({'executable': sys.executable, 'cli': 'fixture'},
+                self.root, self.root, isolated=True, popen=spawn, tool_job=job)
+            try:
+                args, kwargs = spawn.call_args
+                self.assertEqual(args[0][args[0].index('--tools') + 1], '')
+                self.assertIsNone(kwargs['env'].get('CODEBUDDY_DEFER_TOOL_LOADING'))
+                self.assertEqual(len(client.mcp_servers), 1 if job else 0)
+                if job:
+                    self.assertEqual(client.mcp_servers[0]['_meta'], {'defer_loading': False})
+            finally:
+                client.close()
+
     def test_real_stdio_mcp_handshake_scope_and_refusal(self):
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
