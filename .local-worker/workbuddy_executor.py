@@ -160,6 +160,9 @@ def prompt_failure(result):
     meta = result.get('_meta') if isinstance(result.get('_meta'), dict) else {}
     raw = meta.get('codebuddy.ai/errorMessage', result.get('errorMessage'))
     code = None
+    business_code = None
+    http_status = None
+    native_category = None
     text = raw if isinstance(raw, str) else ''
     if isinstance(raw, str):
         try:
@@ -172,16 +175,25 @@ def prompt_failure(result):
                 candidate = error.get('code')
                 if type(candidate) is int:
                     code = candidate
+                data = error.get('data')
+                if isinstance(data, dict):
+                    business_code = data.get('code') if type(data.get('code')) is int else None
+                    http_status = data.get('statusCode') if type(data.get('statusCode')) is int else None
+                    value = data.get('category')
+                    if value in ('auth', 'quota', 'custom_model_auth', 'network', 'task_configuration'):
+                        native_category = value
     lower = text.lower()
-    if any(marker in lower for marker in ('not logged in', 'unauthorized', 'authentication required', '请先登录', '未登录', '登录失效')):
+    if native_category == 'auth' or any(marker in lower for marker in ('not logged in', 'unauthorized', 'authentication required', '请先登录', '未登录', '登录失效')):
         category = 'authentication_required'
-    elif any(marker in lower for marker in ('insufficient credits', '积分不足', '额度不足')):
+    elif native_category == 'quota' or any(marker in lower for marker in ('insufficient credits', '积分不足', '额度不足')):
         category = 'credits_unavailable'
     elif result.get('sensitiveInputDecision'):
         category = 'sensitive_input_refused'
     else:
         category = 'native_refusal' if result.get('stopReason') == 'refusal' else 'native_turn_not_completed'
-    return {'category': category, 'native_error_code': code, 'details_present': raw is not None}
+    return {'category': category, 'native_error_code': code, 'business_code': business_code,
+            'http_status': http_status, 'native_category': native_category,
+            'details_present': raw is not None}
 
 
 class NativeChatClient:

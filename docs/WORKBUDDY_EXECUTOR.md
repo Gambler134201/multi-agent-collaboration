@@ -25,7 +25,7 @@
 
 这些底层机制已用真实 Python 子进程模拟 ACP 做离线回归；不调用真实模型作为回归。
 
-## 一次真实最小验证
+## 第一次真实最小验证
 
 用户原先授权一次最小测试，随后将模型明确改为 DeepSeek V4.1 Flash。测试只要求回复 `OK`，禁用工具，在临时项目运行。
 
@@ -37,6 +37,29 @@
 - 独立原生测试不是工作台正式任务，没有证明派发、工具保护、交付、验收、整改或通知链路。
 
 本机测试证据保存在忽略目录 `.local-worker/tasks/workbuddy-native-smoke-20261021/result.json`，不发布本机记录。
+
+## 第二次获授权诊断：已定位为认证不可用
+
+用户在桌面聊天里选择相同模型能正常回复，并另行明确授权仅一次诊断。本轮仍只发送一次要求回复 `OK` 的提示词，不重试、不更换模型。
+
+- 原生确认模型仍为 `deepseek-v4.1-flash`。
+- 原生返回 `stopReason=refusal`；错误扩展明确返回 `code=-32000`、`data.category=auth`，适配器分类为 `authentication_required`。
+- 原始错误体不公开、不写入公共日志；只保留允许列举的错误分类、数值码、是否存在详情。
+- 已在 `finally` 恢复原范围，并核对完整工作流设置与调用前一致；协作开关始终关闭。
+- 答复为空，使用量、积分和人民币费用仍未知。没有确认此次请求是否产生计费。
+- 这证明本轮原生执行进程未获得可用认证；**不能由此声称桌面已退出登录、账户无积分、模型不可用，也不能确定具体根因为路径、初始化时序或凭据保护能力。**
+- 没有调用 ACP `authenticate`：5.8.2 的公开实现会等待初始化，然后在已有会话时先 `logout()` 再 `login()`；不能用它作无副作用的登录检查。适配器协议允许列表不包含此方法，离线检查确保未发送该请求。
+- 没有读取认证文件、提取 token、降低凭据加密策略、关闭原生 HTTP 鉴权或自动重启桌面程序。
+
+本机证据在忽略目录 `.local-worker/tasks/workbuddy-native-diagnostic-20261021/result.json`。这是第二次独立诊断的新证据，不追认第一次丢失的错误内容。
+
+### 后续账户交接要求
+
+安装包公开代码显示桌面宿主与原生执行进程涉及产品配置、账户恢复和凭据保护初始化。直接启动 bundled CLI、取得模型目录，均不足以证明能够使用桌面账户。下一步需核实由原生宿主承载的执行入口，或产品正式支持的授权方式；不能用复制桌面凭据、伪造宿主身份或关闭保护来接通。
+
+WorkBuddy 开放平台的第三方应用走显式 OAuth 授权；分享入口是内容预填，需要用户检查发送，并不等于后台任务已提交。现有公开文档尚未证明该入口满足本适配所需的“明确项目目录 + 固定模型 + 可关联结果”，因此没有自动切换到它。
+
+当前候选继续 `ready=false`。未经另行授权，不再以模型推理验证认证猜测。
 
 ## 接下来必须完成
 
@@ -56,5 +79,6 @@ python -m unittest discover -s .local-worker/tests -p test_workbuddy_executor.py
 
 - [官方 ACP 文档](https://www.codebuddy.cn/docs/cli/acp)：会话、模型配置与结束事件。
 - [官方 CLI 文档](https://www.codebuddy.cn/docs/cli/cli-reference)：ACP、serve、工具与设置来源参数。
+- [第三方应用与分享边界](https://open.workbuddy.cn/docs/third-party-app)：OAuth 授权与原生分享的能力边界。
 - [WorkBuddy Open API](https://open.workbuddy.cn/docs/openapi)：本地助理与云端任务并非同一个本地项目执行入口，OAuth 应用授权也不能假设已存在。
 - 本机 5.8.2 的公开安装代码：`cli/bin/codebuddy`、`main/workbuddy-product-config.js`、`main/cli-process-env.js`、`main/sidecar-manager.js`。只读包内产品代码，不读取认证文件。

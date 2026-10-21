@@ -32,6 +32,11 @@ for line in sys.stdin:
     elif method == 'session/set_config_option':
         r = {'configOptions': [{'id': 'model', 'currentValue': 'other' if scenario == 'wrong_model' else 'glm-test'}]}
     elif method == 'session/prompt':
+        if scenario == 'auth_required':
+            r = {'stopReason': 'refusal', '_meta': {'codebuddy.ai/errorMessage': json.dumps({
+                'code': -32000, 'message': 'private-native-detail', 'data': {'category': 'auth'}})}}
+            print(json.dumps({'jsonrpc': '2.0', 'id': q['id'], 'result': r}), flush=True)
+            continue
         if scenario == 'unknown':
             sys.exit(0)
         if scenario == 'error':
@@ -146,6 +151,44 @@ class WorkBuddyExecutorTests(unittest.TestCase):
         self.assertEqual(error['category'], 'authentication_required')
         self.assertEqual(error['native_error_code'], 401)
         self.assertNotIn('secret-value', json.dumps(error))
+
+    def test_structured_native_error_preserves_only_whitelisted_diagnostics(self):
+        result = {'stopReason': 'refusal', '_meta': {'codebuddy.ai/errorMessage': json.dumps({
+            'code': -32000, 'message': 'opaque', 'data': {'category': 'auth', 'code': 1234,
+                'statusCode': 401, 'details': 'private-data-never-returned'}})}}
+        error = wb.prompt_failure(result)
+        self.assertEqual(error['category'], 'authentication_required')
+        self.assertEqual(error['business_code'], 1234)
+        self.assertEqual(error['http_status'], 401)
+        self.assertNotIn('private-data', json.dumps(error))
+
+    def test_unknown_or_private_native_category_is_not_copied(self):
+        result = {'stopReason': 'refusal', '_meta': {'codebuddy.ai/errorMessage': json.dumps({
+            'code': 'private-code', 'data': {'category': 'private-category', 'code': 'private'}})}}
+        error = wb.prompt_failure(result)
+        self.assertIsNone(error['native_error_code'])
+        self.assertIsNone(error['business_code'])
+        self.assertIsNone(error['native_category'])
+
+    def test_auth_required_stays_failed_without_login_retry_or_model_fallback(self):
+        c = self.client('auth_required')
+        r = c.chat('glm-test', 'test', PERMITTED, timeout=3)
+        self.assertEqual(r['status'], 'failed')
+        self.assertEqual(r['execution_error']['category'], 'authentication_required')
+        self.assertEqual(r['execution_error']['native_error_code'], -32000)
+        self.assertFalse(r['accepted'])
+        self.assertNotIn('private-native-detail', json.dumps(r))
+        with self.assertRaises(ValueError):
+            c.chat('glm-test', 'retry', PERMITTED, timeout=3)
+        self.assertEqual([x['method'] for x in self.requests()],
+                         ['initialize', 'session/new', 'session/set_config_option', 'session/prompt'])
+
+    def test_authenticate_cannot_trigger_native_logout_or_login(self):
+        c = self.client()
+        before = self.requests()
+        with self.assertRaises(ValueError):
+            c.request('authenticate', {'methodId': 'external'})
+        self.assertEqual(self.requests(), before)
 
     def test_real_stdio_mock_connect_never_prompts_or_proves_account(self):
         c = self.client()
