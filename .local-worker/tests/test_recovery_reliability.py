@@ -1525,9 +1525,9 @@ class StageRecoveryAdmissionTests(Sandbox):
         gate_calls = []
         real_gate = panel.scope_gate
 
-        def recording_gate(model, settings, task_id=None):
+        def recording_gate(model, settings, task_id=None, engine=None):
             gate_calls.append((model.get('id'), settings.get('model_scope')))
-            return real_gate(model, settings, task_id=task_id)
+            return real_gate(model, settings, task_id=task_id, engine=engine)
 
         fake = SimpleNamespace(submit=lambda fn, tid: submitted.append(tid))
         with patch.object(panel, 'recorded_worker_alive', return_value=False), \

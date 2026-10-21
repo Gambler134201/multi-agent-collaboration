@@ -8,6 +8,7 @@
 .local-worker/models.json
 .local-worker/settings.json
 .local-worker/workflow.json
+.local-worker/execution-endpoints.json
 .local-worker/budget-ledger.json
 .local-worker/project-index.json
 .local-worker/project-bookmarks.json

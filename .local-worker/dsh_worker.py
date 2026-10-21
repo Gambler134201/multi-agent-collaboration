@@ -647,6 +647,8 @@ def _run_task(run, state, model, relay):
 
 
 def run_task(run, state, model):
+    import execution_endpoints
+    execution_endpoints.gate(state.get('engine') or 'dsh', model, workflow_settings.snapshot())
     # One per-task thinking-metadata resolution.  A degraded engine default must
     # not kill an otherwise eligible task, but an exact model mismatch and an
     # explicitly chosen level without trusted metadata still stop before any

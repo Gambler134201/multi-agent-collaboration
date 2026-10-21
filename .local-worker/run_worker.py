@@ -83,6 +83,8 @@ def main():
     # The global execution-model scope also guards a direct CLI Aider run, so the
     # panel is not the only enforcement point.  A refusal never changes the model.
     workflow = workflow_settings.snapshot()
+    import execution_endpoints
+    execution_endpoints.gate('aider', settings, workflow)
     paid = model_router.is_paid(settings)
     model_scope.check(workflow.get("model_scope", model_scope.DEFAULT_SCOPE), paid)
     if paid:

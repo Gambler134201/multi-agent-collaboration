@@ -445,6 +445,8 @@ def _global_agent(settings):
 
 def choose(body, models, settings, history=(), daily_remaining=None, moment=None, daily_uncertain=False):
     import execution_engines
+    import execution_endpoints
+    endpoint_controls = execution_endpoints.snapshot()
     req = requirements(body)
     mode = body.get('route_mode', 'manual')
     if mode not in {'auto', 'manual'}:
@@ -492,6 +494,7 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
             if not model.get('enabled', True):
                 raise ValueError('模型已停用')
             agent, agent_source = execution_engines.resolution(body, settings, model=model)
+            execution_endpoints.gate(agent, model, settings, controls=endpoint_controls, automatic=mode == 'auto')
             if agent_source == 'model' and agent in execution_engines.AGENTS:
                 # A saved model preference is authoritative for this candidate:
                 # an unavailable adapter refuses the route instead of quietly

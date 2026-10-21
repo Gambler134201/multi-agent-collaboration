@@ -24,6 +24,10 @@ Codex 沿用现有本地 CLI 派发，无需建立 DSH 使用的 broker 会话�
 
 回复提示由模型遵循指令输出，不是宿主强制渲染层。插件/规则完全未加载时无法保证提示出现；没有看到状态行，不应默认架构正确加载。Codex 全局规则更新后应新建聊天验证，旧聊天不承诺自动重载；用户可以在旧聊天明确要求重新预检。
 
+## 执行端独立开关
+
+执行端卡片、自动路由模型选择和启用状态由公共 `execution_endpoints` 维护；Codex/DSH 共用相同路由、候选、启动前与恢复检查。禁用不取消已运行任务，不更换既有 Agent 或模型，不修改范围和预算。两宿主模拟页面检查与原生人工确认必须分开记录。WorkBuddy 目前仅有待接入队列的卡片，不是已完成的正式执行端。详见 [EXECUTION_ENDPOINTS.md](EXECUTION_ENDPOINTS.md)。
+
 ## 原生 PowerShell 7 依赖
 
 Codex MCP、DSH/通用主脑的公共启动器、系统目录选择器共用 `powershell_runtime.find_pwsh`。调用宿主的 PATH 不应决定相同机器上是否能启动。现有 PowerShell 7 可来自系统安装、显式绝对路径或本机缓存；不要求 Codex 运行，但仍依赖该可执行文件实际存在。没有原生 PowerShell 时明确拒绝，不自动下载、不换 shell。

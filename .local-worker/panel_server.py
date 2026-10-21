@@ -878,7 +878,7 @@ def connectivity_gate(model):
             "verdict": verdict, "check": check}
 
 
-def scope_gate(model, settings, task_id=None):
+def scope_gate(model, settings, task_id=None, engine=None):
     """Enforce the global execution-model scope on one already-chosen model.
 
     The routing gate in ``model_router.choose`` is the primary enforcement; this
@@ -890,6 +890,8 @@ def scope_gate(model, settings, task_id=None):
     """
     if not isinstance(settings, dict):
         settings = workflow_settings.snapshot()
+    import execution_endpoints
+    execution_endpoints.gate(engine or execution_engines.resolve({}, settings, model=model), model, settings)
     raw = settings.get("model_scope", model_scope.DEFAULT_SCOPE)
     scope = model_scope.normalize(raw)
     if model_scope.matches(scope, model_router.is_paid(model)):
@@ -935,7 +937,7 @@ def execute_task(task_id):
         # A task queued earlier is checked against the *latest* global scope right
         # before its worker starts.  An out-of-scope model is recorded and refused;
         # no provider is called and nothing is re-routed or re-dispatched.
-        scope_gate(model, settings, task_id=task_id)
+        scope_gate(model, settings, task_id=task_id, engine=state.get('engine'))
         if state.get("engine") == "dsh":
             command = [str(PYTHON), str(HERE / "dsh_worker.py"), "--run-id", task_id]
         elif state.get("engine") == "pi":
@@ -1849,7 +1851,7 @@ def recover_task(task_id, body=None, actor="main"):
         except (OSError, ValueError):
             recovery_model = None
         if recovery_model is not None:
-            scope_gate(recovery_model, workflow_settings.snapshot(), task_id=task_id)
+            scope_gate(recovery_model, workflow_settings.snapshot(), task_id=task_id, engine=state.get('engine'))
     if body.get("confirm") is not True:
         raise ValueError("显式恢复需要 confirm=true；未完成的执行不会自动重发")
     verdict = recorded_worker_alive(state)
@@ -2139,9 +2141,13 @@ class Handler(BaseHTTPRequestHandler):
                 models = registry.list_models()
                 enriched = thinking_config.enrich(deepseek_billing.enrich_models(models))
                 enriched['models'] = model_agent_defaults.public_rows(enriched.get('models', []), settings)
+                import execution_endpoints
+                agent_rows = execution_engines.public_agents()
+                endpoint_rows = execution_endpoints.public_rows(enriched['models'], settings, agent_rows)
                 return self.send_json({**enriched, "tasks": panel_snapshot_tasks(self.project_view), "server_time": registry.now(),
                                       "workspace": str(HERE.parent), "execution": "任务按顺序执行", "agent": execution_engines.public_selection(settings)[1],
-                                      "execution_agents": execution_engines.public_agents(),
+                                      "execution_agents": agent_rows,
+                                      "execution_endpoints": endpoint_rows,
                                       'execution_activity':execution_activity(),
                                       'workflow': {**settings, 'daily': public_daily_cost(settings)}, 'codex_usage': codex_usage.usage_state(),
                                       'host_account': host_balance.state(),
@@ -2333,7 +2339,17 @@ class Handler(BaseHTTPRequestHandler):
                 initial = self.project_view.get('project') if self.project_view else None
                 return self.send_json(folder_picker.JOBS.start(initial))
             if path == '/api/workflow':
+                if isinstance(body, dict) and 'endpoint_settings' in body:
+                    import execution_endpoints
+                    block = body['endpoint_settings']
+                    if set(body) != {'endpoint_settings'} or not isinstance(block, dict) or set(block) != {'id', 'values'}:
+                        raise ValueError('执行端设置需要独立保存，不能混入范围、预算或授权')
+                    return self.send_json(execution_endpoints.update(block['id'], block['values'], workflow_settings.snapshot()))
                 return self.send_json(workflow_settings.save_settings(body))
+            endpoint_match = re.fullmatch(r'/api/execution-endpoints/(pi|dsh|workbuddy)', path)
+            if endpoint_match:
+                import execution_endpoints
+                return self.send_json(execution_endpoints.update(endpoint_match.group(1), body, workflow_settings.snapshot()))
             if path == '/api/codex-usage/refresh':
                 return self.send_json(codex_usage.usage_state(force=True))
             if path == '/api/route-preview':

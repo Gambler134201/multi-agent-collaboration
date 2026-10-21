@@ -93,6 +93,7 @@ _POST_EXACT = frozenset({"/api/workflow", "/api/codex-usage/refresh", "/api/rout
                          "/api/task-records/preview", "/api/task-records/delete", "/api/projects/remember",
                          "/api/db/compact"})
 _POST_MODEL = re.compile(rf"^/api/models/{_SAFE_SEGMENT}/(save|delete|test|default|balance|thinking)$")
+_POST_ENDPOINT = re.compile(r'^/api/execution-endpoints/(pi|dsh|workbuddy)$')
 _POST_CANCEL = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}/cancel$")
 _POST_RECOVER = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}/recover$")
 _POST_REVIEW = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}/review$")
@@ -125,6 +126,7 @@ def validate_request(path, method) -> str:
                    or bool(_GET_PICK.fullmatch(path)))
     else:
         allowed = (path in _POST_EXACT
+                   or bool(_POST_ENDPOINT.fullmatch(path))
                    or bool(_POST_MODEL.fullmatch(path))
                    or bool(_POST_CANCEL.fullmatch(path))
                    or bool(_POST_RECOVER.fullmatch(path))

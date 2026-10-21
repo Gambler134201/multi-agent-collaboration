@@ -311,6 +311,8 @@ def _public_route(route):
 
 
 def _candidates(context, payload):
+    import execution_endpoints
+    endpoint_controls = execution_endpoints.snapshot()
     _keys(payload, ())
     import execution_engines
     import model_agent_defaults
@@ -346,8 +348,15 @@ def _candidates(context, payload):
         scope_ok = model_scope.matches(scope, paid)
         enabled = bool(model.get('enabled', True))
         default_agent = model_agent_defaults.describe(model, settings)
-        selectable = bool(enabled and scope_ok and agent.get('ready'))
+        endpoint_error = ''
+        try:
+            execution_endpoints.gate(engine, model, settings, controls=endpoint_controls, automatic=True)
+        except ValueError as error:
+            endpoint_error = str(error)
+        selectable = bool(enabled and scope_ok and agent.get('ready') and not endpoint_error)
         reasons = []
+        if endpoint_error:
+            reasons.append(endpoint_error)
         if not enabled:
             reasons.append('模型已停用')
         if not scope_ok:
@@ -360,6 +369,7 @@ def _candidates(context, payload):
             'paid': paid, 'enabled': enabled,
             'api_key_set': bool(model.get('api_key_set')),
             'engine': engine, 'agent_source': source,
+            'endpoint_allowed': not endpoint_error,
             'agent_label': execution_engines.LABELS.get(engine, engine),
             'agent_ready': bool(agent.get('ready')),
             'agent_message': _text(agent.get('message'), 300),

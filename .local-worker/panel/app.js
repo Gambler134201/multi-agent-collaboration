@@ -1,3 +1,77 @@
+/* Shared Codex/DSH workbench UI. No provider requests on render or toggle. */
+const expandedEndpoints = new Set();
+let endpointSaving = false;
+let modelEditorEndpoint = null;
+
+function closeInlineModelEditor() {
+  if(!modelEditorEndpoint)return;
+  $('model-dialog').append($('model-form'));
+  modelEditorEndpoint=null;
+  renderModels();
+}
+
+function endpointModelAction(model,action,label){
+  return `<button type="button" class="text-button" data-model-action="${action}" data-id="${escapeText(model.id)}">${label}</button>`;
+}
+
+function renderEndpointCards(){
+  if(modelEditorEndpoint)return; // Preserve an unsaved inline form across polling.
+  $('model-agent-entry').hidden=true;$('agent-settings-open').hidden=true;$('agent-state').hidden=true;
+  const data=state.execution_endpoints,rows=data.rows||[];
+  $('model-count').textContent=rows.length;
+  $('stat-models').textContent=rows.filter(e=>e.enabled).length;
+  $('model-caption').textContent=`/ ${rows.length} 个执行端`;
+  const defaultModel=state.models.find(m=>m.id===state.default_model);
+  $('default-name').textContent=defaultModel?.name||'尚未选择';
+  const summary=$('endpoint-summary');
+  if(summary){summary.textContent=`已启用 ${rows.filter(e=>e.enabled).length} / ${rows.length} 个执行端 · 禁用仅阻止新任务，运行中任务继续`;summary.classList.toggle('form-error',!data.readable);if(!data.readable)summary.textContent=data.error;}
+  setMarkup($('models'),rows.map(endpoint=>{
+    const native=endpoint.id==='workbuddy',model=endpoint.model,group=endpoint.models||[],open=expandedEndpoints.has(endpoint.id);
+    const runtime=endpoint.runtime||{},jobs=(state.tasks||[]).filter(t=>t.engine===endpoint.id&&['running','queued'].includes(t.status));
+    let status=!endpoint.enabled?badge('cancelled','已禁用'):native?badge('recovery_pending','待接入队列'):!endpoint.ready?badge('unknown','执行器未就绪'):!group.some(m=>m.enabled)?badge('unknown','未配置可用模型'):badge('online','执行器就绪');
+    if(endpoint.selection_error)status=badge('failed','模型选择需修正');
+    const name=native?'DeepSeek V4.1 Flash':model?.name||(group.length?'按任务选择':'尚未配置模型');
+    const modelCode=native?'deepseek-v4.1-flash':model?.model||`${group.length} 个已配置模型`;
+    const wallet=native?'<div class="endpoint-wallet"><div><span>WorkBuddy 账户积分</span><strong>未同步</strong></div><small>使用登录账户原生积分</small></div>':model?.billing?`<div class="endpoint-wallet endpoint-billing"><div class="endpoint-wallet-source">${escapeText(providerNames[model.provider]||model.provider)} API 账户余额</div>${renderBilling(model)}</div>`:`<div class="endpoint-wallet"><div><span>${model?.provider==='local'?'账户余额':'账户余额'}</span><strong>${model?.provider==='local'?'不适用':model?'暂不支持查询':'按任务模型显示'}</strong></div><small>${model?.provider==='local'?'本地运行，不经云端账户扣费':model?'此服务暂无余额读取适配':'展开设置查看模型及各自余额'}</small></div>`;
+    return `<article class="endpoint-card ${model?.billing?'billing-model':''} ${endpoint.enabled?'':'endpoint-disabled'}" data-endpoint-id="${endpoint.id}">
+      <div class="endpoint-head"><div class="endpoint-mark" aria-hidden="true">${({pi:'Pi',dsh:'DSH',workbuddy:'WB'})[endpoint.id]}</div><div><h3>${escapeText(endpoint.name)}</h3><span class="subtle">${native?'登录账户模型 / 原生积分':'API / 本地模型'}</span></div></div>
+      <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
+      <div class="endpoint-current"><span class="label">${native?'指定原生模型':'当前模型 · 自动路由'}</span><strong>${escapeText(name)}</strong><div class="model-code">${escapeText(modelCode)}</div></div>
+      ${wallet}<div class="endpoint-status">${status}<span class="subtle">${jobs.length?`${jobs.length} 个本项目活动任务`:native?'原生文件验证已通过':model?.last_check?.ok?'最近连接测试通过':'未验证当前连接'}</span></div>
+      <button type="button" class="button secondary endpoint-expand" data-endpoint-expand="${endpoint.id}" aria-expanded="${open}" aria-controls="endpoint-settings-${endpoint.id}">模型与参数设置<span aria-hidden="true">${open?'−':'＋'}</span></button>
+      <section class="endpoint-settings" id="endpoint-settings-${endpoint.id}" ${open?'':'hidden'} aria-label="${escapeText(endpoint.name)}模型与参数">
+        ${native?'<p class="field-hint">固定 DeepSeek V4.1 Flash，不回退到 Auto。原生聊天与限定文件写/改/读已实测；正式队列尚未接入，不计为可派发候选。不使用 DeepSeek API Key。</p>':`
+        <label>自动路由使用模型<select data-endpoint-model="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><option value="">按任务选择（保留原有路由）</option>${endpoint.current_model&&!group.some(m=>m.id===endpoint.current_model)?`<option selected value="${escapeText(endpoint.current_model)}">已保存模型不可用，请重新选择</option>`:''}${group.map(m=>`<option value="${escapeText(m.id)}" ${endpoint.current_model===m.id?'selected':''} ${m.enabled?'':'disabled'}>${escapeText(m.name)}${m.enabled?'':'（已停用）'}</option>`).join('')}</select></label>
+        <p class="field-hint">选择后自动路由使用此模型；手动任务可明确指定此执行端的其他模型。已有任务保持原模型。</p>
+        ${endpoint.selection_error?`<p class="form-error">${escapeText(endpoint.selection_error)}</p>`:''}
+        <div class="endpoint-models">${group.map(m=>`<div class="endpoint-model-row"><div><strong>${escapeText(m.name)}</strong><span class="subtle">${escapeText(providerNames[m.provider]||m.provider)} · ${escapeText(thinkingInfo(m).label)}${m.enabled?'':' · 已停用'}</span></div><div class="endpoint-model-actions">${endpointModelAction(m,'edit','编辑模型')}${endpointModelAction(m,'test','测试连接')}${m.id!==state.default_model&&m.enabled?endpointModelAction(m,'default','设为手动默认'):''}${endpointModelAction(m,'delete','移除模型')}</div></div>`).join('')||'<p class="field-hint">此执行端还没有模型，请添加模型或把已有模型的默认 Agent 指定为此执行端。</p>'}</div>
+        <div class="endpoint-settings-actions"><button type="button" class="text-button" data-endpoint-add="${endpoint.id}">＋ 添加模型</button><button type="button" class="text-button" data-endpoint-parameters="${endpoint.id}">运行参数</button></div>`}
+        ${endpoint.error?`<p class="form-error">${escapeText(endpoint.error)}</p>`:''}<div class="endpoint-inline-editor"></div>
+      </section></article>`;
+  }).join('')+(data.unassigned_models?.length?`<section class="endpoint-unassigned"><h3>需修正归属的模型</h3><p class="field-hint">无效的默认 Agent 不会被自动归到其他执行端。</p>${data.unassigned_models.map(m=>`<div>${escapeText(m.name)} ${endpointModelAction(m,'edit','修正配置')}</div>`).join('')}</section>`:''));
+}
+
+async function saveEndpoint(id,patch){
+  if(endpointSaving)return;
+  endpointSaving=true;renderModels();
+  // /api/workflow already exists in resident MCP proxies. Keep its envelope
+  // strictly separate from workflow values so loaded Codex panels work too.
+  try{await api('/api/workflow',{endpoint_settings:{id,values:patch}});toast('执行端设置已保存，现有运行任务继续；排队任务启动前检查开关');}
+  catch(error){toast(error.message,true);}
+  finally{endpointSaving=false;await refresh();}
+}
+
+function setupEndpointCards(){
+  $('models').addEventListener('click',event=>{
+    const button=event.target.closest('button');if(!button)return;
+    if(button.dataset.endpointToggle){const row=state.execution_endpoints?.rows.find(e=>e.id===button.dataset.endpointToggle);if(row)saveEndpoint(row.id,{enabled:!row.enabled});}
+    if(button.dataset.endpointExpand){const id=button.dataset.endpointExpand;if(expandedEndpoints.has(id))expandedEndpoints.delete(id);else expandedEndpoints.add(id);renderModels();}
+    if(button.dataset.endpointAdd)openModel(null,button.dataset.endpointAdd);
+    if(button.dataset.endpointParameters){const id=button.dataset.endpointParameters,row=state.execution_endpoints.rows.find(e=>e.id===id);$('agent-settings-open').onclick();$('agent-settings-agent').value=id;$('agent-settings-model').value=row?.model?.id||row?.models?.[0]?.id||'';renderAgentSettings();}
+  });
+  $('models').addEventListener('change',event=>{if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
+}
+
 const $ = id => document.getElementById(id);
 // Appearance stays in this browser; it never changes model or workflow settings.
 const themeMedia = window.matchMedia('(prefers-color-scheme: dark)');
@@ -487,6 +561,8 @@ function renderModelAgentEntry(){
     :'未选择模型 · 执行器状态不适用';
 }
 function renderModels() {
+  if(state.execution_endpoints){renderEndpointCards();return;}
+  $('model-agent-entry').hidden=false;$('agent-settings-open').hidden=false;$('agent-state').hidden=false;
   const agents=registeredAgents();
   for(const [id,info] of Object.entries(agents))engineNames[id]=info.name||id;
   renderModelAgentEntry();
@@ -660,7 +736,7 @@ function renderWorkflow(){
   const extraText=extra.length?' · '+extra.join(' · '):'';
   const callText=w.enforce_model_call_limit===false?'请求次数不限':`最多 ${w.max_model_calls} 次请求`;
   $('budget-summary').textContent='全局预算 · '+(w.paid_allowed?(w.enforce_paid_budget===false?`金额上限关闭 · 今日按用量计算费用 ${settled}${extraText} · ${callText}`:`今日按用量计算费用 ${settled} / ${money(w.daily_budget_cny)}${extraText} · 每任务 ${money(w.task_budget_cny)}`):'付费执行关闭 · 本地优先');
-  const scopeText='执行范围 · '+scopeLabel();
+  const scopeText=scopeValue()==='all'?'执行范围 · 按执行端卡片启用':'兼容范围限制 · '+scopeLabel();
   const scopeSummary=$('workflow-scope-summary');if(scopeSummary){scopeSummary.textContent=scopeText;scopeSummary.title=`全局执行模型范围：${scopeLabel()}`;}
   const totals=state.delegation;$('delegation-stats').hidden=!totals;$('delegation-stats').textContent=totals?`委派 ${totals.delegated} · 待验收 ${totals.executor_completed} · 通过 ${totals.accepted} · 退回 ${totals.returned}`:'';
   const error=w.error||w.daily?.error||'';$('workflow-error').textContent=error;$('workflow-error').hidden=!error;
@@ -1049,7 +1125,8 @@ async function refreshState() {
 }
 let modelSavedConnectionDraft='';
 function modelConnectionDraft(body){const {default_agent,...connection}=body;return JSON.stringify(connection);}
-function openModel(id=null) {
+function openModel(id=null, endpoint=null) {
+  closeInlineModelEditor();
   $('model-form').reset();$('model-error').textContent='';$('discovered-models').innerHTML='';$('model-id').value=id||'';
   const model=state.models.find(m=>m.id===id);$('model-dialog-title').textContent=model?'编辑执行模型':'添加执行模型';
   $('model-name').value=model?.name||'';$('model-provider').value=model?.provider||'local';$('model-base').value=model?.api_base||'';$('model-code').value=model?.model||'';
@@ -1064,7 +1141,14 @@ function openModel(id=null) {
   renderSubagentCapability(model||null);
   $('model-price-input').value=model?.pricing_cny?.cache_miss_input??'';$('model-price-cache').value=model?.pricing_cny?.cache_hit_input??'';$('model-price-output').value=model?.pricing_cny?.output??'';
   $('key-hint').textContent=model?.api_key_set?'已有密钥。留空保持原密钥；输入新值可替换。':'';$('clear-key-label').hidden=!model?.api_key_set;
-  modelSavedConnectionDraft=modelConnectionDraft(modelBody());$('model-dialog').showModal();
+  if(endpoint&&!model){$('model-default-agent').value=endpoint;}
+  modelSavedConnectionDraft=modelConnectionDraft(modelBody());
+  if(endpoint){
+    expandedEndpoints.add(endpoint);renderModels();
+    const card=[...$('models').querySelectorAll('[data-endpoint-id]')].find(node=>node.dataset.endpointId===endpoint);
+    if(card){card.querySelector('.endpoint-inline-editor').append($('model-form'));modelEditorEndpoint=endpoint;return;}
+  }
+  $('model-dialog').showModal();
 }
 function modelBody() {
   const id=$('model-id').value;
@@ -1253,7 +1337,8 @@ $('usage-refresh').onclick=async()=>{
   catch(error){toast(error.message,true);}
   finally{button.disabled=isDshHost?false:!!state.codex_usage?.refreshing;}
 };
-document.querySelectorAll('.close-dialog').forEach(button=>button.onclick=()=>button.closest('dialog').close());
+document.querySelectorAll('.close-dialog').forEach(button=>button.onclick=()=>{const dialog=button.closest('dialog');if(dialog)dialog.close();else closeInlineModelEditor();});
+setupEndpointCards();
 document.querySelectorAll('[data-filter]').forEach(button=>button.onclick=()=>{taskFilter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b===button));renderTasks();});
 $('task-kind').onchange=()=>{if(!$('task-project').value&&projectView.mode==='project')$('task-project').value=projectView.project;$('task-category').value=$('task-kind').value==='edit'?'code_small':'analysis';$('task-calls-estimate').value=$('task-kind').value==='edit'?3:1;taskFields();};
 $('task-route').onchange=routeFields;
@@ -1274,7 +1359,7 @@ $('model-thinking-probe').onclick=async()=>{const saved=state.models.find(m=>m.i
 $('model-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('model-error').textContent='';try{
   const id=$('model-id').value,body=modelBody();
   const payload=id&&modelConnectionDraft(body)===modelSavedConnectionDraft?{default_agent:body.default_agent}:body;
-  await api(id?`/api/models/${encodeURIComponent(id)}/save`:'/api/models',payload);$('model-dialog').close();toast('模型已保存');await refresh();
+  await api(id?`/api/models/${encodeURIComponent(id)}/save`:'/api/models',payload);closeInlineModelEditor();$('model-dialog').close();toast('模型已保存');await refresh();
 }catch(error){$('model-error').textContent=error.message;}finally{button.disabled=false;}};
 $('discover-models').onclick=async()=>{const button=$('discover-models');button.disabled=true;button.textContent='读取中…';$('model-error').textContent='';try{
   const data=await api('/api/discover',{...modelBody(),id:$('model-id').value});$('discovered-models').innerHTML=data.models.map(model=>`<option value="${escapeText(model)}"></option>`).join('');
@@ -1282,7 +1367,7 @@ $('discover-models').onclick=async()=>{const button=$('discover-models');button.
 }catch(error){$('model-error').textContent=error.message;}finally{button.disabled=false;button.textContent='读取列表';}};
 $('models').onclick=async event=>{const button=event.target.closest('[data-model-action]');if(!button)return;const id=button.dataset.id;const action=button.dataset.modelAction;
   if(action==='details'){if(expandedBillingModels.has(id))expandedBillingModels.delete(id);else expandedBillingModels.add(id);renderModels();return;}
-  if(action==='edit'){openModel(id);return;}
+  if(action==='edit'){openModel(id,button.closest('[data-endpoint-id]')?.dataset.endpointId);return;}
   if(action==='delete'){pendingDelete=id;$('confirm-message').textContent=`确定移除「${state.models.find(m=>m.id===id)?.name}」？`;$('confirm-dialog').showModal();return;}
   if(action==='balance'){
     try{refreshingBalances.add(id);renderModels();await api(`/api/models/${encodeURIComponent(id)}/balance`,{});toast('正在同步余额');}
