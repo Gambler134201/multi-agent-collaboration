@@ -213,11 +213,21 @@ def prompt_failure(result):
 class NativeChatClient:
     """One task-owned native process, no inferred cwd, no model fallback."""
 
-    def __init__(self, info, project, config_home, *, isolated=False, model_id=None, popen=subprocess.Popen):
+    def __init__(self, info, project, config_home, *, isolated=False, model_id=None, popen=subprocess.Popen,
+                 tool_job=None):
         project = Path(project)
         if not project.is_absolute() or not project.is_dir():
             raise ValueError('WorkBuddy 必须绑定明确存在的项目绝对目录')
         self.project = str(project.resolve())
+        self.tool_job = None
+        self.mcp_servers = []
+        if tool_job is not None:
+            import workbuddy_tools
+            tools = workbuddy_tools.FileTools(tool_job)
+            if str(tools.project) != self.project:
+                raise ValueError('WorkBuddy 文件工具与会话项目不匹配')
+            self.tool_job = Path(tool_job).resolve()
+            self.mcp_servers = [workbuddy_tools.server_config(self.tool_job)]
         self.session_id = None
         self.requested_model_id = model_id
         self.models = []
@@ -310,6 +320,9 @@ class NativeChatClient:
                     raise OutcomeUnknown('WorkBuddy 响应结构异常，结果未知')
                 return result
             if 'id' in value:
+                if value.get('method') == 'session/request_permission' and self.tool_job is not None:
+                    self._file_permission(value)
+                    continue
                 self.tainted = True
                 raise OutcomeUnknown('WorkBuddy 返回未授权的交互请求；未自动批准')
             if event and value.get('method') == 'session/update':
@@ -319,6 +332,50 @@ class NativeChatClient:
                     raise OutcomeUnknown('WorkBuddy 事件会话不匹配')
                 event(params.get('update', {}))
 
+    def _file_permission(self, request):
+        """Approve once, only for the own mounted file server and scoped target."""
+        import workbuddy_tools
+        params = request.get('params')
+        granted = False
+        if isinstance(params, dict) and params.get('sessionId') == self.session_id:
+            call = params.get('toolCall')
+            call = call if isinstance(call, dict) else {}
+            meta = call.get('_meta')
+            meta = meta if isinstance(meta, dict) else {}
+            tool = meta.get('codebuddy.ai/toolName')
+            names = {'mcp__modeldesk-files__' + n: n for n in workbuddy_tools.NAMES}
+            names.update({'mcp__modeldesk_files__' + n: n for n in workbuddy_tools.NAMES})
+            options = params.get('options')
+            once = [o for o in options if isinstance(o, dict) and o.get('optionId') == 'allow_once'
+                    and o.get('kind') in ('allow', 'allow_once')] if isinstance(options, list) else []
+            try:
+                if isinstance(tool, str) and tool in names and len(once) == 1:
+                    tools = workbuddy_tools.FileTools(self.tool_job)
+                    proof = workbuddy_tools.verify(self.tool_job)
+                    name = names[tool]
+                    args = call.get('rawInput')
+                    fields = {'read_file': {'path'}, 'write_file': {'path', 'content'},
+                              'edit_file': {'path', 'old_text', 'new_text'}}
+                    if not isinstance(args, dict) or set(args) != fields[name]:
+                        raise ValueError('参数不匹配')
+                    if name != 'read_file' and proof.get('writes_paused'):
+                        raise ValueError('写入已暂停')
+                    tools.target(args['path'], write=name != 'read_file')
+                    granted = True
+            except (OSError, ValueError):
+                granted = False
+        outcome = {'outcome': 'selected', 'optionId': 'allow_once'} if granted else {'outcome': 'cancelled'}
+        try:
+            self.process.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'],
+                'result': {'outcome': outcome}}) + '\n')
+            self.process.stdin.flush()
+        except (OSError, ValueError):
+            self.tainted = True
+            raise OutcomeUnknown('WorkBuddy 文件工具授权回执结果未知；未重发') from None
+        if not granted:
+            self.tainted = True
+            raise ProtocolError('WorkBuddy 请求了任务范围外或未经挂载验证的工具；已拒绝并停止本轮')
+
     def connect(self):
         if self.session_id is not None:
             raise ValueError('当前连接已建立会话，不能隐式新建另一个会话')
@@ -327,7 +384,7 @@ class NativeChatClient:
             'clientCapabilities': {'fs': {'readTextFile': False, 'writeTextFile': False}, 'terminal': False}})
         if type(result.get('protocolVersion')) is not int or result.get('protocolVersion') != 1:
             raise ProtocolError('WorkBuddy ACP 版本不匹配')
-        result = self.request('session/new', {'cwd': self.project, 'mcpServers': []})
+        result = self.request('session/new', {'cwd': self.project, 'mcpServers': self.mcp_servers})
         session_id = result.get('sessionId')
         if not isinstance(session_id, str) or not re.fullmatch(r'[A-Za-z0-9_:-]{1,200}', session_id):
             raise ProtocolError('WorkBuddy 没有返回有效的新会话标识')
@@ -348,6 +405,10 @@ class NativeChatClient:
 
     def chat(self, model_id, prompt, settings, *, timeout=0):
         authorize_native_chat(settings)
+        if self.tool_job is not None:
+            import workbuddy_tools
+            if workbuddy_tools.verify(self.tool_job).get('writes_paused'):
+                raise ProtocolError('本任务此前触发工具拒绝；不能重新请求模型绕过暂停')
         if self.prompt_sent:
             raise ValueError('候选一次只支持一个新会话轮次；不会重派或隐式续接')
         if model_id not in {row['model_id'] for row in self.models}:
@@ -375,11 +436,18 @@ class NativeChatClient:
         usage = {k: v for k, v in raw_usage.items()
                  if k in {'inputTokens', 'outputTokens', 'totalTokens', 'cachedReadTokens', 'cachedWriteTokens'}
                  and type(v) in (int, float) and math.isfinite(v) and v >= 0} if isinstance(raw_usage, dict) else {}
+        tool_proof = None
+        tool_refused = False
+        if self.tool_job is not None:
+            tool_proof = workbuddy_tools.verify(self.tool_job)
+            tool_refused = tool_proof.get('writes_paused') is True
         return {'engine': 'workbuddy', 'model_id': model_id, 'session_id': self.session_id,
-                'project': self.project, 'status': 'completed' if stop_reason == 'end_turn' else 'failed',
+                'project': self.project, 'status': 'completed' if stop_reason == 'end_turn' and not tool_refused else 'failed',
                 'stop_reason': stop_reason, 'answer': ''.join(answer),
                 'usage': usage or None, 'cost_cny': None, 'credits_used': None,
-                'execution_error': prompt_failure(result) if stop_reason != 'end_turn' else None,
+                'execution_error': ({'category': 'file_tool_refused'} if tool_refused else
+                                    prompt_failure(result) if stop_reason != 'end_turn' else None),
+                'file_tool_proof': tool_proof,
                 'billing_source': 'workbuddy-native-account', 'accepted': False}
 
     def close(self):

@@ -256,8 +256,9 @@ class NativeHostClient(wb.NativeChatClient):
             self.process.release()
 
 
-def create_client(info, project, profile, model_id, *, names=None, pipe_factory=WindowsPipe):
-    """Create one native-host-owned no-tools lease; never send a model prompt."""
+def create_client(info, project, profile, model_id, *, names=None, pipe_factory=WindowsPipe,
+                  tool_job=None):
+    """Create one native-host-owned lease; built-ins remain disabled, no prompt."""
     project = Path(project)
     if not project.is_absolute() or not project.is_dir():
         raise ValueError('Native lease requires an explicit existing project')
@@ -297,4 +298,4 @@ def create_client(info, project, profile, model_id, *, names=None, pipe_factory=
             control.pipe.close()
             raise
 
-    return NativeHostClient(info, project, profile, model_id=model_id, popen=spawn)
+    return NativeHostClient(info, project, profile, model_id=model_id, popen=spawn, tool_job=tool_job)
