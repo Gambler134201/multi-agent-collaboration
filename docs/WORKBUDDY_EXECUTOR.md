@@ -57,7 +57,7 @@
 
 对相同 5.8.2 原生源码进一步核对：`newSession` 会调用 `initializeSession`，后者先等待 `authManager.initialized`，再检查 `currentSessionSubject` 非空。先前测试已成功创建会话，所以认证报错不能直接归因为本地完全未登录；模型请求阶段的认证失败原因仍需区分远端授权、账户状态变化与运行上下文。
 
-宿主的 `buildAgentCliRuntimeEnv` / `buildWorkbuddyClientInfoEnv` 会提供产品名称、版本等启动信息，初版候选没有提供这组信息。候选已补齐经安装元数据核对的 WorkBuddy 名称与版本，并清除调用方继承的 `CLIENT_INFO_*`；插件标识明确为 `model-desk-workbuddy-executor`。不声明 `CODEBUDDY_HOST=workbuddy-desktop`，不复制设备 ID，不关闭请求校验、HTTP 鉴权或凭据保护。
+宿主的 `buildAgentCliRuntimeEnv` / `buildWorkbuddyClientInfoEnv` 会提供产品名称、版本等启动信息，初版候选没有提供这组信息。直接启动 CLI 的候选已补齐经安装元数据核对的 WorkBuddy 名称与版本，并清除调用方继承的 `CLIENT_INFO_*`；插件标识明确为 `model-desk-workbuddy-executor`。该直接启动路径不声明 `CODEBUDDY_HOST=workbuddy-desktop`，不复制设备 ID，不关闭请求校验、HTTP 鉴权或凭据保护。
 
 - 30 项离线检查通过，包含错误分类、禁止重新登录、未知结果不重发、产品上下文隔离与不支持版本拒绝。
 - 新的原生预检只调用 `initialize` 和 `session/new`：成功创建会话，当前模型为 `deepseek-v4.1-flash`，且模型目录包含它；`model_prompt_sent=false`。
@@ -65,7 +65,30 @@
 - 此预检**未发送模型提示词，不能证明模型请求认证已修复、积分可用或业务执行成功**。不能将会话创建当成新的真实推理验收。
 - 原生 `getUserInfo` 的公开实现包含令牌字段，因此没有调用该接口作为诊断手段。
 
-忽略目录中的本机证据：`.local-worker/tasks/workbuddy-context-preflight-20261021/result.json`。仍待单独授权的一次指定模型请求，才能评估这项候选是否解决实际失败。
+忽略目录中的本机证据：`.local-worker/tasks/workbuddy-context-preflight-20261021/result.json`。
+
+用户随后另行授权一次指定模型验证。产品信息候选发送一次提示词后，仍返回 `refusal / -32000 / auth`，答复为空；完整设置已恢复，未重试。**产品信息修正没有解决本次认证失败**，不能继续以它作为已修复方案。证据：`.local-worker/tasks/workbuddy-context-smoke-20261021/result.json`。
+
+### 原生宿主桥接候选（不含模型请求）
+
+新增 `.local-worker/workbuddy_host_bridge.py`，复用 `NativeChatClient` 的模型锁定、执行范围检查、费用未知、错误分类和单次提示词限制，换用已经运行的 WorkBuddy 原生会话工厂创建执行进程。
+
+- 只匹配明确 `.workbuddy` 配置目录对应的一个原生管道；没有或多个匹配时拒绝，不扫描其他配置、不启动或重启宿主。
+- 在发送 RPC 前，由 Windows 核对管道服务端进程程序路径；数据通道还需归属于同一个宿主进程。新创建的 CLI 进程同样必须属于已核对的 WorkBuddy 安装。
+- 原生控制面只允许为本次随机新建的 `modeldesk-wb-*` 会话调用 `session.create`，以及使用确切 `runtimeId` 清理该会话。不列举、重连、收养或修改已有聊天/会话。
+- 不读账户/PID 文件，不调用会返回令牌的 `sidecar.ping` / `getUserInfo`，不发送凭据初始化内容。原生宿主自行把凭据保护初始化交给它创建的子进程，适配器不接收或复制密钥。
+- 此时 `CODEBUDDY_HOST=workbuddy-desktop` 只传给确实由原生 WorkBuddy 宿主创建的子进程；Model Desk 保留自己的调用方标识，不更改主脑 owner/project。
+- 仅临时独立目录、禁用工具的候选。创建结果未知时不重发；清理需匹配本次会话与运行身份，不按进程名终止程序。未请求的全局生命周期通知不保存或传给执行模型。
+- 该通道依据已安装 5.8.2 程序代码，**不是官方承诺稳定的第三方 OpenAPI**；当前只支持该 Windows 安装身份。没有调用含令牌的 ping 复核全局协议版本，也没有把当前可用视为未来版本兼容。
+
+离线共 **42 项**通过（原执行器 30 + 原生宿主桥接 12）。原生实机预检已确认：
+
+1. 原生宿主创建新租约，ACP `initialize` / `session/new` 成功。
+2. 当前模型与可选模型目录均确认 `deepseek-v4.1-flash`。
+3. 没有发送 `session/prompt`，没有改范围或任何工作流设置。
+4. 测试租约已通过本次 `runtimeId` 清理，并确认该子进程退出；未向宿主或其他会话发送终止/修改请求。
+
+证据：`.local-worker/tasks/workbuddy-native-host-preflight-20261021/result.json`。这证明原生宿主传输能建立和清理独立会话；**尚未证明模型请求认证、积分扣减、编辑保护或正式工作台闭环**。仍为未注册候选，`ready=false`。进一步模型请求须单独授权，不继承已经用完的单次诊断额度。
 
 ### 后续账户交接要求
 
@@ -86,7 +109,7 @@ WorkBuddy 开放平台的第三方应用走显式 OAuth 授权；分享入口是
 ## 运行离线检查
 
 ```powershell
-python -m unittest discover -s .local-worker/tests -p test_workbuddy_executor.py -v
+python -m unittest discover -s .local-worker/tests -p 'test_workbuddy*.py' -v
 ```
 
 ## 依据
