@@ -83,6 +83,7 @@ class FileToolTests(unittest.TestCase):
         client.tool_job, client.session_id = self.job, 'test-session'
         client.project, client.models = str(self.root), [{'model_id': 'deepseek-v4.1-flash'}]
         client.prompt_sent = False
+        client.diagnostics = []
         def request(method, params, **kwargs):
             if method == 'session/set_config_option':
                 return {'configOptions': [{'id': 'model', 'currentValue': 'deepseek-v4.1-flash'}]}
@@ -135,13 +136,14 @@ class FileToolTests(unittest.TestCase):
         self.files.list_tools()
         client = object.__new__(wb.NativeChatClient)
         client.tool_job, client.session_id, client.tainted = self.job, 'own-session', False
+        client.diagnostics = []
         client.process = Mock(stdin=io.StringIO())
         return client
 
     def request(self, *, tool='mcp__modeldesk-files__write_file', path='a.txt', session='own-session'):
         return {'jsonrpc': '2.0', 'id': 'native-approval-1', 'method': 'session/request_permission',
-                'params': {'sessionId': session, 'options': [{'kind': 'allow', 'optionId': 'allow_once'},
-                    {'kind': 'allow', 'optionId': 'allow_session'}],
+                'params': {'sessionId': session, 'options': [{'kind': 'allow_once', 'optionId': 'allow'},
+                    {'kind': 'allow_always', 'optionId': 'allow_always'}],
                     'toolCall': {'_meta': {'codebuddy.ai/toolName': tool},
                                  'rawInput': {'path': path, 'content': 'OK'}}}}
 
@@ -149,7 +151,7 @@ class FileToolTests(unittest.TestCase):
         client = self.permission_client()
         client._file_permission(self.request())
         result = json.loads(client.process.stdin.getvalue())['result']['outcome']
-        self.assertEqual(result, {'outcome': 'selected', 'optionId': 'allow_once'})
+        self.assertEqual(result, {'outcome': 'selected', 'optionId': 'allow'})
         self.assertFalse((self.root / 'a.txt').exists())
 
     def test_acp_refuses_foreign_tool_session_path_and_malformed_requests(self):
@@ -175,6 +177,17 @@ class FileToolTests(unittest.TestCase):
         (self.run / 'workbuddy-tools-proof.json').unlink()
         with self.assertRaises(wb.ProtocolError):
             client._file_permission(self.request())
+
+    def test_always_or_sandbox_permissions_cannot_replace_native_mcp_once(self):
+        for options in [[{'kind': 'allow_always', 'optionId': 'allow_always'}],
+                        [{'kind': 'allow_once', 'optionId': 'allow_always'}],
+                        [{'kind': 'allow', 'optionId': 'allow_once'}],
+                        [{'kind': 'allow_once', 'optionId': 'allow'}] * 2]:
+            client = self.permission_client()
+            request = self.request()
+            request['params']['options'] = options
+            with self.subTest(options=options), self.assertRaises(wb.ProtocolError):
+                client._file_permission(request)
 
     def test_only_scoped_file_server_disables_deferral_without_changing_native_defaults(self):
         for job in (None, self.job):
@@ -217,6 +230,58 @@ class FileToolTests(unittest.TestCase):
         asyncio.run(run())
         self.assertEqual((self.root / 'a.txt').read_text(), 'MCP_OK')
         self.assertFalse((self.root / '.model-desk/private.txt').exists())
+
+    def test_full_acp_wire_accepts_native_option_id_and_executes_scoped_file_call(self):
+        # Native 5.8.2 general MCP approval uses kind=allow_once, optionId=allow.
+        # This child simulates ACP only; its file guard is the actual server code.
+        script = self.root / 'native_wire_fixture.py'
+        script.write_text(r'''
+import json,sys
+from pathlib import Path
+def send(value):
+ print(json.dumps(value),flush=True)
+for line in sys.stdin:
+ q=json.loads(line);method=q.get('method')
+ if method=='initialize':r={'protocolVersion':1}
+ elif method=='session/new':
+  config=q['params']['mcpServers'][0]
+  sys.path.insert(0,str(Path(config['args'][0]).parent))
+  from workbuddy_tools import FileTools
+  files=FileTools(config['args'][-1]);files.list_tools()
+  r={'sessionId':'wire-session','models':{'currentModelId':'deepseek-v4.1-flash',
+    'availableModels':[{'modelId':'deepseek-v4.1-flash'}]}}
+ elif method=='session/set_config_option':
+  r={'configOptions':[{'id':'model','currentValue':'deepseek-v4.1-flash'}]}
+ elif method=='session/prompt':
+  send({'jsonrpc':'2.0','id':'native-approval','method':'session/request_permission',
+   'params':{'sessionId':'wire-session','options':[
+    {'kind':'allow_always','name':'Always Allow','optionId':'allow_always'},
+    {'kind':'allow_once','name':'Allow','optionId':'allow'},
+    {'kind':'reject_once','name':'Reject','optionId':'reject'}],
+    'toolCall':{'_meta':{'codebuddy.ai/toolName':'mcp__modeldesk-files__write_file'},
+     'rawInput':{'path':'a.txt','content':'WIRE_OK'}}}})
+  approval=json.loads(sys.stdin.readline())
+  assert approval['id']=='native-approval'
+  assert approval['result']['outcome']=={'outcome':'selected','optionId':'allow'}
+  files.call('write_file',{'path':'a.txt','content':'WIRE_OK'})
+  send({'jsonrpc':'2.0','method':'session/update','params':{'sessionId':'wire-session',
+   'update':{'sessionUpdate':'agent_message_chunk','content':{'type':'text','text':'done'}}}})
+  r={'stopReason':'end_turn'}
+ else:sys.exit(2)
+ send({'jsonrpc':'2.0','id':q['id'],'result':r})
+''', encoding='utf-8')
+        client = wb.NativeChatClient({'executable': sys.executable, 'cli': str(script)},
+            self.root, self.root, isolated=True, model_id='deepseek-v4.1-flash', tool_job=self.job)
+        try:
+            client.connect()
+            result = client.chat('deepseek-v4.1-flash', 'fixture', {'paid_allowed': True,
+                'model_scope': 'all', 'enforce_paid_budget': False, 'enforce_model_call_limit': False})
+            self.assertEqual(result['status'], 'completed')
+            self.assertEqual(result['adapter_diagnostics'][-1]['option_id'], 'allow')
+            self.assertEqual((self.root / 'a.txt').read_bytes(), b'WIRE_OK')
+            self.assertFalse(result['accepted'])
+        finally:
+            client.close()
 
 
 if __name__ == '__main__':

@@ -233,6 +233,7 @@ class NativeChatClient:
         self.models = []
         self.counter = 0
         self.prompt_sent = False
+        self.diagnostics = []
         self.inbox = queue.Queue()
         self.tainted = False
         self.process = popen(command(info, model_id), cwd=self.project,
@@ -313,6 +314,7 @@ class NativeChatClient:
                     error = value['error']
                     code = error.get('code') if isinstance(error, dict) else None
                     code = code if type(code) is int else None
+                    self.diagnostics.append({'kind': 'rpc_error', 'method': method, 'code': code})
                     raise ProtocolError('WorkBuddy 拒绝请求（错误码 %s）；未重试' % code)
                 result = value.get('result')
                 if not isinstance(result, dict):
@@ -337,6 +339,8 @@ class NativeChatClient:
         import workbuddy_tools
         params = request.get('params')
         granted = False
+        option_id = None
+        reason = 'session_or_request_invalid'
         if isinstance(params, dict) and params.get('sessionId') == self.session_id:
             call = params.get('toolCall')
             call = call if isinstance(call, dict) else {}
@@ -346,8 +350,12 @@ class NativeChatClient:
             names = {'mcp__modeldesk-files__' + n: n for n in workbuddy_tools.NAMES}
             names.update({'mcp__modeldesk_files__' + n: n for n in workbuddy_tools.NAMES})
             options = params.get('options')
-            once = [o for o in options if isinstance(o, dict) and o.get('optionId') == 'allow_once'
-                    and o.get('kind') in ('allow', 'allow_once')] if isinstance(options, list) else []
+            # ACP optionId is an opaque identifier, not the permission kind.
+            # Native 5.8.2 MCP uses kind=allow_once, optionId=allow. Its sandbox
+            # intercept uses another shape and must never be approved here.
+            once = [o for o in options if isinstance(o, dict) and o.get('kind') == 'allow_once'
+                    and o.get('optionId') in ('allow', 'allow_once')] if isinstance(options, list) else []
+            reason = 'tool_or_once_option_not_supported'
             try:
                 if isinstance(tool, str) and tool in names and len(once) == 1:
                     tools = workbuddy_tools.FileTools(self.tool_job)
@@ -362,9 +370,14 @@ class NativeChatClient:
                         raise ValueError('写入已暂停')
                     tools.target(args['path'], write=name != 'read_file')
                     granted = True
+                    option_id = once[0]['optionId']
+                    reason = 'scoped_file_once'
             except (OSError, ValueError):
                 granted = False
-        outcome = {'outcome': 'selected', 'optionId': 'allow_once'} if granted else {'outcome': 'cancelled'}
+                reason = 'scope_or_guard_check_refused'
+        self.diagnostics.append({'kind': 'file_permission', 'decision': 'allow_once' if granted else 'deny',
+                                 'reason': reason, 'option_id': option_id})
+        outcome = {'outcome': 'selected', 'optionId': option_id} if granted else {'outcome': 'cancelled'}
         try:
             self.process.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'],
                 'result': {'outcome': outcome}}) + '\n')
@@ -448,6 +461,7 @@ class NativeChatClient:
                 'execution_error': ({'category': 'file_tool_refused'} if tool_refused else
                                     prompt_failure(result) if stop_reason != 'end_turn' else None),
                 'file_tool_proof': tool_proof,
+                'adapter_diagnostics': list(self.diagnostics),
                 'billing_source': 'workbuddy-native-account', 'accepted': False}
 
     def close(self):
