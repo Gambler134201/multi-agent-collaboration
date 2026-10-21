@@ -63,7 +63,7 @@ def availability():
         bridge.select_channel(config['profile'], os.listdir('\\\\.\\pipe\\'))
         result.update(ready=True, message='已发现指定账户的原生宿主；登录授权在实际任务时由 WorkBuddy 核实')
     except (OSError, ValueError, wb.ProtocolError, KeyError):
-        result['message'] = ('请配置完整 WorkBuddy 5.8.2，并打开同一配置目录的 WorkBuddy、保持登录；'
+        result['message'] = ('请配置已验证版本的完整 WorkBuddy，并打开同一配置目录的 WorkBuddy、保持登录；'
                              '仅支持 DeepSeek V4.1 Flash，不改用 API 或 Auto')
     return result
 

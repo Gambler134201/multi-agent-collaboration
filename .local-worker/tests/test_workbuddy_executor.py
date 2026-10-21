@@ -83,6 +83,20 @@ class WorkBuddyExecutorTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 wb.installation()
 
+    def test_only_reviewed_patch_versions_pass_installation_identity(self):
+        for name in ['WorkBuddy.exe', 'resources/app.asar',
+                     'resources/app.asar.unpacked/cli/bin/codebuddy',
+                     'resources/app.asar.unpacked/cli/dist/codebuddy-lite-wb.mjs']:
+            p=self.root/name; p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(b'fixture')
+        (self.root/'resources/app.asar.unpacked/cli/product.json').write_text(json.dumps({'productName':'WorkBuddy'}))
+        for version in ('5.8.2','5.8.3','5.8.4'):
+            with self.subTest(version=version), patch.object(wb,'_asar_package',return_value={
+                    'name':'@genie/workbuddy-desktop','version':version}):
+                if version in wb.SUPPORTED_VERSIONS:
+                    self.assertEqual(wb.installation(self.root)['version'],version)
+                else:
+                    with self.assertRaises(ValueError):wb.installation(self.root)
+
     def test_native_command_has_no_tools_mcp_permissions_bypass_or_model_fallback(self):
         args = wb.command({'executable': 'wb.exe', 'cli': 'cli'})
         self.assertIn('--serve', args)

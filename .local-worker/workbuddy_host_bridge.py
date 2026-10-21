@@ -1,4 +1,4 @@
-"""Verified 5.8.2 native-host lease transport for task-owned sessions.
+"""Reviewed 5.8.2/5.8.3 native-host lease transport for task-owned sessions.
 
 Only an already running, same-profile WorkBuddy sidecar is used. No PID/auth
 files, ping/userinfo endpoints, existing-session lists or bootstrap keys are
@@ -262,7 +262,7 @@ def create_client(info, project, profile, model_id, *, names=None, pipe_factory=
     project = Path(project)
     if not project.is_absolute() or not project.is_dir():
         raise ValueError('Native lease requires an explicit existing project')
-    if info.get('version') != wb.SUPPORTED_VERSION or info.get('product_name') != 'WorkBuddy':
+    if info.get('version') not in wb.SUPPORTED_VERSIONS or info.get('product_name') != 'WorkBuddy':
         raise HostUnavailable('Unverified WorkBuddy native-host version')
     channel = select_channel(profile, os.listdir('\\\\.\\pipe\\') if names is None else names)
     session_id = 'modeldesk-wb-' + uuid.uuid4().hex

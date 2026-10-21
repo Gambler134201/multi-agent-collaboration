@@ -18,6 +18,7 @@ import time
 
 
 SUPPORTED_VERSION = '5.8.2'
+SUPPORTED_VERSIONS = ('5.8.2', '5.8.3')
 HOME_ENV = 'MODEL_DESK_WORKBUDDY_HOME'
 
 
@@ -64,7 +65,7 @@ def installation(home=None):
         raise ValueError('WorkBuddy 安装不完整；不会改用其他 CLI 或执行器')
     package = _asar_package(archive)
     product_meta = json.loads(product.read_text(encoding='utf-8'))
-    if package.get('name') != '@genie/workbuddy-desktop' or package.get('version') != SUPPORTED_VERSION or product_meta.get('productName') != 'WorkBuddy':
+    if package.get('name') != '@genie/workbuddy-desktop' or package.get('version') not in SUPPORTED_VERSIONS or product_meta.get('productName') != 'WorkBuddy':
         raise ValueError('WorkBuddy 安装身份或版本未经验证')
     fingerprint = hashlib.sha256()
     for p in (cli, bundle, product):
@@ -101,7 +102,7 @@ def process_environment(config_home, *, isolated=False, installation_info=None):
                 'DISABLE_TELEMETRY': '1', 'CODEBUDDY_DISABLE_IDE': '1',
                 'SERVER__PORT': '0', 'SERVER__HOST': '127.0.0.1'})
     if installation_info and installation_info.get('product_name'):
-        if installation_info.get('product_name') != 'WorkBuddy' or installation_info.get('version') != SUPPORTED_VERSION:
+        if installation_info.get('product_name') != 'WorkBuddy' or installation_info.get('version') not in SUPPORTED_VERSIONS:
             raise ValueError('WorkBuddy 产品身份或版本未经验证；未启动进程')
         # Match the installed product's public identity, rather than inheriting
         # another caller's telemetry/product context. This is NOT desktop host
