@@ -62,6 +62,15 @@ def gate(engine, model, settings, *, controls=None, automatic=False):
 
 
 def update(endpoint, body, settings):
+    if endpoint == 'workbuddy' and isinstance(body, dict) and set(body) == {'refresh_native_models'}:
+        import workbuddy_worker
+        if body['refresh_native_models'] is not True:
+            raise ValueError('读取原生列表需要明确操作')
+        return workbuddy_worker.refresh_catalog()
+    if endpoint == 'workbuddy' and isinstance(body, dict) and set(body) == {'native_model'}:
+        import workbuddy_worker
+        model = workbuddy_worker.select_model(body['native_model'])
+        return update(endpoint, {'current_model': model['id']}, settings)
     if endpoint == 'workbuddy' and isinstance(body, dict) and set(body) == {'native_setup'}:
         import workbuddy_worker
         return workbuddy_worker.configure(body['native_setup'])

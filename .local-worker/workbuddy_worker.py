@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 import time
 
 import model_registry as registry
@@ -16,6 +17,76 @@ import workbuddy_host_bridge as bridge
 MODEL = 'deepseek-v4.1-flash'
 MODEL_ROW = 'workbuddy-deepseek-flash'
 CONFIG = 'workbuddy.json'
+CATALOG = 'workbuddy-catalog.json'
+ROUTING_MODES = {'auto', 'auto-model', 'fast-model', 'balanced-model', 'deep-model'}
+
+
+def model_row_id(code):
+    if not isinstance(code, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,99}', code) or code.lower() in ROUTING_MODES:
+        raise ValueError('请选择明确的原生模型，不使用 Auto 或路由模式')
+    return MODEL_ROW if code == MODEL else 'workbuddy-' + hashlib.sha256(code.encode()).hexdigest()[:12]
+
+
+def catalog():
+    path = Path(registry.HERE) / CATALOG
+    if not path.exists():
+        return {'models': [], 'updated_at': None}
+    try:
+        data = registry.read_json(path)
+        config = configuration()
+        info = installation(config)
+        if data['connection'] != config or data['fingerprint'] != info['fingerprint'] or data['version'] != info['version']:
+            raise ValueError()
+        rows = data['models']
+        if not isinstance(rows, list) or len(rows) > 200:
+            raise ValueError()
+        seen = set()
+        for row in rows:
+            model_row_id(row['model_id'])
+            if row['model_id'] in seen or not isinstance(row['name'], str) or not 0 < len(row['name']) <= 200:
+                raise ValueError()
+            seen.add(row['model_id'])
+        return {'models': rows, 'updated_at': data['updated_at']}
+    except (OSError, ValueError, KeyError, TypeError):
+        raise ValueError('WorkBuddy 模型列表缺失、损坏或安装/账户配置已变，请重新读取原生列表') from None
+
+
+def catalog_model(code):
+    model_row_id(code)
+    return next((row for row in catalog()['models'] if row['model_id'] == code), None)
+
+
+def refresh_catalog():
+    config = configuration()
+    info = installation(config)
+    client = None
+    with tempfile.TemporaryDirectory(prefix='modeldesk-wb-catalog-') as project:
+        try:
+            client = bridge.create_client(info, Path(project), config['profile'], MODEL)
+            response = client.connect()
+            rows = []
+            for row in response['models']:
+                if row['model_id'].lower() in ROUTING_MODES:
+                    continue
+                model_row_id(row['model_id'])
+                rows.append({'model_id': row['model_id'], 'name': row['name'][:200]})
+            if not rows:
+                raise ValueError('WorkBuddy 没有返回可选择的明确原生模型')
+        finally:
+            if client is not None:
+                client.close()
+    # Publish only after this owned metadata session is confirmed closed.
+    registry.write_json(Path(registry.HERE) / CATALOG, {'models': rows, 'updated_at': registry.now(),
+        'connection': config, 'version': info['version'], 'fingerprint': info['fingerprint']})
+    return {'ok': True, **catalog(), 'model_called': False}
+
+
+def select_model(code):
+    row = catalog_model(code)
+    if row is None:
+        raise ValueError('模型不在当前 WorkBuddy 原生列表中；未更改选择')
+    return registry.upsert_model({'provider': 'workbuddy', 'model': code,
+        'name': 'WorkBuddy · ' + row['name']}, model_row_id(code))
 
 
 def configuration():
@@ -64,7 +135,11 @@ def availability():
         result.update(ready=True, message='已发现指定账户的原生宿主；登录授权在实际任务时由 WorkBuddy 核实')
     except (OSError, ValueError, wb.ProtocolError, KeyError):
         result['message'] = ('请配置已验证版本的完整 WorkBuddy，并打开同一配置目录的 WorkBuddy、保持登录；'
-                             '仅支持 DeepSeek V4.1 Flash，不改用 API 或 Auto')
+                             '不改用 API 或 Auto')
+    try:
+        result['native_catalog'] = catalog()
+    except ValueError as error:
+        result['native_catalog'] = {'models': [], 'updated_at': None, 'error': str(error)}
     return result
 
 
@@ -147,7 +222,8 @@ def run_task(run, state, model, *, client_factory=None):
     started = time.monotonic()
     cancel = lambda: (run / 'cancelled.flag').exists()
     try:
-        if state.get('engine') != 'workbuddy' or model.get('provider') != 'workbuddy' or model.get('model') != MODEL:
+        if (state.get('engine') != 'workbuddy' or model.get('provider') != 'workbuddy' or
+                model.get('model') != state.get('model') or model_row_id(model.get('model')) != state.get('model_id')):
             raise ValueError('WorkBuddy 任务与原生模型身份不匹配；未请求模型')
         settings = workflow_settings.snapshot()
         execution_endpoints.gate('workbuddy', model, settings)
@@ -198,7 +274,7 @@ def run_task(run, state, model, *, client_factory=None):
         if cancel():
             raise wb.Cancelled('任务已取消')
         factory = client_factory or bridge.create_client
-        client = factory(info, project, config['profile'], MODEL, tool_job=job, on_lease=lease_event)
+        client = factory(info, project, config['profile'], model['model'], tool_job=job, on_lease=lease_event)
         client.cancel_check = cancel
         connected = client.connect()
         registry.patch_task(run, workbuddy_session_id=connected['session_id'], phase='WorkBuddy 正在执行')
@@ -215,7 +291,7 @@ def run_task(run, state, model, *, client_factory=None):
         remaining = max(.001, total - (time.monotonic() - started)) if total else 0
         if total and remaining <= .001:
             raise TimeoutError()
-        result = client.chat(MODEL, prompt, workflow_settings.snapshot(), timeout=remaining)
+        result = client.chat(model['model'], prompt, workflow_settings.snapshot(), timeout=remaining)
         answer = result.get('answer') or ''
         status = result.get('status') if result.get('status') in {'completed', 'failed'} else 'failed'
         if status == 'completed' and state['kind'] == 'chat' and not answer.strip():

@@ -43,6 +43,64 @@ class IntegrationTests(Base):
                 'project': str(self.project), 'files': ['a.py'], 'prompt': 'fixture native write',
                 'routing': {'acceptance': ['file changed']}, 'source': 'codex', **kw}
 
+    def seed_catalog(self):
+        rows=[{'model_id':worker.MODEL,'name':'DeepSeek V4.1 Flash'},
+              {'model_id':'glm-5.3','name':'GLM-5.3'}, {'model_id':'hy4-preview','name':'Hy4 preview'}]
+        registry.write_json(Path(registry.HERE)/worker.CATALOG, {'models':rows,
+            'updated_at':registry.now(),'connection':self.config,'fingerprint':self.info['fingerprint'],
+            'version':self.info['version']})
+        return rows
+
+    def test_native_model_selection_preserves_other_models_defaults_and_flags(self):
+        self.seed_catalog()
+        before=registry.list_models(); flags=ep.snapshot()
+        ep.update('workbuddy',{'native_model':'glm-5.3'},self.settings)
+        chosen=worker.model_row_id('glm-5.3')
+        self.assertEqual(registry.get_model(chosen)['model'],'glm-5.3')
+        self.assertEqual(registry.list_models()['default_model'],before['default_model'])
+        self.assertEqual([m for m in registry.list_models()['models'] if m['id']!=chosen],before['models'])
+        now=ep.snapshot();self.assertEqual(now['endpoints']['workbuddy']['current_model'],chosen)
+        self.assertEqual(now['endpoints']['workbuddy']['enabled'],flags['endpoints']['workbuddy']['enabled'])
+        self.assertEqual(now['endpoints']['pi'],flags['endpoints']['pi'])
+
+    def test_selected_model_does_not_rebind_a_queued_task(self):
+        self.seed_catalog();first,run1=self.dispatch()
+        ep.update('workbuddy',{'native_model':'glm-5.3'},self.settings)
+        second,run2=self.dispatch(model_id=worker.model_row_id('glm-5.3'))
+        calls=[];parent=self.client()
+        class Native(parent):
+            def chat(self,model,*args,**kwargs):
+                calls.append(model);return super().chat(model,*args,**kwargs)
+        worker.run_task(run1,first,registry.get_model(first['model_id']),client_factory=Native)
+        worker.run_task(run2,second,registry.get_model(second['model_id']),client_factory=Native)
+        self.assertEqual(calls,[worker.MODEL,'glm-5.3'])
+
+    def test_stale_catalog_and_routing_aliases_never_change_selection(self):
+        self.seed_catalog();before=ep.snapshot()
+        for code in ['auto','Auto','AUTO','fast-model']:
+            with self.subTest(code=code), self.assertRaises(ValueError):worker.model_row_id(code)
+        for code in ['Auto','auto','fast-model','missing-model']:
+            with self.subTest(code=code), self.assertRaises(ValueError):
+                ep.update('workbuddy',{'native_model':code},self.settings)
+        with patch.object(worker,'configuration',return_value={**self.config,'profile':'changed'}):
+            with self.assertRaises(ValueError):worker.select_model('glm-5.3')
+        self.assertEqual(ep.snapshot(),before)
+
+    def test_catalog_refresh_only_connects_and_closes_metadata_session(self):
+        client=Mock();client.connect.return_value={'models':self.seed_catalog()+[{'model_id':'fast-model','name':'快速'}]}
+        with patch.object(worker.bridge,'create_client',return_value=client):
+            result=ep.update('workbuddy',{'refresh_native_models':True},self.settings)
+        self.assertFalse(result['model_called']);client.connect.assert_called_once();client.close.assert_called_once()
+        client.chat.assert_not_called();self.assertNotIn('fast-model',[x['model_id'] for x in result['models']])
+
+    def test_failed_catalog_cleanup_does_not_publish_or_overwrite_cache(self):
+        self.seed_catalog();path=Path(registry.HERE)/worker.CATALOG;before=path.read_bytes()
+        client=Mock();client.connect.return_value={'models':[{'model_id':'glm-5.3','name':'GLM'}]}
+        client.close.side_effect=wb.OutcomeUnknown('fixture cleanup unconfirmed')
+        with patch.object(worker.bridge,'create_client',return_value=client), self.assertRaises(wb.OutcomeUnknown):
+            worker.refresh_catalog()
+        self.assertEqual(path.read_bytes(),before);client.chat.assert_not_called()
+
     def dispatch(self, **kw):
         with patch.object(panel.EXECUTOR, 'submit') as queue:
             task = panel.submit_task(self.body(**kw))

@@ -349,21 +349,25 @@ def upsert_model(body, model_id=None):
 
 def upsert_native_model(body, model_id=None):
     import workbuddy_worker
+    native = body.get('model', workbuddy_worker.MODEL)
+    entry = workbuddy_worker.catalog_model(native) if native != workbuddy_worker.MODEL else None
     if (set(body) - {'provider', 'name', 'model', 'enabled', 'default_agent'} or
-            body.get('model', workbuddy_worker.MODEL) != workbuddy_worker.MODEL or
+            (native != workbuddy_worker.MODEL and entry is None) or
             body.get('default_agent', 'workbuddy') != 'workbuddy' or
             type(body.get('enabled', True)) is not bool):
         raise ValueError('WorkBuddy 只接受固定原生模型与启用状态，不接受 API/价格/子代理设置')
-    ident = model_id or workbuddy_worker.MODEL_ROW
-    if ident != workbuddy_worker.MODEL_ROW:
+    ident = model_id or workbuddy_worker.model_row_id(native)
+    if ident != workbuddy_worker.model_row_id(native):
         raise ValueError('WorkBuddy 原生模型标识固定；不能改用已有 API 模型')
     with registry_lock():
         data = read_registry()
         previous = next((m for m in data['models'] if m['id'] == ident), None)
         if previous and previous.get('provider') != 'workbuddy':
             raise ValueError('这个标识已属于 API 模型，不能转换账户来源')
+        if previous and previous.get('model') != native:
+            raise ValueError('已有原生模型标识不可换绑其他模型')
         row = {'id': ident, 'name': str(body.get('name') or 'WorkBuddy · DeepSeek V4.1 Flash')[:100],
-               'provider': 'workbuddy', 'model': workbuddy_worker.MODEL, 'default_agent': 'workbuddy',
+               'provider': 'workbuddy', 'model': native, 'default_agent': 'workbuddy',
                'api_base': '', 'secret': '', 'api_key_env': '',
                'enabled': body.get('enabled', previous.get('enabled', True) if previous else True),
                'bypass_proxy': False, 'created_at': previous['created_at'] if previous else now(),

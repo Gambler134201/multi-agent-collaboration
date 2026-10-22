@@ -3,6 +3,7 @@ const expandedEndpoints = new Set();
 let endpointSaving = false;
 let modelEditorEndpoint = null;
 let nativeSetupDraft = null;
+let nativeModelDraft = null;
 
 function closeInlineModelEditor() {
   if(!modelEditorEndpoint)return;
@@ -17,7 +18,11 @@ function endpointModelAction(model,action,label){
 
 function renderNativeSettings(endpoint,model){
   const config=nativeSetupDraft||endpoint.runtime?.configuration_values||{};
-  return `<p class="field-hint">WorkBuddy 登录账户 · 固定 DeepSeek V4.1 Flash。限定文件读写，无命令、子代理或原会话续接；主脑独立测试与验收。积分/实际请求数未返回，启用强制金额或请求次数上限时拒绝调用。</p>
+  const catalog=endpoint.runtime?.native_catalog||{},rows=catalog.models||[],selected=nativeModelDraft||model?.model||'';
+  return `<form data-native-selection><label>WorkBuddy 内置模型<select name="native_model" data-native-model ${endpointSaving?'disabled':''}>${selected&&!rows.some(r=>r.model_id===selected)?`<option value="${escapeText(selected)}">${escapeText(selected)}（当前保存）</option>`:''}${rows.map(r=>`<option value="${escapeText(r.model_id)}" ${r.model_id===selected?'selected':''}>${escapeText(r.name)} · ${escapeText(r.model_id)}</option>`).join('')}</select></label><div class="endpoint-settings-actions"><button type="button" class="button secondary" data-native-refresh ${endpointSaving?'disabled':''}>${rows.length?'刷新':'读取'}内置模型</button><button type="submit" class="button secondary" ${endpointSaving||!rows.length?'disabled':''}>保存模型选择</button></div></form>
+    <p class="field-hint">列表来自 WorkBuddy 原生接口，读取和保存不生成内容。保存后用于该执行端的新任务，已有任务保留原模型。限免、折扣与可用权限以 WorkBuddy 当前账户为准；列表可选不代表已通过真实任务验证。</p>
+    ${catalog.error?`<p class="form-error">${escapeText(catalog.error)}</p>`:''}
+    <p class="field-hint">WorkBuddy 登录账户。限定文件读写，无命令、子代理或原会话续接；主脑独立测试与验收。积分/实际请求数未返回，启用强制金额或请求次数上限时拒绝调用。</p>
     <form data-native-setup><label>WorkBuddy 安装目录<input name="home" value="${escapeText(config.home||'')}" required placeholder="选择包含 WorkBuddy.exe 的安装目录"></label><label>原生配置目录<input name="profile" value="${escapeText(config.profile||'')}" required placeholder="当前用户的 .workbuddy 目录"></label><p class="field-hint">只校验公开安装信息，不读取认证文件。保存不调用模型，不切换其他执行端。</p><button type="submit" class="button secondary" ${endpointSaving?'disabled':''}>保存原生连接</button></form>
     ${endpoint.message?`<p class="field-hint">${escapeText(endpoint.message)}</p>`:''}
     ${model?.id&&model.id!==state.default_model?endpointModelAction(model,'default','设为手动默认'):''}`;
@@ -39,8 +44,8 @@ function renderEndpointCards(){
     const runtime=endpoint.runtime||{},jobs=(state.tasks||[]).filter(t=>t.engine===endpoint.id&&['running','queued'].includes(t.status));
     let status=!endpoint.enabled?badge('cancelled','已禁用'):!endpoint.ready?badge('unknown','执行器未就绪'):!group.some(m=>m.enabled)?badge('unknown','未配置可用模型'):badge('online','执行器就绪');
     if(endpoint.selection_error)status=badge('failed','模型选择需修正');
-    const name=native?'DeepSeek V4.1 Flash':model?.name||(group.length?'按任务选择':'尚未配置模型');
-    const modelCode=native?'deepseek-v4.1-flash':model?.model||`${group.length} 个已配置模型`;
+    const name=native?(model?.name?.replace(/^WorkBuddy\s*·\s*/,'')||'尚未选择原生模型'):model?.name||(group.length?'按任务选择':'尚未配置模型');
+    const modelCode=model?.model||`${group.length} 个已配置模型`;
     const wallet=native?'<div class="endpoint-wallet"><div><span>WorkBuddy 账户积分</span><strong>未同步</strong></div><small>使用登录账户原生积分</small></div>':model?.billing?`<div class="endpoint-wallet endpoint-billing"><div class="endpoint-wallet-source">${escapeText(providerNames[model.provider]||model.provider)} API 账户余额</div>${renderBilling(model)}</div>`:`<div class="endpoint-wallet"><div><span>${model?.provider==='local'?'账户余额':'账户余额'}</span><strong>${model?.provider==='local'?'不适用':model?'暂不支持查询':'按任务模型显示'}</strong></div><small>${model?.provider==='local'?'本地运行，不经云端账户扣费':model?'此服务暂无余额读取适配':'展开设置查看模型及各自余额'}</small></div>`;
     return `<article class="endpoint-card ${model?.billing?'billing-model':''} ${endpoint.enabled?'':'endpoint-disabled'}" data-endpoint-id="${endpoint.id}">
       <div class="endpoint-head"><div class="endpoint-mark" aria-hidden="true">${({pi:'Pi',dsh:'DSH',workbuddy:'WB'})[endpoint.id]}</div><div><h3>${escapeText(endpoint.name)}</h3><span class="subtle">${native?'登录账户模型 / 原生积分':'API / 本地模型'}</span></div></div>
@@ -65,22 +70,23 @@ async function saveEndpoint(id,patch){
   endpointSaving=true;renderModels();
   // /api/workflow already exists in resident MCP proxies. Keep its envelope
   // strictly separate from workflow values so loaded Codex panels work too.
-  try{await api('/api/workflow',{endpoint_settings:{id,values:patch}});if(patch.native_setup)nativeSetupDraft=null;toast('执行端设置已保存，现有运行任务继续；排队任务启动前检查开关');}
+  try{await api('/api/workflow',{endpoint_settings:{id,values:patch}});if(patch.native_setup)nativeSetupDraft=null;if(patch.native_model)nativeModelDraft=null;toast(patch.refresh_native_models?'原生模型列表已更新；未调用模型生成':'执行端设置已保存，现有运行任务继续；排队任务启动前检查开关');}
   catch(error){toast(error.message,true);}
   finally{endpointSaving=false;await refresh();}
 }
 
 function setupEndpointCards(){
   $('models').addEventListener('input',event=>{const form=event.target.closest('[data-native-setup]');if(form)nativeSetupDraft={home:form.elements.home.value,profile:form.elements.profile.value};});
-  $('models').addEventListener('submit',event=>{if(!event.target.matches('[data-native-setup]'))return;event.preventDefault();const form=event.target;saveEndpoint('workbuddy',{native_setup:{home:form.elements.home.value.trim(),profile:form.elements.profile.value.trim()}});});
+  $('models').addEventListener('submit',event=>{const form=event.target;if(form.matches('[data-native-selection]')){event.preventDefault();saveEndpoint('workbuddy',{native_model:form.elements.native_model.value});return;}if(!form.matches('[data-native-setup]'))return;event.preventDefault();saveEndpoint('workbuddy',{native_setup:{home:form.elements.home.value.trim(),profile:form.elements.profile.value.trim()}});});
   $('models').addEventListener('click',event=>{
     const button=event.target.closest('button');if(!button)return;
+    if(button.hasAttribute('data-native-refresh'))saveEndpoint('workbuddy',{refresh_native_models:true});
     if(button.dataset.endpointToggle){const row=state.execution_endpoints?.rows.find(e=>e.id===button.dataset.endpointToggle);if(row)saveEndpoint(row.id,{enabled:!row.enabled});}
     if(button.dataset.endpointExpand){const id=button.dataset.endpointExpand;if(expandedEndpoints.has(id))expandedEndpoints.delete(id);else expandedEndpoints.add(id);renderModels();}
     if(button.dataset.endpointAdd)openModel(null,button.dataset.endpointAdd);
     if(button.dataset.endpointParameters){const id=button.dataset.endpointParameters,row=state.execution_endpoints.rows.find(e=>e.id===id);$('agent-settings-open').onclick();$('agent-settings-agent').value=id;$('agent-settings-model').value=row?.model?.id||row?.models?.[0]?.id||'';renderAgentSettings();}
   });
-  $('models').addEventListener('change',event=>{if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
+  $('models').addEventListener('change',event=>{if(event.target.hasAttribute('data-native-model'))nativeModelDraft=event.target.value;if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
 }
 
 const $ = id => document.getElementById(id);
@@ -1189,7 +1195,7 @@ function renderThinkingNote(){
 }
 function taskAgentHint(){
   const nativeModel=state.models.find(m=>m.id===$('task-model').value);
-  if($('task-route').value!=='auto'&&nativeModel?.provider==='workbuddy')return '使用 WorkBuddy 登录账户 DeepSeek V4.1 Flash；无命令/子代理/续接。积分与实际请求数未知，测试由主脑独立运行。';
+  if($('task-route').value!=='auto'&&nativeModel?.provider==='workbuddy')return `使用 WorkBuddy 登录账户 ${nativeModel.model}；无命令/子代理/续接。积分与实际请求数未知，测试由主脑独立运行。`;
   const control=$('task-engine'),selected=control.value,automatic=$('task-route').value==='auto';
   if(continuingTask)return `继续使用原任务的 ${engineNames[continuingTask.engine]||continuingTask.engine}、原模型与原会话；当前模型偏好不会迁移已有任务。`;
   if(selected==='direct')return '本次显式使用“直接询问模型”。它不使用 Agent 会话，也不会被模型默认或全局默认替换。';

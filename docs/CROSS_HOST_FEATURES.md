@@ -28,6 +28,8 @@ Codex 沿用现有本地 CLI 派发，无需建立 DSH 使用的 broker 会话�
 
 执行端卡片、自动路由模型选择和启用状态由公共 `execution_endpoints` 维护；Codex/DSH 共用相同路由、候选、启动前与恢复检查。禁用不取消已运行任务，不更换既有 Agent 或模型，不修改范围和预算。WorkBuddy 原生执行队列已接入这两个主脑的公共控制器；仅对话/限定文件、固定原生模型、未知费用和安全恢复限制同步适用。两宿主模拟检查与真实任务验收分开记录：Codex CLI 的单文件真实闭环已通过，DSH 原生入口派发 WorkBuddy 仍待实测。WorkBuddy 作为主脑仍未适配完成。详见 [EXECUTION_ENDPOINTS.md](EXECUTION_ENDPOINTS.md)。
 
+WorkBuddy 内置模型选择也属于共享执行端能力：Codex/DSH 共用卡片、原生目录缓存、独立模型标识、选择持久化和旧任务模型保持规则。模型列表读取不生成内容，不更改其他执行端或预算。两宿主模拟页面覆盖读取/保存信封与刷新保留选择；只有 DeepSeek V4.1 Flash 已完成真实任务验收，其他模型仍需单独实测。
+
 ## 原生 PowerShell 7 依赖
 
 Codex MCP、DSH/通用主脑的公共启动器、系统目录选择器共用 `powershell_runtime.find_pwsh`。调用宿主的 PATH 不应决定相同机器上是否能启动。现有 PowerShell 7 可来自系统安装、显式绝对路径或本机缓存；不要求 Codex 运行，但仍依赖该可执行文件实际存在。没有原生 PowerShell 时明确拒绝，不自动下载、不换 shell。

@@ -39,6 +39,10 @@ const directory=path.resolve(__dirname,'../panel');
             const block=request.postDataJSON().endpoint_settings;
             const row=fixture.execution_endpoints.rows.find(e=>e.id===block.id);
             Object.assign(row,block.values);data={ok:true};
+            if(block.values.native_model){
+              const picked={...row.model,id:'native-glm',model:block.values.native_model,name:'WorkBuddy · GLM-5.3'};
+              row.model=picked;row.models.push(picked);row.current_model=picked.id;fixture.models.push(picked);
+            }
           }
         }
         await route.fulfill({json:data});
@@ -66,13 +70,21 @@ const directory=path.resolve(__dirname,'../panel');
       const native={...model,id:'workbuddy-deepseek-flash',provider:'workbuddy',model:'deepseek-v4.1-flash',
         name:'WorkBuddy native fixture',default_agent:'workbuddy',api_base:''};
       fixture.models.push(native);
-      agents.workbuddy={name:'WorkBuddy',ready:true,configuration:{model_fields:[]}};
+      agents.workbuddy={name:'WorkBuddy',ready:true,configuration:{model_fields:[]},native_catalog:{models:[
+        {model_id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash'}, {model_id:'glm-5.3',name:'GLM-5.3'}]}};
       const endpoint=fixture.execution_endpoints.rows.find(e=>e.id==='workbuddy');
       Object.assign(endpoint,{enabled:true,ready:true,model:native,models:[native],runtime:agents.workbuddy});
       await page.evaluate(()=>refresh());
       await page.locator('[data-native-setup] input[name="home"]').fill('C:\\native-fixture');
       await page.evaluate(()=>refresh());
       assert.equal(await page.locator('[data-native-setup] input[name="home"]').inputValue(),'C:\\native-fixture');
+      await page.locator('[data-native-model]').selectOption('glm-5.3');
+      await page.evaluate(()=>refresh());
+      assert.equal(await page.locator('[data-native-model]').inputValue(),'glm-5.3');
+      await page.locator('[data-native-selection] button[type="submit"]').click();
+      await page.waitForFunction(()=>document.querySelector('[data-endpoint-id="workbuddy"] .model-code').textContent==='glm-5.3');
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.values.native_model==='glm-5.3'));
+      assert.equal(fixture.default_model,'home');
       await page.locator('#new-task').click();
       await page.locator('#task-route').selectOption('manual');
       await page.locator('#task-model').selectOption(native.id);
