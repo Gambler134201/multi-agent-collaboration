@@ -22,7 +22,7 @@ CONFIGURATION = {
                               'note': '原生模式保留工具并精简提示；使用 DSH 实际预设。不会改变 Pi 或其他 Agent。'}]},
     'pi': {'description': 'Pi 使用工作台管理的独立会话配置，目前没有需要手动设置的额外选项。模型、思考等级和用量限制继续使用工作台设置。',
            'model_fields': []},
-    'workbuddy': {'description': '使用 WorkBuddy 登录账户的指定内置模型；仅限定文件读写，无命令/子代理/会话续接。积分与人民币费用未知。',
+    'workbuddy': {'description': '使用 WorkBuddy 登录账户的指定内置模型；原生项目检索、文件编辑、终端自测和联网读取；子代理/会话续接未开放。积分与人民币费用未知。',
                  'model_fields': []},
 }
 

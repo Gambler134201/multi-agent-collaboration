@@ -90,7 +90,7 @@ const directory=path.resolve(__dirname,'../panel');
       await page.locator('[data-endpoint-expand="workbuddy"]').click();
       assert.equal(await page.locator('#endpoint-notes').inputValue(),'','other endpoint must not inherit Pi draft');
       await page.locator('[data-endpoint-tab="models"]').click();
-      assert.match(await page.locator('#endpoint-connections').textContent(),/无命令/);
+      assert.match(await page.locator('#endpoint-connections').textContent(),/终端自测/);
       const native={...model,id:'workbuddy-deepseek-flash',provider:'workbuddy',model:'deepseek-v4.1-flash',
         name:'WorkBuddy native fixture',default_agent:'workbuddy',api_base:''};
       fixture.models.push(native);
@@ -116,7 +116,7 @@ const directory=path.resolve(__dirname,'../panel');
       const nativeBody=await page.evaluate(()=>taskBody());
       assert.equal(nativeBody.model_id,native.id);
       assert.equal(nativeBody.engine,undefined,'native model must own the engine, not an API override');
-      assert.equal(await page.locator('#task-test').isDisabled(),true);
+      assert.equal(await page.locator('#task-test').isDisabled(),false);
       assert.match(await page.locator('#task-agent-hint').textContent(),/WorkBuddy 登录账户/);
       await page.locator('#task-dialog .dialog-footer .close-dialog').click();
       for(const width of [1100,736,390]){

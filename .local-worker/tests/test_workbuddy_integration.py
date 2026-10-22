@@ -19,6 +19,7 @@ import model_router
 import panel_server as panel
 import workbuddy_executor as wb
 import workbuddy_tools as tools
+import workbuddy_native_tools as native_tools
 import workbuddy_worker as worker
 import workflow_settings
 from test_stage_workflow import Base
@@ -134,6 +135,8 @@ class IntegrationTests(Base):
         task, run = self.dispatch()
         self.assertEqual((task['engine'], task['model']), ('workbuddy', worker.MODEL))
         self.assertEqual(task['workbuddy_connection'], self.config)
+        self.assertEqual(task['workbuddy_tool_mode'],native_tools.MODE)
+        self.assertEqual(task['workbuddy_tool_revision'],native_tools.revision())
         self.assertTrue(run.is_relative_to(self.project / '.model-desk'))
         self.assertIsNone(task['route']['estimated_cost_cny'])
         self.assertEqual(task['route']['cost']['prediction']['kind'], 'unknown')
@@ -164,7 +167,7 @@ class IntegrationTests(Base):
         self.assertEqual(model_router.choose(body, [self.model, api], self.settings)['model_id'], api['id'])
 
     def test_terminal_output_override_and_reuse_are_explicitly_unsupported(self):
-        for kw in [{'test_command': 'python test.py'}, {'request_output_tokens': 100},
+        for kw in [{'request_output_tokens': 100},
                    {'reuse_session': True}, {'continue_task': 'old'}]:
             with self.subTest(kw=kw), self.assertRaises(ValueError):
                 worker.validate_task(self.body(**kw), self.settings)
@@ -172,13 +175,22 @@ class IntegrationTests(Base):
     def client(self, scenario='ok'):
         outer = self
         class Native:
-            def __init__(self, info, project, profile, model, *, tool_job, on_lease):
+            def __init__(self, info, project, profile, model, *, tool_job, on_lease, native_job=None):
                 self.job, self.closed = tool_job, False
+                self.native_job = native_job
+                self.session_id = None
+                self.project = Path(project)
                 outer.native = self
                 on_lease({'state': 'created', 'session_id': 'modeldesk-wb-' + 'a'*32,
                           'runtime_id': 'b'*8+'-'+ 'b'*4+'-'+ 'b'*4+'-'+ 'b'*4+'-'+ 'b'*12,
                           'channel': 'fixture', 'pid': 99999})
             def connect(self):
+                self.session_id = 'fixture-native-session'
+                if self.native_job:
+                    data=native_tools.load(self.native_job)
+                    registry.write_json(Path(self.native_job).parent/'workbuddy-native-proof.json', {
+                        **{k:data[k] for k in ('task_id','project','nonce','revision','mode')},
+                        'session_id':self.session_id,'probe':'ok'})
                 if self.job:
                     server = tools.FileTools(self.job);server.list_tools()
                 return {'session_id': 'fixture-native-session'}
@@ -188,14 +200,18 @@ class IntegrationTests(Base):
                 if scenario == 'unknown':
                     raise wb.OutcomeUnknown('fixture result unknown; no resend')
                 if scenario == 'cancel':
-                    (Path(self.job).parent / 'cancelled.flag').touch()
+                    (Path(self.native_job or self.job).parent / 'cancelled.flag').touch()
                     raise wb.Cancelled('fixture cancelled')
                 proof = None
+                native_proof = None
+                if self.native_job:
+                    (self.project/'a.py').write_text('native fixture changed',encoding='utf-8')
+                    native_proof=native_tools.verify(self.native_job,self.session_id)
                 if self.job:
                     server = tools.FileTools(self.job)
                     server.call('write_file', {'path': 'a.py', 'content': 'native fixture changed'})
                     proof = tools.verify(self.job)
-                return {'status': 'completed', 'answer': 'fixture done', 'usage': None, 'file_tool_proof': proof}
+                return {'status': 'completed', 'answer': 'fixture done', 'usage': None, 'file_tool_proof': proof, 'native_tool_proof':native_proof}
             def close(self):
                 self.closed = True
                 if scenario == 'cleanup_unknown':
@@ -213,6 +229,8 @@ class IntegrationTests(Base):
         self.assertEqual((self.project / 'a.py').read_text(), 'native fixture changed')
         self.assertEqual(row['workbuddy']['cleanup'], 'closed')
         self.assertTrue(self.native.closed)
+        self.assertEqual(row['sandbox_mode'],'native-tool-argument-guard')
+        self.assertIsNotNone(row['native_tool_proof'])
         self.assertEqual(self.prompts, 1)
         self.assertIsNone(row['cost_settled_cny'])
         self.assertIsNone(row['model_calls'])
@@ -237,6 +255,8 @@ class IntegrationTests(Base):
         self.assertEqual(row['status'], 'cancelled')
         self.assertEqual(row['workbuddy']['cleanup'], 'closed')
         self.assertTrue(self.native.closed)
+        self.assertEqual(row['sandbox_mode'],'native-tool-argument-guard')
+        self.assertIsNotNone(row['native_tool_proof'])
 
     def test_cleanup_failure_cannot_be_reported_as_success(self):
         task, run = self.dispatch()
@@ -252,6 +272,31 @@ class IntegrationTests(Base):
         worker.run_task(run, task, registry.get_model(task['model_id']), client_factory=factory)
         factory.assert_not_called()
         self.assertIn('配置已变', registry.read_task(run)['error'])
+
+    def test_declared_test_command_without_real_native_result_fails_not_assumed_success(self):
+        with patch.object(panel.EXECUTOR, 'submit'):
+            task=panel.submit_task(self.body(test_command='python -B -m unittest'))
+        run=registry.task_dir(task['id'])
+        worker.run_task(run, task, registry.get_model(task['model_id']), client_factory=self.client())
+        row=registry.read_task(run)
+        self.assertEqual(row['status'],'failed')
+        self.assertFalse(row['test_result']['verified'])
+        self.assertIsNone(row['test_result']['exit_code'])
+
+    def test_old_task_keeps_file_only_tools_and_does_not_receive_native_profile(self):
+        task,run=self.dispatch()
+        task.pop('workbuddy_tool_mode',None);task.pop('workbuddy_tool_revision',None)
+        worker.run_task(run,task,registry.get_model(task['model_id']),client_factory=self.client())
+        self.assertIsNone(self.native.native_job)
+        self.assertEqual(registry.read_task(run)['workbuddy_tool_mode'],native_tools.LEGACY)
+
+    def test_changed_native_guard_revision_refuses_before_session_creation(self):
+        task,run=self.dispatch()
+        task['workbuddy_tool_revision']='stale'
+        factory=Mock()
+        worker.run_task(run,task,registry.get_model(task['model_id']),client_factory=factory)
+        factory.assert_not_called()
+        self.assertIn('版本已变',registry.read_task(run)['error'])
 
     def test_controller_cancel_sets_flag_without_taskkill_or_false_completion(self):
         task, run = self.dispatch()
@@ -319,6 +364,8 @@ class IntegrationTests(Base):
                 status = brain_gateway.handle('status', {'task_id': tid}, capability)
                 delivery = brain_gateway.handle('delivery', {'task_id': tid}, capability)
                 self.assertEqual(status['engine'], 'workbuddy')
+                self.assertEqual(status['native_execution']['tool_mode'],native_tools.MODE)
+                self.assertTrue(status['native_execution']['tool_protection_verified'])
                 self.assertEqual(status['native_execution']['session_id'], 'fixture-native-session')
                 self.assertIsNone(delivery['native_execution']['credits_used'])
                 self.assertFalse(delivery['accepted'])

@@ -26,7 +26,7 @@ Codex 沿用现有本地 CLI 派发，无需建立 DSH 使用的 broker 会话�
 
 ## 执行端独立开关
 
-执行端卡片、自动路由模型选择和启用状态由公共 `execution_endpoints` 维护；Codex/DSH 共用相同路由、候选、启动前与恢复检查。禁用不取消已运行任务，不更换既有 Agent 或模型，不修改范围和预算。WorkBuddy 原生执行队列已接入这两个主脑的公共控制器；仅对话/限定文件、固定原生模型、未知费用和安全恢复限制同步适用。两宿主模拟检查与真实任务验收分开记录：Codex CLI 的单文件真实闭环已通过，DSH 原生入口派发 WorkBuddy 仍待实测。WorkBuddy 作为主脑仍未适配完成。详见 [EXECUTION_ENDPOINTS.md](EXECUTION_ENDPOINTS.md)。
+执行端卡片、自动路由模型选择和启用状态由公共 `execution_endpoints` 维护；Codex/DSH 共用相同路由、候选、启动前与恢复检查。禁用不取消已运行任务，不更换既有 Agent 或模型，不修改范围和预算。WorkBuddy 原生执行队列已接入这两个主脑的公共控制器；新任务的原生开发工具、固定原生模型、未知费用和安全恢复限制同步适用，旧任务保持原限定文件配置。两宿主模拟检查与真实任务验收分开记录：Codex CLI 的单文件真实闭环已通过，DSH 原生入口派发 WorkBuddy 仍待实测。WorkBuddy 作为主脑仍未适配完成。详见 [EXECUTION_ENDPOINTS.md](EXECUTION_ENDPOINTS.md)。
 
 WorkBuddy 内置模型选择也属于共享执行端能力：Codex/DSH 共用卡片、原生目录缓存、独立模型标识、选择持久化和旧任务模型保持规则。模型列表读取不生成内容，不更改其他执行端或预算。两宿主模拟页面覆盖读取/保存信封与刷新保留选择；Codex CLI 已分别对 DeepSeek V4.1 Flash、GLM-5.3-Flash 完成真实单文件独立验收，其他模型仍需单独实测，DSH 原生派发 WorkBuddy 仍未据此验收。
 
@@ -39,3 +39,8 @@ Codex MCP、DSH/通用主脑的公共启动器、系统目录选择器共用 `po
 ## 执行端设置弹窗与统一预设
 
 Codex/DSH 共享紧凑卡片、设置弹窗首页及四项执行端预设；模型连接在第二页签。`execution_endpoints.apply_preset` 按最终执行 Agent 合成有效能力，路由与主脑候选共同使用；旧任务保留快照。未保存时沿用各模型原预设，不自动迁移。实际模型价格、账户与预算不合并。WorkBuddy 作为执行端使用同一预设，作为主脑仍未适配。本次为离线控制器及两宿主浏览器视图检查，不等同原生推理验收。
+
+
+## WorkBuddy 原生开发工具
+
+Codex 和 DSH 共用 `panel_server` 派发时的工具配置/代码指纹快照、`workbuddy_worker` 和受信原生宿主通道；候选返回相同的原生开发/终端能力。普通任务及正式主脑任务统一适用只读/编辑权限、记录保护、自测证据与独立验收。新工具配置不升级旧排队任务及其整改。两宿主 mock 控制器和页面检查与原生实测分开记录；不能把 Codex 真实任务通过概括成 DSH 原生 GUI 已实测。详见 WORKBUDDY_EXECUTOR.md 的原生开发工具章节；第三方扩展、子代理与发布工具不包含在本次 12 项配置中。

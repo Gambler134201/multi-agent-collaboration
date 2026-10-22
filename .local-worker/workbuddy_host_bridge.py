@@ -257,8 +257,8 @@ class NativeHostClient(wb.NativeChatClient):
 
 
 def create_client(info, project, profile, model_id, *, names=None, pipe_factory=WindowsPipe,
-                  tool_job=None, on_lease=None):
-    """Create one native-host-owned lease; built-ins remain disabled, no prompt."""
+                  tool_job=None, on_lease=None, native_job=None):
+    """Create one task-owned lease with an explicit tool profile; no prompt."""
     project = Path(project)
     if not project.is_absolute() or not project.is_dir():
         raise ValueError('Native lease requires an explicit existing project')
@@ -268,7 +268,7 @@ def create_client(info, project, profile, model_id, *, names=None, pipe_factory=
     session_id = 'modeldesk-wb-' + uuid.uuid4().hex
 
     def spawn(args, **kwargs):
-        if args != wb.command(info, model_id) or Path(kwargs['cwd']).resolve() != project.resolve():
+        if args != wb.command(info, model_id, native_job=native_job) or Path(kwargs['cwd']).resolve() != project.resolve():
             raise ValueError('Native lease command or project mismatch')
         control = LeaseControl(pipe_factory(channel, info['executable']), session_id)
         if on_lease:
@@ -303,4 +303,4 @@ def create_client(info, project, profile, model_id, *, names=None, pipe_factory=
             control.pipe.close()
             raise
 
-    return NativeHostClient(info, project, profile, model_id=model_id, popen=spawn, tool_job=tool_job)
+    return NativeHostClient(info, project, profile, model_id=model_id, popen=spawn, tool_job=tool_job, native_job=native_job)

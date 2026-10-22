@@ -126,13 +126,18 @@ def process_environment(config_home, *, isolated=False, installation_info=None):
     return env
 
 
-def command(info, model_id=None):
+def command(info, model_id=None, *, native_job=None):
     # The bundled lite-wb build exits silently with --acp alone in 5.8.2.
     # --serve selects the server strategy; --acp retains NDJSON stdio transport.
     # Keep the native HTTP authentication default; never use --auth none.
     args = [info['executable'], info['cli'], '--serve', '--acp',
             '--no-session-persistence', '--tools', '', '--strict-mcp-config',
             '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '']
+    if native_job is not None:
+        import workbuddy_native_tools
+        options, tools = workbuddy_native_tools.settings(native_job, info['executable'])
+        args[args.index('--tools') + 1] = ','.join(tools)
+        args.extend(['--settings', json.dumps(options, ensure_ascii=False), '--permission-mode', 'default'])
     if model_id is not None:
         if not isinstance(model_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}', model_id):
             raise ValueError('WorkBuddy 模型 ID 无效')
@@ -219,11 +224,17 @@ class NativeChatClient:
     """One task-owned native process, no inferred cwd, no model fallback."""
 
     def __init__(self, info, project, config_home, *, isolated=False, model_id=None, popen=subprocess.Popen,
-                 tool_job=None):
+                 tool_job=None, native_job=None):
         project = Path(project)
         if not project.is_absolute() or not project.is_dir():
             raise ValueError('WorkBuddy 必须绑定明确存在的项目绝对目录')
         self.project = str(project.resolve())
+        self.native_job = None
+        if native_job is not None:
+            import workbuddy_native_tools
+            if tool_job is not None or workbuddy_native_tools.load(native_job)['project'] != self.project:
+                raise ValueError('WorkBuddy 原生工具与任务项目不匹配')
+            self.native_job = Path(native_job).resolve()
         self.tool_job = None
         self.mcp_servers = []
         if tool_job is not None:
@@ -242,7 +253,7 @@ class NativeChatClient:
         self.inbox = queue.Queue()
         self.tainted = False
         self.cancel_check = lambda: False
-        self.process = popen(command(info, model_id), cwd=self.project,
+        self.process = popen(command(info, model_id, native_job=self.native_job), cwd=self.project,
                              env=process_environment(config_home, isolated=isolated, installation_info=info),
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, encoding='utf-8', errors='replace',
@@ -334,8 +345,11 @@ class NativeChatClient:
                     raise OutcomeUnknown('WorkBuddy 响应结构异常，结果未知')
                 return result
             if 'id' in value:
-                if value.get('method') == 'session/request_permission' and self.tool_job is not None:
-                    self._file_permission(value)
+                if value.get('method') == 'session/request_permission' and (self.tool_job is not None or getattr(self, 'native_job', None) is not None):
+                    if getattr(self, 'native_job', None) is not None:
+                        self._native_permission(value)
+                    else:
+                        self._file_permission(value)
                     continue
                 self.tainted = True
                 raise OutcomeUnknown('WorkBuddy 返回未授权的交互请求；未自动批准')
@@ -401,6 +415,51 @@ class NativeChatClient:
             self.tainted = True
             raise ProtocolError('WorkBuddy 请求了任务范围外或未经挂载验证的工具；已拒绝并停止本轮')
 
+    def _native_permission(self, request):
+        import workbuddy_native_tools as native
+        params = request.get('params')
+        params = params if isinstance(params, dict) else {}
+        allowed, option_id = False, None
+        options = params.get('options')
+        once = [o for o in options if isinstance(o, dict) and o.get('kind') == 'allow_once'
+                and o.get('optionId') in ('allow', 'allow_once')] if isinstance(options, list) else []
+        try:
+            if params.get('sessionId') == self.session_id and len(once) == 1:
+                allowed = native.permission(self.native_job, self.session_id, params.get('toolCall') or {})
+                if allowed:
+                    option_id = once[0]['optionId']
+        except (OSError, ValueError, KeyError, TypeError):
+            allowed = False
+        self.diagnostics.append({'kind': 'native_permission', 'decision': 'allow_once' if allowed else 'deny',
+                                 'option_id': option_id})
+        outcome = {'outcome': 'selected', 'optionId': option_id} if allowed else {'outcome': 'cancelled'}
+        try:
+            self.process.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'],
+                'result': {'outcome': outcome}}) + '\n')
+            self.process.stdin.flush()
+        except (OSError, ValueError):
+            self.tainted = True
+            raise OutcomeUnknown('WorkBuddy 原生工具授权回执未知；未重发') from None
+        if not allowed:
+            self.tainted = True
+            raise ProtocolError('WorkBuddy 原生工具授权缺少本任务匹配证据或越出范围；已停止，未绕过')
+
+    def wait_native_tools(self, timeout=20):
+        import workbuddy_native_tools
+        deadline = time.monotonic() + timeout
+        expected = Path(self.native_job).parent / 'workbuddy-native-proof.json'
+        while True:
+            if self.cancel_check():
+                raise Cancelled('WorkBuddy 原生工具初始化期间任务已取消')
+            try:
+                return workbuddy_native_tools.verify(self.native_job, self.session_id)
+            except FileNotFoundError as error:
+                if Path(error.filename) != expected:
+                    raise
+            if time.monotonic() >= deadline:
+                raise ProtocolError('WorkBuddy 原生工具保护未就绪；未发送模型提示词')
+            time.sleep(.05)
+
     def connect(self):
         if self.session_id is not None:
             raise ValueError('当前连接已建立会话，不能隐式新建另一个会话')
@@ -425,6 +484,8 @@ class NativeChatClient:
                             o.get('currentValue') == current for o in options)
             if confirmed and current not in {m['model_id'] for m in self.models}:
                 self.models.append({'model_id': current, 'name': current})
+        if getattr(self, 'native_job', None) is not None:
+            self.wait_native_tools()
         return {'session_id': session_id, 'models': self.models, 'account_verified': False,
                 'current_model_id': current, 'project': self.project, 'model_called': False}
 
@@ -451,6 +512,8 @@ class NativeChatClient:
     def chat(self, model_id, prompt, settings, *, timeout=0):
         task_deadline = time.monotonic() + timeout if timeout else None
         authorize_native_chat(settings)
+        if getattr(self, 'native_job', None) is not None and self.wait_native_tools().get('writes_paused'):
+            raise ProtocolError('本任务此前触发原生工具拒绝；不能换工具重试')
         if self.tool_job is not None:
             import workbuddy_tools
             if self.wait_file_tools(min(20, timeout) if timeout else 20).get('writes_paused'):
@@ -493,13 +556,18 @@ class NativeChatClient:
         if self.tool_job is not None:
             tool_proof = workbuddy_tools.verify(self.tool_job)
             tool_refused = tool_proof.get('writes_paused') is True
+        native_proof = None
+        if getattr(self, 'native_job', None) is not None:
+            import workbuddy_native_tools
+            native_proof = workbuddy_native_tools.verify(self.native_job, self.session_id)
+            tool_refused = native_proof['writes_paused']
         return {'engine': 'workbuddy', 'model_id': model_id, 'session_id': self.session_id,
                 'project': self.project, 'status': 'completed' if stop_reason == 'end_turn' and not tool_refused else 'failed',
                 'stop_reason': stop_reason, 'answer': ''.join(answer),
                 'usage': usage or None, 'cost_cny': None, 'credits_used': None,
                 'execution_error': ({'category': 'file_tool_refused'} if tool_refused else
                                     prompt_failure(result) if stop_reason != 'end_turn' else None),
-                'file_tool_proof': tool_proof,
+                'file_tool_proof': tool_proof, 'native_tool_proof': native_proof,
                 'adapter_diagnostics': list(self.diagnostics),
                 'billing_source': 'workbuddy-native-account', 'accepted': False}
 

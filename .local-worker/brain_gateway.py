@@ -590,7 +590,9 @@ def _native_execution(task):
             'version': task.get('executor_version'), 'billing_source': 'workbuddy-native-account',
             'credits_used': None, 'actual_model_calls': None, 'cost_cny': None,
             'cleanup': native.get('cleanup'), 'prompt_attempted': bool(native.get('prompt_attempted')),
-            'outcome_unknown': bool(native.get('outcome_unknown'))}
+            'outcome_unknown': bool(native.get('outcome_unknown')),
+            'tool_mode': task.get('workbuddy_tool_mode', 'scoped-files-v1'),
+            'tool_protection_verified': bool(task.get('native_tool_proof'))}
 
 
 def _status(context, payload):

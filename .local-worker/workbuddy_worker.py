@@ -121,7 +121,8 @@ def installation(config):
 def availability():
     result = {'engine': 'workbuddy', 'name': 'WorkBuddy', 'ready': False, 'installed': False,
               'version': None, 'account_verified': False, 'transport': 'WorkBuddy native host ACP',
-              'capabilities': {'chat': True, 'scoped_files': True, 'terminal': False,
+              'capabilities': {'chat': True, 'scoped_files': True, 'terminal': True,
+                               'project_search': True, 'web': True, 'native_tools': True,
                                'subagents': False, 'session_reuse': False},
               'billing_source': 'workbuddy-native-account', 'message': ''}
     try:
@@ -130,6 +131,10 @@ def availability():
         if not config['home'] or not config['profile']:
             raise ValueError('请配置 WorkBuddy 安装目录与当前用户原生配置目录；不会读取认证文件')
         info = installation(config)
+        import workbuddy_native_tools
+        result['tool_profile'] = workbuddy_native_tools.MODE
+        result['native_tools'] = list(workbuddy_native_tools.TOOLS)
+        result['tool_guard_revision'] = workbuddy_native_tools.revision()
         result.update(installed=True, version=info['version'], executable=info['executable'])
         bridge.select_channel(config['profile'], os.listdir('\\\\.\\pipe\\'))
         result.update(ready=True, message='已发现指定账户的原生宿主；登录授权在实际任务时由 WorkBuddy 核实')
@@ -168,9 +173,11 @@ def configure(body):
 def validate_task(body, settings):
     wb.authorize_native_chat(settings)
     if body.get('kind', 'chat') not in {'chat', 'edit'}:
-        raise ValueError('WorkBuddy 仅支持咨询或限定文件修改')
-    if body.get('test_command') or body.get('request_output_tokens'):
-        raise ValueError('WorkBuddy 无命令或单请求输出限额控制；测试请由主脑独立运行')
+        raise ValueError('WorkBuddy 支持咨询或项目开发任务')
+    if body.get('request_output_tokens'):
+        raise ValueError('WorkBuddy 暂无单请求输出限额控制')
+    if body.get('test_command') and body.get('kind', 'chat') != 'edit':
+        raise ValueError('只读任务不执行测试命令')
     if body.get('continue_task') or body.get('reuse_session'):
         raise ValueError('WorkBuddy 暂不支持原会话续接；新任务或整改使用新原生会话')
     if not body.get('project') or not Path(body['project']).is_absolute() or not Path(body['project']).is_dir():
@@ -213,12 +220,14 @@ def run_task(run, state, model, *, client_factory=None):
     import record_protection
     import workflow_settings
     import workbuddy_tools
+    import workbuddy_native_tools as native_tools
     run = Path(run).resolve()
     client = None
     lease = {}
     native = {'prompt_attempted': False, 'cleanup': 'not_created', 'model_id': model.get('model')}
     before, changed, hashes = {}, [], {}
     answer, result, error, status = '', {}, '', 'failed'
+    test_result = None
     started = time.monotonic()
     cancel = lambda: (run / 'cancelled.flag').exists()
     try:
@@ -228,6 +237,7 @@ def run_task(run, state, model, *, client_factory=None):
         settings = workflow_settings.snapshot()
         execution_endpoints.gate('workbuddy', model, settings)
         validate_task(state, settings)
+        native_mode = native_tools.mode(state) == native_tools.MODE
         if state.get('route', {}).get('mode') == 'auto' and not settings.get('enabled'):
             raise ValueError('协作总开关已关闭，排队自动任务未启动')
         if 'workbuddy' in state:
@@ -244,12 +254,32 @@ def run_task(run, state, model, *, client_factory=None):
         record_protection.validate_files(files + readonly, project)
         before = {name: digest(project / name) for name in files}
         prompt = (run / 'prompt.txt').read_text(encoding='utf-8')
-        prompt += ('\n\n工作边界：只使用所挂载的限定文件工具，不使用命令、网络、子代理或其他记录。'
+        legacy_boundary = ('\n\n工作边界：只使用所挂载的限定文件工具，不使用命令、网络、子代理或其他记录。'
                    '没有命令工具，不得声称已运行测试；请报告未验证项供主脑验收。'
                    '\n可修改文件：' + json.dumps(files, ensure_ascii=False) +
                    '\n额外只读文件：' + json.dumps(readonly, ensure_ascii=False))
+        if native_mode:
+            prompt += ('\n\n工作边界：已加载 WorkBuddy 原生开发工具，可浏览项目、编辑列明文件、运行代码和测试。'
+                       '请自行测试并据真实输出修正；交付中区分已运行和未验证项，主脑随后独立验收。'
+                       '只在本项目工作；只修改下列文件，不读写 .model-desk、认证文件或其他聊天，不派生子代理。'
+                       '拒绝后停止并报告，不更换工具、改写命令或绕过权限。命令须前台返回结果，不启动常驻服务。'
+                       '项目检索需排除 .model-desk、.git 和 .env；不擅自发布、推送或对外发消息。'
+                       '\n可修改文件：' + json.dumps(files, ensure_ascii=False) +
+                       '\n额外只读文件：' + json.dumps(readonly, ensure_ascii=False))
+            if state.get('test_command'):
+                prompt += '\n必须通过原生终端执行并报告这条测试命令的实际结果：' + state['test_command']
+        else:
+            if state.get('test_command'):
+                raise ValueError('旧 WorkBuddy 任务保持限定文件模式；不能追加终端权限')
+            prompt += legacy_boundary
         job = None
-        if files or readonly:
+        native_job = None
+        if native_mode:
+            expected_revision = state.get('workbuddy_tool_revision')
+            if expected_revision != native_tools.revision():
+                raise ValueError('WorkBuddy 原生工具保护版本已变；旧任务不能隐式换版')
+            native_job = native_tools.prepare(run, project, state['id'], files, readonly, state['kind'])
+        elif files or readonly:
             existing = run / 'workbuddy-tools-job.json'
             if existing.exists():
                 tools = workbuddy_tools.FileTools(existing)
@@ -262,7 +292,8 @@ def run_task(run, state, model, *, client_factory=None):
             worker_pid=os.getpid(), executor_version=info['version'],
             billing_source='workbuddy-native-account', cost_settled_cny=None, cost_cny=None,
             cost_settled_calls=0, cost_unknown_calls=0, model_calls=None, native_credits_used=None,
-            sandbox_mode='scoped-file-tools' if files else 'read-only-tools',
+            sandbox_mode='native-tool-argument-guard' if native_mode else ('scoped-file-tools' if files else 'read-only-tools'),
+            workbuddy_tool_mode=native_tools.MODE if native_mode else native_tools.LEGACY,
             subagent_decision={'decision': 'deny', 'reason': 'WorkBuddy 未加载子代理工具'}, workbuddy=native)
 
         def lease_event(value):
@@ -274,7 +305,10 @@ def run_task(run, state, model, *, client_factory=None):
         if cancel():
             raise wb.Cancelled('任务已取消')
         factory = client_factory or bridge.create_client
-        client = factory(info, project, config['profile'], model['model'], tool_job=job, on_lease=lease_event)
+        client_args = {'tool_job': job, 'on_lease': lease_event}
+        if native_job is not None:
+            client_args['native_job'] = native_job
+        client = factory(info, project, config['profile'], model['model'], **client_args)
         client.cancel_check = cancel
         connected = client.connect()
         registry.patch_task(run, workbuddy_session_id=connected['session_id'], phase='WorkBuddy 正在执行')
@@ -297,6 +331,23 @@ def run_task(run, state, model, *, client_factory=None):
         if status == 'completed' and state['kind'] == 'chat' and not answer.strip():
             status = 'failed'
             error = 'WorkBuddy 没有返回咨询正文，请主脑检查；未重试'
+        if native_mode:
+            proof = native_tools.verify(native_job, connected['session_id'])
+            result['native_tool_proof'] = proof
+            self_tests = [e for e in proof['events'] if e.get('event') in ('PostToolUse', 'PostToolUseFailure')
+                          and e.get('tool') in ('Bash', 'PowerShell')]
+            if proof['writes_paused']:
+                status, error = 'failed', '原生工具触发范围或权限拒绝；本轮已停止'
+            if state.get('test_command') and status == 'completed':
+                expected = hashlib.sha256(state['test_command'].encode('utf-8')).hexdigest()
+                matched = [e for e in self_tests if e.get('command_hash') == expected]
+                test = matched[-1] if matched else {}
+                test_result = {'source': 'workbuddy-native-tools',
+                    'command_sha256': expected, 'exit_code': test.get('exit_code'), 'output': None,
+                    'call_id': test.get('call_id'), 'verified': bool(test.get('ok') and test.get('exit_code') == 0)}
+                registry.patch_task(run, test_result=test_result)
+                if not test.get('ok') or test.get('exit_code') != 0:
+                    status, error = 'failed', '没有核实指定测试命令成功结束；请主脑检查原生工具证据'
         if status != 'completed':
             error = error or 'WorkBuddy 未正常完成：' + str((result.get('execution_error') or {}).get('category') or result.get('stop_reason') or 'unknown')
     except wb.Cancelled:
@@ -318,6 +369,12 @@ def run_task(run, state, model, *, client_factory=None):
             error = (error + '；原生会话清理未确认，不能自动重发').strip('；')
             if status == 'completed':
                 status = 'failed'
+        if locals().get('native_job') is not None and client is not None and getattr(client, 'session_id', None):
+            try:
+                result['native_tool_proof'] = native_tools.verify(native_job, client.session_id)
+            except (OSError, ValueError, KeyError):
+                if status == 'completed':
+                    status, error = 'failed', '原生工具保护证据无法核实，请主脑检查'
         if 'project' in locals():
             try:
                 for name, old_hash in before.items():
@@ -333,13 +390,14 @@ def run_task(run, state, model, *, client_factory=None):
         registry.patch_task(run, status=status, phase='执行完成' if status == 'completed' else 'WorkBuddy 执行失败',
             ended_at=registry.now(), workbuddy=dict(native), answer=answer, error=error or None,
             changed_files=changed, file_hashes=hashes, usage=result.get('usage'),
-            tool_calls=[{'id': str(n), 'title': event.get('tool'), 'status': 'completed' if event.get('ok') else 'failed'}
-                        for n, event in enumerate((result.get('file_tool_proof') or {}).get('events', []))],
-            record_protection=bool(result.get('file_tool_proof')), native_credits_used=None,
+            tool_calls=native_tools.public_calls(result.get('native_tool_proof') or result.get('file_tool_proof')),
+            native_tool_proof=result.get('native_tool_proof'),
+            executor_self_tests=locals().get('self_tests', []),
+            record_protection=bool(result.get('native_tool_proof') or result.get('file_tool_proof')), native_credits_used=None,
             billing_source='workbuddy-native-account', cost_cny=None, cost_settled_cny=None,
             summary='原生执行结束，等待主脑独立验收；积分与人民币费用未返回', exit_code=0 if status == 'completed' else 1)
         try:
-            delegation_policy.record_executor(run, {'completed': status == 'completed', 'test': None, 'changed_files': changed})
+            delegation_policy.record_executor(run, {'completed': status == 'completed', 'test': test_result, 'changed_files': changed})
         except Exception as exc:
             registry.patch_task(run, review_error=type(exc).__name__)
     return 0 if status == 'completed' else 1

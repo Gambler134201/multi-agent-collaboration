@@ -14,7 +14,7 @@ function renderNativeSettings(endpoint,model){
   return `<form data-native-selection><label>WorkBuddy 内置模型<select name="native_model" data-native-model ${endpointSaving?'disabled':''}>${selected&&!rows.some(r=>r.model_id===selected)?`<option value="${escapeText(selected)}">${escapeText(selected)}（当前保存）</option>`:''}${rows.map(r=>`<option value="${escapeText(r.model_id)}" ${r.model_id===selected?'selected':''}>${escapeText(r.name)} · ${escapeText(r.model_id)}</option>`).join('')}</select></label><div class="endpoint-settings-actions"><button type="button" class="button secondary" data-native-refresh ${endpointSaving?'disabled':''}>${rows.length?'刷新':'读取'}内置模型</button><button type="submit" class="button secondary" ${endpointSaving||!rows.length?'disabled':''}>保存模型选择</button></div></form>
     <p class="field-hint">列表来自 WorkBuddy 原生接口，读取和保存不生成内容。保存后用于该执行端的新任务，已有任务保留原模型。限免、折扣与可用权限以 WorkBuddy 当前账户为准；列表可选不代表已通过真实任务验证。</p>
     ${catalog.error?`<p class="form-error">${escapeText(catalog.error)}</p>`:''}
-    <p class="field-hint">WorkBuddy 登录账户。限定文件读写，无命令、子代理或原会话续接；主脑独立测试与验收。积分/实际请求数未返回，启用强制金额或请求次数上限时拒绝调用。</p>
+    <p class="field-hint">WorkBuddy 登录账户。原生检索、文件编辑、终端自测与联网读取；子代理和原会话续接未开放，主脑独立验收。积分/实际请求数未返回，启用强制金额或请求次数上限时拒绝调用。</p>
     <form data-native-setup><label>WorkBuddy 安装目录<input name="home" value="${escapeText(config.home||'')}" required placeholder="选择包含 WorkBuddy.exe 的安装目录"></label><label>原生配置目录<input name="profile" value="${escapeText(config.profile||'')}" required placeholder="当前用户的 .workbuddy 目录"></label><p class="field-hint">只校验公开安装信息，不读取认证文件。保存不调用模型，不切换其他执行端。</p><button type="submit" class="button secondary" ${endpointSaving?'disabled':''}>保存原生连接</button></form>
     ${endpoint.message?`<p class="field-hint">${escapeText(endpoint.message)}</p>`:''}
     ${model?.id&&model.id!==state.default_model?endpointModelAction(model,'default','设为手动默认'):''}`;
@@ -1227,7 +1227,7 @@ function taskAgentHint(){
 function updateTaskAgentHint(){
   $('task-agent-hint').textContent=taskAgentHint();
   const native=$('task-route').value!=='auto'&&state.models.find(m=>m.id===$('task-model').value)?.provider==='workbuddy';
-  $('task-test').disabled=native;$('task-request-output').disabled=native;
+  $('task-test').disabled=false;$('task-request-output').disabled=native;
   $('task-session-hint').textContent=native?'新建 WorkBuddy 独立会话；暂不支持原会话续接，后续任务或整改使用新会话。':continuingTask?`继续同一 ${engineNames[continuingTask.engine]||continuingTask.engine} 会话，保留原任务 Agent/模型/项目。`:'按所选模型的默认 Agent 新建独立会话；任务结束后可以继续追问。';
 }
 function taskFields(){
@@ -1257,7 +1257,7 @@ function taskBody(){
   // model's preference; sending the current global value would be a fake
   // explicit override.  A continuation is pinned by the server to its parent.
   const native=body.route_mode!=='auto'&&state.models.find(m=>m.id===body.model_id)?.provider==='workbuddy';
-  if(native){body.test_command='';body.request_output_tokens=null;}
+  if(native){body.request_output_tokens=null;}
   const engine=$('task-engine').value;
   if(!continuingTask&&engine&&engine!=='model_default')body.engine=engine;
   return body;
