@@ -1,6 +1,6 @@
 # 第三方依赖与外部应用
 
-本目录提供本项目源码，不附带 Python/Node 运行环境、依赖安装目录、DSH/Pi/Codex 应用或这些应用的用户数据。
+本目录提供本项目源码，不附带 Python/Node 运行环境、依赖安装目录、DSH/Pi/Codex/WorkBuddy 应用或这些应用的用户数据。
 
 ## 直接依赖
 
@@ -18,6 +18,8 @@ Python 清单见 requirements.txt；Node 直接依赖与传递依赖见 .local-w
 
 ## 用户单独安装
 
-DSH（DeepSeek Harness）、Pi Agent、Codex、Python、Node 和 pnpm 由使用者独立安装。本项目只提供适配代码，未将它们的程序、SDK安装目录、原生探测目录或用户配置复制到源码包。
+DSH（DeepSeek Harness）、Pi Agent、Codex、WorkBuddy、Python、Node 和 pnpm 由使用者独立安装。本项目只提供适配代码，未将它们的程序、SDK安装目录、原生探测目录或用户配置复制到源码包。
+
+WorkBuddy 适配使用用户本机已安装应用提供的原生能力；账户、积分、模型访问和第三方服务条件由对应平台管理，不随本项目的 MIT 许可授予。
 
 本项目自身源码采用 [MIT 许可证](LICENSE)，Copyright (c) 2026 Gambler134201。此许可不替代上述第三方依赖或外部应用的许可。

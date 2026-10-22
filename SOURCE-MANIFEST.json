@@ -961,8 +961,8 @@
     },
     {
       "path": "THIRD_PARTY.md",
-      "sha256": "fd0d05a0d647b500803f1dcbec00fc3b1bef1db9580bd7c6f24ada3d7110dbbd",
-      "bytes": 1120
+      "sha256": "e3517dd12eb758e89d4dd66fa7af33129278b9109cff93d41a56b5456101a95c",
+      "bytes": 1310
     },
     {
       "path": "docs/AGENT_INSTALL.md",
