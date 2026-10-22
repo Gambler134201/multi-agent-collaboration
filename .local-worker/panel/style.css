@@ -333,10 +333,7 @@ html[data-font-scale="xlarge"]{--ui-scale:1.3;zoom:1.3}
 .endpoint-model-row .subtle{display:block;margin:4px 0}
 .endpoint-model-actions,.endpoint-settings-actions{display:flex;gap:9px;flex-wrap:wrap}
 .endpoint-model-actions [data-model-action=delete]{color:var(--red)}
-.endpoint-card:has(.endpoint-inline-editor>form){grid-column:1/-1}
-.endpoint-inline-editor:has(form){margin-top:16px;border-top:1px solid var(--line);padding-top:18px}
-.endpoint-inline-editor .dialog-heading{margin-bottom:16px}
-.endpoint-inline-editor form{max-width:650px}
+
 .endpoint-legacy-scope{margin-bottom:16px}
 .endpoint-legacy-scope summary{font-size:12px;margin-bottom:12px;cursor:pointer}
 .endpoint-unassigned{grid-column:1/-1;border:1px solid var(--line);padding:16px;border-radius:9px}
@@ -888,3 +885,16 @@ h1{font-size:18px}
 #workflow-save-status.unsaved{color:var(--ink);font-weight:600}
 /* The removed global default select is gone; the per-model entry sizes itself
    through .agent-entry above, so no width override is needed here. */
+
+/* Compact endpoint cards open a settings dialog; declarations are endpoint-wide. */
+#endpoint-dialog{width:min(680px,calc(100vw / var(--ui-scale,1) - 32px));max-height:calc(88dvh / var(--ui-scale,1));padding:0;overflow:hidden}
+.endpoint-modal{display:flex;flex-direction:column;max-height:inherit;min-height:0}
+#endpoint-dialog .dialog-heading{padding:18px 22px;margin:0;border-bottom:1px solid var(--line);flex-shrink:0}
+.endpoint-tabs{display:flex;gap:16px;padding:0 22px;border-bottom:1px solid var(--line);flex-shrink:0}
+.endpoint-tabs button{border:0;border-bottom:2px solid transparent;background:none;padding:12px 0;color:var(--muted);font-size:12px}
+.endpoint-tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--green)}
+.endpoint-modal-scroll{overflow-y:auto;min-height:0;padding:18px 22px;overscroll-behavior:contain}
+#endpoint-preset-panel h3{margin:0 0 8px;font-size:16px}
+#endpoint-connections form{margin-bottom:18px}
+#endpoint-dialog .endpoint-model-row{padding:14px 0}
+@media(max-width:540px){#endpoint-dialog .dialog-heading,.endpoint-modal-scroll{padding:14px}.endpoint-tabs{padding:0 14px}}

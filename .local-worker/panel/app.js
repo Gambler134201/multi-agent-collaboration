@@ -1,16 +1,8 @@
 /* Shared Codex/DSH workbench UI. No provider requests on render or toggle. */
-const expandedEndpoints = new Set();
 let endpointSaving = false;
-let modelEditorEndpoint = null;
 let nativeSetupDraft = null;
 let nativeModelDraft = null;
-
-function closeInlineModelEditor() {
-  if(!modelEditorEndpoint)return;
-  $('model-dialog').append($('model-form'));
-  modelEditorEndpoint=null;
-  renderModels();
-}
+let activeEndpoint = null;
 
 function endpointModelAction(model,action,label){
   return `<button type="button" class="text-button" data-model-action="${action}" data-id="${escapeText(model.id)}">${label}</button>`;
@@ -29,7 +21,6 @@ function renderNativeSettings(endpoint,model){
 }
 
 function renderEndpointCards(){
-  if(modelEditorEndpoint)return; // Preserve an unsaved inline form across polling.
   $('model-agent-entry').hidden=true;$('agent-settings-open').hidden=true;$('agent-state').hidden=true;
   const data=state.execution_endpoints,rows=data.rows||[];
   $('model-count').textContent=rows.length;
@@ -40,7 +31,7 @@ function renderEndpointCards(){
   const summary=$('endpoint-summary');
   if(summary){summary.textContent=`已启用 ${rows.filter(e=>e.enabled).length} / ${rows.length} 个执行端 · 禁用仅阻止新任务，运行中任务继续`;summary.classList.toggle('form-error',!data.readable);if(!data.readable)summary.textContent=data.error;}
   setMarkup($('models'),rows.map(endpoint=>{
-    const native=endpoint.id==='workbuddy',model=endpoint.model,group=endpoint.models||[],open=expandedEndpoints.has(endpoint.id);
+    const native=endpoint.id==='workbuddy',model=endpoint.model,group=endpoint.models||[];
     const runtime=endpoint.runtime||{},jobs=(state.tasks||[]).filter(t=>t.engine===endpoint.id&&['running','queued'].includes(t.status));
     let status=!endpoint.enabled?badge('cancelled','已禁用'):!endpoint.ready?badge('unknown','执行器未就绪'):!group.some(m=>m.enabled)?badge('unknown','未配置可用模型'):badge('online','执行器就绪');
     if(endpoint.selection_error)status=badge('failed','模型选择需修正');
@@ -52,17 +43,46 @@ function renderEndpointCards(){
       <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
       <div class="endpoint-current"><span class="label">${native?'指定原生模型':'当前模型 · 自动路由'}</span><strong>${escapeText(name)}</strong><div class="model-code">${escapeText(modelCode)}</div></div>
       ${wallet}<div class="endpoint-status">${status}<span class="subtle">${jobs.length?`${jobs.length} 个本项目活动任务`:native?'原生账户 · 以派发预检为准':model?.last_check?.ok?'最近连接测试通过':'未验证当前连接'}</span></div>
-      <button type="button" class="button secondary endpoint-expand" data-endpoint-expand="${endpoint.id}" aria-expanded="${open}" aria-controls="endpoint-settings-${endpoint.id}">模型与参数设置<span aria-hidden="true">${open?'−':'＋'}</span></button>
-      <section class="endpoint-settings" id="endpoint-settings-${endpoint.id}" ${open?'':'hidden'} aria-label="${escapeText(endpoint.name)}模型与参数">
-        ${native?renderNativeSettings(endpoint,model):`
+      <button type="button" class="button secondary endpoint-expand" data-endpoint-expand="${endpoint.id}" aria-haspopup="dialog" aria-controls="endpoint-dialog">参数设置<span aria-hidden="true">↗</span></button>
+      </article>`;
+  }).join('')+(data.unassigned_models?.length?`<section class="endpoint-unassigned"><h3>需修正归属的模型</h3><p class="field-hint">无效的默认 Agent 不会被自动归到其他执行端。</p>${data.unassigned_models.map(m=>`<div>${escapeText(m.name)} ${endpointModelAction(m,'edit','修正配置')}</div>`).join('')}</section>`:''));
+}
+
+function endpointConnections(endpoint){
+  const data=state.execution_endpoints;
+  const native=endpoint.id==='workbuddy',model=endpoint.model,group=endpoint.models||[];
+  return `        ${native?renderNativeSettings(endpoint,model):`
         <label>自动路由使用模型<select data-endpoint-model="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><option value="">按任务选择（保留原有路由）</option>${endpoint.current_model&&!group.some(m=>m.id===endpoint.current_model)?`<option selected value="${escapeText(endpoint.current_model)}">已保存模型不可用，请重新选择</option>`:''}${group.map(m=>`<option value="${escapeText(m.id)}" ${endpoint.current_model===m.id?'selected':''} ${m.enabled?'':'disabled'}>${escapeText(m.name)}${m.enabled?'':'（已停用）'}</option>`).join('')}</select></label>
         <p class="field-hint">选择后自动路由使用此模型；手动任务可明确指定此执行端的其他模型。已有任务保持原模型。</p>
         ${endpoint.selection_error?`<p class="form-error">${escapeText(endpoint.selection_error)}</p>`:''}
         <div class="endpoint-models">${group.map(m=>`<div class="endpoint-model-row"><div><strong>${escapeText(m.name)}</strong><span class="subtle">${escapeText(providerNames[m.provider]||m.provider)} · ${escapeText(thinkingInfo(m).label)}${m.enabled?'':' · 已停用'}</span></div><div class="endpoint-model-actions">${endpointModelAction(m,'edit','编辑模型')}${endpointModelAction(m,'test','测试连接')}${m.id!==state.default_model&&m.enabled?endpointModelAction(m,'default','设为手动默认'):''}${endpointModelAction(m,'delete','移除模型')}</div></div>`).join('')||'<p class="field-hint">此执行端还没有模型，请添加模型或把已有模型的默认 Agent 指定为此执行端。</p>'}</div>
         <div class="endpoint-settings-actions"><button type="button" class="text-button" data-endpoint-add="${endpoint.id}">＋ 添加模型</button><button type="button" class="text-button" data-endpoint-parameters="${endpoint.id}">运行参数</button></div>`}
-        ${endpoint.error?`<p class="form-error">${escapeText(endpoint.error)}</p>`:''}<div class="endpoint-inline-editor"></div>
-      </section></article>`;
-  }).join('')+(data.unassigned_models?.length?`<section class="endpoint-unassigned"><h3>需修正归属的模型</h3><p class="field-hint">无效的默认 Agent 不会被自动归到其他执行端。</p>${data.unassigned_models.map(m=>`<div>${escapeText(m.name)} ${endpointModelAction(m,'edit','修正配置')}</div>`).join('')}</section>`:''));
+`;
+}
+function renderEndpointDialog(){
+  if(!activeEndpoint)return;
+  const row=state.execution_endpoints?.rows.find(e=>e.id===activeEndpoint);
+  if(!row)return;
+  $('endpoint-dialog-title').textContent=row.name+' · 参数设置';
+  $('endpoint-preset-scope').textContent='统一应用于 '+row.name+' 执行端下的所有模型，包括后续添加或切换的模型。';
+  setMarkup($('endpoint-connections'),endpointConnections(row));
+}
+function openEndpointDialog(id){
+  activeEndpoint=id;
+  const row=state.execution_endpoints.rows.find(e=>e.id===id);if(!row)return;
+  const values=row.preset||{};
+  $('endpoint-tasks').value=(values.preferred_tasks||[]).join('、');
+  $('endpoint-notes').value=values.capability_notes||'';
+  $('endpoint-cost').value=values.cost_preference||'balanced';
+  $('endpoint-complexity').value=values.max_task_complexity||'simple';
+  $('endpoint-preset-state').textContent=row.preset?'当前使用执行端统一预设。':'尚未保存统一预设，当前沿用各模型的原预设；保存后统一应用下列值。';
+  $('endpoint-preset-error').textContent='';
+  setEndpointTab('preset');renderEndpointDialog();
+  if(!$('endpoint-dialog').open)$('endpoint-dialog').showModal();
+}
+function setEndpointTab(tab){
+  $('endpoint-preset-panel').hidden=tab!=='preset';$('endpoint-model-panel').hidden=tab!=='models';
+  document.querySelectorAll('[data-endpoint-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.endpointTab===tab)));
 }
 
 async function saveEndpoint(id,patch){
@@ -76,17 +96,19 @@ async function saveEndpoint(id,patch){
 }
 
 function setupEndpointCards(){
-  $('models').addEventListener('input',event=>{const form=event.target.closest('[data-native-setup]');if(form)nativeSetupDraft={home:form.elements.home.value,profile:form.elements.profile.value};});
-  $('models').addEventListener('submit',event=>{const form=event.target;if(form.matches('[data-native-selection]')){event.preventDefault();saveEndpoint('workbuddy',{native_model:form.elements.native_model.value});return;}if(!form.matches('[data-native-setup]'))return;event.preventDefault();saveEndpoint('workbuddy',{native_setup:{home:form.elements.home.value.trim(),profile:form.elements.profile.value.trim()}});});
-  $('models').addEventListener('click',event=>{
+  for(const target of [$('models'),$('endpoint-connections')]){
+  target.addEventListener('input',event=>{const form=event.target.closest('[data-native-setup]');if(form)nativeSetupDraft={home:form.elements.home.value,profile:form.elements.profile.value};});
+  target.addEventListener('submit',event=>{const form=event.target;if(form.matches('[data-native-selection]')){event.preventDefault();saveEndpoint('workbuddy',{native_model:form.elements.native_model.value});return;}if(!form.matches('[data-native-setup]'))return;event.preventDefault();saveEndpoint('workbuddy',{native_setup:{home:form.elements.home.value.trim(),profile:form.elements.profile.value.trim()}});});
+  target.addEventListener('click',event=>{
     const button=event.target.closest('button');if(!button)return;
     if(button.hasAttribute('data-native-refresh'))saveEndpoint('workbuddy',{refresh_native_models:true});
     if(button.dataset.endpointToggle){const row=state.execution_endpoints?.rows.find(e=>e.id===button.dataset.endpointToggle);if(row)saveEndpoint(row.id,{enabled:!row.enabled});}
-    if(button.dataset.endpointExpand){const id=button.dataset.endpointExpand;if(expandedEndpoints.has(id))expandedEndpoints.delete(id);else expandedEndpoints.add(id);renderModels();}
+    if(button.dataset.endpointExpand)openEndpointDialog(button.dataset.endpointExpand);
     if(button.dataset.endpointAdd)openModel(null,button.dataset.endpointAdd);
     if(button.dataset.endpointParameters){const id=button.dataset.endpointParameters,row=state.execution_endpoints.rows.find(e=>e.id===id);$('agent-settings-open').onclick();$('agent-settings-agent').value=id;$('agent-settings-model').value=row?.model?.id||row?.models?.[0]?.id||'';renderAgentSettings();}
   });
-  $('models').addEventListener('change',event=>{if(event.target.hasAttribute('data-native-model'))nativeModelDraft=event.target.value;if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
+  target.addEventListener('change',event=>{if(event.target.hasAttribute('data-native-model'))nativeModelDraft=event.target.value;if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
+}
 }
 
 const $ = id => document.getElementById(id);
@@ -1126,7 +1148,7 @@ async function refreshState() {
     const fresh=await api('/api/state');if(epoch!==viewEpoch)return;if(!fresh.view||fresh.view.mode!==projectView.mode)throw new Error('服务尚未识别项目视图，请重新打开或升级工作台连接');state=fresh;state.tree=tree;state.observability=observability;
     if(state.view)projectView=state.view;savePanelBinding();renderProjectView();renderExecutionActivity();
     if(!selectedTask&&state.tasks.length)selectedTask=state.tasks[0].id;
-    renderModels();renderUsage();renderWorkflow();renderTasks();renderDetail();
+    renderModels();renderEndpointDialog();renderUsage();renderWorkflow();renderTasks();renderDetail();
     try{
       const nextTree=await api('/api/tree');
       if(!nextTree||nextTree.error||!Array.isArray(nextTree.goals))throw new Error(nextTree?.error||'返回内容缺少目标列表');
@@ -1145,8 +1167,7 @@ async function refreshState() {
 let modelSavedConnectionDraft='';
 function modelConnectionDraft(body){const {default_agent,...connection}=body;return JSON.stringify(connection);}
 function openModel(id=null, endpoint=null) {
-  if(state.models.find(m=>m.id===id)?.provider==='workbuddy'){expandedEndpoints.add('workbuddy');renderModels();return;}
-  closeInlineModelEditor();
+  if(state.models.find(m=>m.id===id)?.provider==='workbuddy'){openEndpointDialog('workbuddy');setEndpointTab('models');return;}
   $('model-form').reset();$('model-error').textContent='';$('discovered-models').innerHTML='';$('model-id').value=id||'';
   const model=state.models.find(m=>m.id===id);$('model-dialog-title').textContent=model?'编辑执行模型':'添加执行模型';
   $('model-name').value=model?.name||'';$('model-provider').value=model?.provider||'local';$('model-base').value=model?.api_base||'';$('model-code').value=model?.model||'';
@@ -1155,26 +1176,19 @@ function openModel(id=null, endpoint=null) {
   const globalName=engineNames[defaultAgent()]||defaultAgent();
   $('model-default-agent').options[0].textContent=`跟随全局默认（当前：${globalName}）`;
   $('model-default-agent-hint').textContent=`仅决定使用这个模型的新任务由谁执行；优先级为本次显式指定 > 模型默认 > 全局默认（当前 ${globalName}）。已有任务、续接和整改保留原 Agent 快照。`;
-  $('model-capabilities').value=(model?.preferred_tasks||[]).join('、');$('model-capability-notes').value=model?.capability_notes||'';$('model-cost-preference').value=model?.cost_preference||($('model-provider').value==='local'?'economy':'balanced');
-  $('model-complexity').value=model?.max_task_complexity||($('model-provider').value==='local'?'simple':'complex');
   renderThinkingSetting(model||{provider:$('model-provider').value,api_base:$('model-base').value});
   renderSubagentCapability(model||null);
   $('model-price-input').value=model?.pricing_cny?.cache_miss_input??'';$('model-price-cache').value=model?.pricing_cny?.cache_hit_input??'';$('model-price-output').value=model?.pricing_cny?.output??'';
   $('key-hint').textContent=model?.api_key_set?'已有密钥。留空保持原密钥；输入新值可替换。':'';$('clear-key-label').hidden=!model?.api_key_set;
   if(endpoint&&!model){$('model-default-agent').value=endpoint;}
   modelSavedConnectionDraft=modelConnectionDraft(modelBody());
-  if(endpoint){
-    expandedEndpoints.add(endpoint);renderModels();
-    const card=[...$('models').querySelectorAll('[data-endpoint-id]')].find(node=>node.dataset.endpointId===endpoint);
-    if(card){card.querySelector('.endpoint-inline-editor').append($('model-form'));modelEditorEndpoint=endpoint;return;}
-  }
   $('model-dialog').showModal();
 }
 function modelBody() {
   const id=$('model-id').value;
   return {name:$('model-name').value.trim(),provider:$('model-provider').value,api_base:$('model-base').value.trim(),model:$('model-code').value.trim(),api_key:$('model-key').value,
     clear_key:$('model-clear-key').checked,api_key_env:state.models.find(m=>m.id===id)?.api_key_env||'',max_input_tokens:Number($('model-input').value),max_output_tokens:Number($('model-output').value),enabled:$('model-enabled').checked,bypass_proxy:$('model-bypass').checked,make_default:$('model-default').checked,default_agent:$('model-default-agent').value,
-    preferred_tasks:$('model-capabilities').value.split(/[,，、;；\n]/).map(s=>s.trim()).filter(Boolean),capability_notes:$('model-capability-notes').value.trim(),cost_preference:$('model-cost-preference').value,max_task_complexity:$('model-complexity').value,thinking_level:$('model-thinking-level').value,
+    thinking_level:$('model-thinking-level').value,
     pricing_cny:['model-price-input','model-price-cache','model-price-output'].every(key=>$(key).value==='')?null:{cache_miss_input:$('model-price-input').value===''?null:Number($('model-price-input').value),cache_hit_input:$('model-price-cache').value===''?null:Number($('model-price-cache').value),output:$('model-price-output').value===''?null:Number($('model-price-output').value)}};
 }
 function renderThinkingSetting(model,selected=null){
@@ -1366,7 +1380,20 @@ $('usage-refresh').onclick=async()=>{
   catch(error){toast(error.message,true);}
   finally{button.disabled=isDshHost?false:!!state.codex_usage?.refreshing;}
 };
-document.querySelectorAll('.close-dialog').forEach(button=>button.onclick=()=>{const dialog=button.closest('dialog');if(dialog)dialog.close();else closeInlineModelEditor();});
+$('endpoint-dialog').addEventListener('close',()=>{activeEndpoint=null;nativeSetupDraft=null;nativeModelDraft=null;});
+document.querySelectorAll('[data-endpoint-tab]').forEach(button=>button.onclick=()=>setEndpointTab(button.dataset.endpointTab));
+$('endpoint-preset-form').onsubmit=async event=>{
+  event.preventDefault();const id=activeEndpoint,button=event.submitter;if(!id)return;
+  button.disabled=true;$('endpoint-preset-error').textContent='';
+  const preset={preferred_tasks:$('endpoint-tasks').value.split(/[,，、;；\n]/).map(t=>t.trim()).filter(Boolean),capability_notes:$('endpoint-notes').value.trim(),cost_preference:$('endpoint-cost').value,max_task_complexity:$('endpoint-complexity').value};
+  try{
+    await api('/api/workflow',{endpoint_settings:{id,values:{preset}}});
+    if(activeEndpoint===id)$('endpoint-preset-state').textContent='已保存：此执行端全部模型统一应用，新任务生效。';
+    toast('执行端统一预设已保存');await refresh();
+  }catch(error){if(activeEndpoint===id)$('endpoint-preset-error').textContent=error.message;}
+  finally{button.disabled=false;}
+};
+document.querySelectorAll('.close-dialog').forEach(button=>button.onclick=()=>{const dialog=button.closest('dialog');if(dialog)dialog.close();});
 setupEndpointCards();
 document.querySelectorAll('[data-filter]').forEach(button=>button.onclick=()=>{taskFilter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b===button));renderTasks();});
 $('task-kind').onchange=()=>{if(!$('task-project').value&&projectView.mode==='project')$('task-project').value=projectView.project;$('task-category').value=$('task-kind').value==='edit'?'code_small':'analysis';$('task-calls-estimate').value=$('task-kind').value==='edit'?3:1;taskFields();};
@@ -1378,7 +1405,6 @@ $('model-provider').onchange=()=>{
   const provider=$('model-provider').value;
   const bases={local:'http://localhost:1234/v1',deepseek:'https://api.deepseek.com',glm:'https://open.bigmodel.cn/api/paas/v4',custom:''};
   $('model-base').value=bases[provider];$('model-code').value='';$('model-bypass').checked=provider==='local';
-  $('model-complexity').value=provider==='local'?'simple':'complex';
   renderThinkingSetting({provider,api_base:$('model-base').value});
 };
 function updateThinkingEndpoint(){const saved=state.models.find(m=>m.id===$('model-id').value);const same=saved&&saved.api_base===$('model-base').value.trim().replace(/\/$/,'')&&saved.model===$('model-code').value.trim();renderThinkingSetting(same?saved:{provider:$('model-provider').value,api_base:$('model-base').value});}
@@ -1388,13 +1414,13 @@ $('model-thinking-probe').onclick=async()=>{const saved=state.models.find(m=>m.i
 $('model-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('model-error').textContent='';try{
   const id=$('model-id').value,body=modelBody();
   const payload=id&&modelConnectionDraft(body)===modelSavedConnectionDraft?{default_agent:body.default_agent}:body;
-  await api(id?`/api/models/${encodeURIComponent(id)}/save`:'/api/models',payload);closeInlineModelEditor();$('model-dialog').close();toast('模型已保存');await refresh();
+  await api(id?`/api/models/${encodeURIComponent(id)}/save`:'/api/models',payload);$('model-dialog').close();toast('模型已保存');await refresh();
 }catch(error){$('model-error').textContent=error.message;}finally{button.disabled=false;}};
 $('discover-models').onclick=async()=>{const button=$('discover-models');button.disabled=true;button.textContent='读取中…';$('model-error').textContent='';try{
   const data=await api('/api/discover',{...modelBody(),id:$('model-id').value});$('discovered-models').innerHTML=data.models.map(model=>`<option value="${escapeText(model)}"></option>`).join('');
   if(data.models.length===1)$('model-code').value=data.models[0];toast(data.models.length?`读取到 ${data.models.length} 个模型，请选择模型 ID`:'接口没有返回列表，请手动填写模型 ID');
 }catch(error){$('model-error').textContent=error.message;}finally{button.disabled=false;button.textContent='读取列表';}};
-$('models').onclick=async event=>{const button=event.target.closest('[data-model-action]');if(!button)return;const id=button.dataset.id;const action=button.dataset.modelAction;
+async function handleModelAction(event){const button=event.target.closest('[data-model-action]');if(!button)return;const id=button.dataset.id;const action=button.dataset.modelAction;
   if(action==='details'){if(expandedBillingModels.has(id))expandedBillingModels.delete(id);else expandedBillingModels.add(id);renderModels();return;}
   if(action==='edit'){openModel(id,button.closest('[data-endpoint-id]')?.dataset.endpointId);return;}
   if(action==='delete'){pendingDelete=id;$('confirm-message').textContent=`确定移除「${state.models.find(m=>m.id===id)?.name}」？`;$('confirm-dialog').showModal();return;}
@@ -1404,6 +1430,8 @@ $('models').onclick=async event=>{const button=event.target.closest('[data-model
   }
   try{if(action==='test'){testingModels.add(id);renderModels();const result=await api(`/api/models/${encodeURIComponent(id)}/test`,{});toast(result.ok?'连接测试通过':result.message,!result.ok);}else{await api(`/api/models/${encodeURIComponent(id)}/default`,{});toast('默认模型已更新');}}catch(error){toast(error.message,true);}finally{testingModels.delete(id);await refresh();}
 };
+$('models').onclick=handleModelAction;
+$('endpoint-connections').onclick=handleModelAction;
 $('confirm-delete').onclick=async()=>{const button=$('confirm-delete');button.disabled=true;try{await api(`/api/models/${encodeURIComponent(pendingDelete)}/delete`,{});$('confirm-dialog').close();toast('模型已移除，历史任务已保留');await refresh();}catch(error){toast(error.message,true);}finally{button.disabled=false;}};
 $('task-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('task-error').textContent='';try{
   const task=await api('/api/tasks',taskBody());

@@ -41,6 +41,69 @@ class EndpointTests(unittest.TestCase):
         self.assertFalse(ep.snapshot()['endpoints']['workbuddy']['enabled'])
         self.assertFalse((self.root / ep.CONFIG_NAME).exists())
 
+    def preset(self, **changes):
+        return {'preferred_tasks':['代码修改','文档'],'capability_notes':'endpoint fixture',
+                'cost_preference':'quality','max_task_complexity':'complex',**changes}
+
+    def test_preset_applies_to_all_models_and_future_models_without_rewriting_registry(self):
+        before=registry.REGISTRY.read_bytes();flags=ep.snapshot()
+        ep.update('pi',{'preset':self.preset()},self.settings)
+        for model in [self.local,self.other,{**self.local,'id':'future'}]:
+            effective=ep.apply_preset(model,'pi')
+            self.assertEqual(effective['capability_notes'],'endpoint fixture')
+            self.assertEqual(effective['routing_preset']['source'],'endpoint')
+            self.assertEqual(effective['api_base'],model['api_base'])
+        self.assertNotIn('capability_notes',ep.apply_preset(self.local,'dsh'))
+        self.assertEqual(registry.REGISTRY.read_bytes(),before)
+        self.assertEqual(ep.snapshot()['endpoints']['pi']['enabled'],flags['endpoints']['pi']['enabled'])
+        self.assertIsNone(ep.snapshot()['endpoints']['pi']['current_model'])
+
+    def test_preset_validation_and_legacy_clear_are_strict(self):
+        original={**self.local,'capability_notes':'legacy','cost_preference':'economy'}
+        self.assertEqual(ep.apply_preset(original,'pi')['capability_notes'],'legacy')
+        for value in [{},self.preset(cost_preference='free'),self.preset(preferred_tasks='text'),
+                      self.preset(max_task_complexity='unlimited'),self.preset(pricing_cny={})]:
+            with self.subTest(value=value),self.assertRaises(ValueError):ep.update('pi',{'preset':value},self.settings)
+        with self.assertRaises(ValueError):ep.update('pi',{'preset':self.preset(),'enabled':False},self.settings)
+        ep.update('pi',{'preset':self.preset()},self.settings)
+        ep.update('pi',{'preset':None},self.settings)
+        self.assertEqual(ep.apply_preset(original,'pi')['capability_notes'],'legacy')
+
+    def test_actual_agent_preset_controls_auto_route_and_is_snapshotted(self):
+        ep.update('pi',{'preset':self.preset()},self.settings)
+        ep.update('dsh',{'preset':self.preset(max_task_complexity='simple')},self.settings)
+        body={'kind':'chat','prompt':'fixture','model_id':'local','route_mode':'auto',
+              'routing':{'category':'code_small','complexity':'medium','input_tokens':100,
+                         'output_tokens':100,'expected_calls':1,'eligible_model_ids':['local']}}
+        route=router.choose(body,registry.list_models()['models'],self.settings)
+        self.assertEqual(route['routing_preset']['endpoint'],'pi')
+        self.assertEqual(route['routing_preset']['values']['max_task_complexity'],'complex')
+        with self.assertRaisesRegex(ValueError,'复杂度'):
+            router.choose({**body,'engine':'dsh'},registry.list_models()['models'],self.settings)
+        ep.update('pi',{'preset':self.preset(max_task_complexity='simple')},self.settings)
+        self.assertEqual(route['routing_preset']['values']['max_task_complexity'],'complex')
+
+    def test_shared_candidates_publish_effective_preset_and_keep_model_prices(self):
+        import brain_gateway
+        ep.update('pi', {'preset': self.preset()}, self.settings)
+        priced = {**self.local, 'pricing_cny': {'output': 12}}
+        self.assertEqual(ep.apply_preset(priced, 'pi')['pricing_cny'], priced['pricing_cny'])
+        with patch.object(brain_gateway, '_settings', return_value=self.settings):
+            result = brain_gateway._candidates(None, {})
+        for row in result['models']:
+            self.assertEqual(row['capability_notes'], 'endpoint fixture')
+            self.assertEqual(row['routing_preset']['endpoint'], 'pi')
+            self.assertEqual(row['preferred_tasks'], self.preset()['preferred_tasks'])
+        ep.update('workbuddy', {'preset': self.preset(capability_notes='native endpoint')}, self.settings)
+        for name in ['native-a', 'native-b']:
+            self.assertEqual(ep.apply_preset({'id': name}, 'workbuddy')['capability_notes'], 'native endpoint')
+        raw = json.loads((self.root / ep.CONFIG_NAME).read_text(encoding='utf-8'))
+        raw['endpoints']['pi']['preset']['max_task_complexity'] = 'invalid'
+        registry.write_json(self.root / ep.CONFIG_NAME, raw)
+        self.assertFalse(ep.snapshot()['readable'])
+        with self.assertRaises(ValueError):
+            ep.apply_preset(self.local, 'pi')
+
     def test_update_changes_only_endpoint_not_settings_models_or_records(self):
         before = registry.REGISTRY.read_bytes()
         ep.update('pi', {'enabled': False}, self.settings)

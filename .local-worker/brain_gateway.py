@@ -297,6 +297,7 @@ def _public_route(route):
         'agent_label': route.get('agent_label'),
         'model_default_agent': route.get('model_default_agent'),
         'global_agent': route.get('global_agent'),
+        'routing_preset': route.get('routing_preset'),
         'reason': route.get('reason'),
         'warnings': route.get('warnings') or [],
         'excluded': route.get('excluded') or [],
@@ -347,6 +348,8 @@ def _candidates(context, payload):
         paid = model.get('provider') != 'local'
         scope_ok = model_scope.matches(scope, paid)
         enabled = bool(model.get('enabled', True))
+        if engine != 'invalid' and endpoint_controls['readable']:
+            model = execution_endpoints.apply_preset(model, engine, endpoint_controls)
         default_agent = model_agent_defaults.describe(model, settings)
         endpoint_error = ''
         try:
@@ -400,6 +403,7 @@ def _candidates(context, payload):
             'capability_notes': model.get('capability_notes') or '',
             'max_task_complexity': model.get('max_task_complexity'),
             'cost_preference': model.get('cost_preference'),
+            'routing_preset': model.get('routing_preset'),
             'identity_state': 'declared',
         })
     default_model = data.get('default_model')

@@ -495,6 +495,7 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                 raise ValueError('模型已停用')
             agent, agent_source = execution_engines.resolution(body, settings, model=model)
             execution_endpoints.gate(agent, model, settings, controls=endpoint_controls, automatic=mode == 'auto')
+            model = execution_endpoints.apply_preset(model, agent, endpoint_controls)
             if agent_source == 'model' and agent in execution_engines.AGENTS:
                 # A saved model preference is authoritative for this candidate:
                 # an unavailable adapter refuses the route instead of quietly
@@ -627,6 +628,7 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
             'model_default_agent': model.get('default_agent', 'follow_global'),
             'global_agent': _global_agent(settings),
             'agent_preset': preset_runtime.selected_id(model),
+            'routing_preset': model.get('routing_preset'),
             'estimated_cost_cny': selected['estimated_cost_cny'], 'budget_cny': selected['budget_cny'],
             'budget_enforced': settings.get('enforce_paid_budget', True), 'excluded': excluded,
             'rates': rates_for(model, moment), 'pricing_snapshot': datetime.now().astimezone().isoformat(),

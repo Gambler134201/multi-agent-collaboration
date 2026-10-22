@@ -287,6 +287,9 @@ class FileToolTests(unittest.TestCase):
         script.write_text(r'''
 import json,sys
 from pathlib import Path
+# Match native ACP UTF-8 even when Windows Python pipes default to ANSI.
+sys.stdin.reconfigure(encoding='utf-8')
+sys.stdout.reconfigure(encoding='utf-8')
 def send(value):
  print(json.dumps(value),flush=True)
 for line in sys.stdin:

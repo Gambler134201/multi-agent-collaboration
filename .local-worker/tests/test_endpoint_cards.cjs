@@ -1,4 +1,4 @@
-// Real DOM, intercepted HTTP only: both host views, inline drafts and toggles.
+// Real DOM, intercepted HTTP only: both host views, modal drafts and toggles.
 const {chromium}=require('./browser_helpers.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const directory=path.resolve(__dirname,'../panel');
@@ -53,20 +53,44 @@ const directory=path.resolve(__dirname,'../panel');
       assert.equal(await page.locator('#model-agent-entry').isVisible(),false);
       assert.match(await page.locator('[data-endpoint-id="dsh"]').textContent(),/12\.33/);
       assert.match(await page.locator('[data-endpoint-id="workbuddy"]').textContent(),/未同步/);
+      const height=(await page.locator('[data-endpoint-id="pi"]').boundingBox()).height;
       await page.locator('[data-endpoint-expand="pi"]').click();
-      await page.locator('[data-endpoint-id="pi"] [data-model-action="edit"]').click();
-      assert.equal(await page.locator('.endpoint-inline-editor #model-form').count(),1);
+      assert.equal(await page.locator('#endpoint-preset-panel').isVisible(),true);
+      if(process.env.MODEL_DESK_SCREENSHOT_DIR){fs.mkdirSync(process.env.MODEL_DESK_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.MODEL_DESK_SCREENSHOT_DIR,host+'-preset.png')});}
+      assert.match(await page.locator('#endpoint-preset-scope').textContent(),/全部模型|所有模型/);
+      await page.setViewportSize({width:390,height:650});
+      await page.locator('#endpoint-preset-form button[type="submit"]').scrollIntoViewIfNeeded();
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+      await page.setViewportSize({width:1100,height:1000});
+      await page.locator('#endpoint-notes').fill('shared agent draft');
+      await page.evaluate(()=>refresh());
+      assert.equal(await page.locator('#endpoint-notes').inputValue(),'shared agent draft');
+      await page.locator('#endpoint-preset-form button[type="submit"]').click();
+      await page.waitForFunction(()=>document.querySelector('#endpoint-preset-state').textContent.includes('已保存'));
+      assert.equal(writes.find(w=>w.body.endpoint_settings?.values.preset).body.endpoint_settings.id,'pi');
+      assert.equal(fixture.models[0].capability_notes,undefined,'saving endpoint preset must not rewrite a model');
+      await page.locator('[data-endpoint-tab="models"]').click();
+      await page.locator('[data-endpoint-parameters="pi"]').click();
+      assert.equal(await page.locator('#agent-settings-dialog').isVisible(),true);
+      assert.equal(await page.locator('#agent-settings-agent').inputValue(),'pi');
+      await page.locator('#agent-settings-dialog .close-dialog').first().click();
+      await page.locator('#endpoint-connections [data-model-action="edit"]').first().click();
+      assert.equal(await page.locator('#model-dialog').isVisible(),true);
       await page.locator('#model-name').fill('unsaved draft');
       await page.evaluate(()=>refresh());
       assert.equal(await page.locator('#model-name').inputValue(),'unsaved draft');
       await page.locator('#model-form .dialog-footer .close-dialog').click();
       assert.equal(await page.locator('#model-dialog #model-form').count(),1);
+      await page.locator('#endpoint-dialog > .endpoint-modal > .dialog-heading .close-dialog').click();
+      assert.equal((await page.locator('[data-endpoint-id="pi"]').boundingBox()).height,height);
       await page.locator('[data-endpoint-toggle="pi"]').click();
       await page.waitForFunction(()=>document.querySelector('[data-endpoint-toggle="pi"]').getAttribute('aria-checked')==='false');
-      assert.deepEqual(writes.find(w=>w.path==='/api/workflow').body,{endpoint_settings:{id:'pi',values:{enabled:false}}});
+      assert.deepEqual(writes.find(w=>w.body.endpoint_settings?.values.enabled===false).body,{endpoint_settings:{id:'pi',values:{enabled:false}}});
       assert.equal(fixture.workflow.enabled,true);
       await page.locator('[data-endpoint-expand="workbuddy"]').click();
-      assert.match(await page.locator('#endpoint-settings-workbuddy').textContent(),/无命令/);
+      assert.equal(await page.locator('#endpoint-notes').inputValue(),'','other endpoint must not inherit Pi draft');
+      await page.locator('[data-endpoint-tab="models"]').click();
+      assert.match(await page.locator('#endpoint-connections').textContent(),/无命令/);
       const native={...model,id:'workbuddy-deepseek-flash',provider:'workbuddy',model:'deepseek-v4.1-flash',
         name:'WorkBuddy native fixture',default_agent:'workbuddy',api_base:''};
       fixture.models.push(native);
@@ -85,6 +109,7 @@ const directory=path.resolve(__dirname,'../panel');
       await page.waitForFunction(()=>document.querySelector('[data-endpoint-id="workbuddy"] .model-code').textContent==='glm-5.3');
       assert.ok(writes.some(w=>w.body.endpoint_settings?.values.native_model==='glm-5.3'));
       assert.equal(fixture.default_model,'home');
+      await page.locator('#endpoint-dialog > .endpoint-modal > .dialog-heading .close-dialog').click();
       await page.locator('#new-task').click();
       await page.locator('#task-route').selectOption('manual');
       await page.locator('#task-model').selectOption(native.id);
@@ -100,7 +125,7 @@ const directory=path.resolve(__dirname,'../panel');
       }
       assert.deepEqual(errors,[]);
       await page.close();
-      console.log(`ok - ${host}: endpoint cards, API balance, inline draft, disabled switch, native limits, responsive layout`);
+      console.log(`ok - ${host}: endpoint cards, API balance, modal draft, endpoint preset, disabled switch, native limits, responsive layout`);
     }
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

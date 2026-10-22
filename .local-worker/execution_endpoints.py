@@ -12,6 +12,34 @@ import model_registry as registry
 IDS = ('pi', 'dsh', 'workbuddy')
 LABELS = {**execution_engines.LABELS, 'workbuddy': 'WorkBuddy'}
 CONFIG_NAME = 'execution-endpoints.json'
+PRESET_FIELDS = ('preferred_tasks', 'capability_notes', 'cost_preference', 'max_task_complexity')
+
+
+def validate_preset(value):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != set(PRESET_FIELDS):
+        raise ValueError('执行端预设需完整包含任务类型、能力说明、成本定位和复杂度上限')
+    tags = value['preferred_tasks']
+    if (not isinstance(tags, list) or len(tags) > 12 or
+            any(not isinstance(t, str) or not 1 <= len(t.strip()) <= 40 for t in tags)):
+        raise ValueError('适合的任务最多 12 项，每项 1 到 40 字')
+    if (not isinstance(value['capability_notes'], str) or len(value['capability_notes']) > 3000 or
+            value['cost_preference'] not in ('economy', 'balanced', 'quality') or
+            value['max_task_complexity'] not in ('simple', 'medium', 'complex')):
+        raise ValueError('执行端能力与成本预设无效')
+    return {**value, 'preferred_tasks': list(dict.fromkeys(t.strip() for t in tags)),
+            'capability_notes': value['capability_notes'].strip()}
+
+
+def apply_preset(model, engine, controls=None):
+    controls = snapshot() if controls is None else controls
+    if not controls['readable']:
+        raise ValueError(controls['error'])
+    preset = controls['endpoints'].get(engine, {}).get('preset')
+    return {**model, **(preset or {}), 'routing_preset': {
+        'source': 'endpoint' if preset is not None else 'legacy_model', 'endpoint': engine,
+        'values': {key: (preset or model).get(key) for key in PRESET_FIELDS}}}
 
 
 def defaults():
@@ -30,12 +58,15 @@ def snapshot():
         if set(raw['endpoints']) - set(IDS):
             raise ValueError('执行端配置含未知执行端')
         for key, value in raw['endpoints'].items():
-            if not isinstance(value, dict) or set(value) != {'enabled', 'current_model'}:
+            if (not isinstance(value, dict) or not {'enabled', 'current_model'} <= set(value) or
+                    set(value) - {'enabled', 'current_model', 'preset'}):
                 raise ValueError('执行端配置字段无效')
             if type(value['enabled']) is not bool or (value['current_model'] is not None and
                     (not isinstance(value['current_model'], str) or not value['current_model'])):
                 raise ValueError('执行端配置值无效')
             result[key] = dict(value)
+            if 'preset' in value:
+                result[key]['preset'] = validate_preset(value['preset'])
         return {'endpoints': result, 'readable': True, 'error': ''}
     except (OSError, ValueError, TypeError):
         return {'endpoints': {key: {'enabled': False, 'current_model': None} for key in IDS},
@@ -62,6 +93,15 @@ def gate(engine, model, settings, *, controls=None, automatic=False):
 
 
 def update(endpoint, body, settings):
+    if endpoint in IDS and isinstance(body, dict) and set(body) == {'preset'}:
+        preset = validate_preset(body['preset'])
+        with registry.file_lock(Path(registry.HERE) / 'execution-endpoints.lock'):
+            old = snapshot()
+            if not old['readable']:
+                raise ValueError(old['error'])
+            old['endpoints'][endpoint]['preset'] = preset
+            registry.write_json(Path(registry.HERE) / CONFIG_NAME, {'schema': 1, 'endpoints': old['endpoints']})
+        return {'ok': True, 'endpoint': endpoint, 'preset': preset}
     if endpoint == 'workbuddy' and isinstance(body, dict) and set(body) == {'refresh_native_models'}:
         import workbuddy_worker
         if body['refresh_native_models'] is not True:
@@ -117,6 +157,7 @@ def public_rows(models, settings, agents=None):
         display = selected if pref['current_model'] else enabled_models[0] if len(enabled_models) == 1 else None
         info = agents.get(key, {})
         rows.append({'id': key, 'name': LABELS[key], **pref, 'models': group,
+                     'preset': pref.get('preset'),
                      'model': display, 'runtime': info, 'ready': bool(info.get('ready')),
                      'readable': controls['readable'], 'error': controls['error'],
                      'selection_error': ('当前模型已移除或改属其他执行端，请重新选择'
