@@ -1214,6 +1214,7 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     native_connection = None
     native_tool_mode = None
     native_tool_revision = None
+    native_access_mode = None
     if engine == 'workbuddy':
         import workbuddy_worker
         workbuddy_worker.validate_task(body, settings)
@@ -1221,6 +1222,8 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         import workbuddy_native_tools
         native_tool_mode = workbuddy_native_tools.mode(rework_parent) if rework_parent else workbuddy_native_tools.MODE
         native_tool_revision = (rework_parent.get('workbuddy_tool_revision') if rework_parent else workbuddy_native_tools.revision())
+        native_access_mode = (rework_parent.get('workbuddy_access_mode', 'project') if rework_parent
+                              else workbuddy_native_tools.access_mode())
         if native_tool_mode == workbuddy_native_tools.LEGACY and body.get('test_command'):
             raise ValueError('旧 WorkBuddy 任务的整改不能新增终端权限')
     thinking_config.validate(model)
@@ -1414,6 +1417,7 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         'request_output_tokens': request_output_tokens,
         'workbuddy_connection': native_connection,
         'workbuddy_tool_mode': native_tool_mode, 'workbuddy_tool_revision': native_tool_revision,
+        'workbuddy_access_mode': native_access_mode,
         'connectivity_check': {'source': 'pre_dispatch',
                                'rechecked': bool(connectivity['checked']),
                                'blocked': bool(connectivity['blocked']),

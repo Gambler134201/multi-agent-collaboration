@@ -8,10 +8,15 @@ function endpointModelAction(model,action,label){
   return `<button type="button" class="text-button" data-model-action="${action}" data-id="${escapeText(model.id)}">${label}</button>`;
 }
 
+function renderNativeAccess(endpoint){
+  const access=endpoint.runtime?.access_mode,known=['project','full'].includes(access);
+  return `<label>WorkBuddy 访问权限<select data-native-access ${endpointSaving?'disabled':''}>${known?'':'<option value="" selected>权限未知，请选择</option>'}<option value="project" ${access==='project'?'selected':''}>项目范围</option><option value="full" ${access==='full'?'selected':''}>完全访问</option></select></label><p class="field-hint">完全访问允许项目外普通文件读写，使用原生完全访问权限。工作台记录、认证及原生配置目录仍受保护；不开放子代理或后台任务。仅影响新任务，旧任务/整改保持原权限；自动文件统计仍只覆盖列明的业务文件。</p>`;
+}
+
 function renderNativeSettings(endpoint,model){
   const config=nativeSetupDraft||endpoint.runtime?.configuration_values||{};
   const catalog=endpoint.runtime?.native_catalog||{},rows=catalog.models||[],selected=nativeModelDraft||model?.model||'';
-  return `<form data-native-selection><label>WorkBuddy 内置模型<select name="native_model" data-native-model ${endpointSaving?'disabled':''}>${selected&&!rows.some(r=>r.model_id===selected)?`<option value="${escapeText(selected)}">${escapeText(selected)}（当前保存）</option>`:''}${rows.map(r=>`<option value="${escapeText(r.model_id)}" ${r.model_id===selected?'selected':''}>${escapeText(r.name)} · ${escapeText(r.model_id)}</option>`).join('')}</select></label><div class="endpoint-settings-actions"><button type="button" class="button secondary" data-native-refresh ${endpointSaving?'disabled':''}>${rows.length?'刷新':'读取'}内置模型</button><button type="submit" class="button secondary" ${endpointSaving||!rows.length?'disabled':''}>保存模型选择</button></div></form>
+  return `${renderNativeAccess(endpoint)}<form data-native-selection><label>WorkBuddy 内置模型<select name="native_model" data-native-model ${endpointSaving?'disabled':''}>${selected&&!rows.some(r=>r.model_id===selected)?`<option value="${escapeText(selected)}">${escapeText(selected)}（当前保存）</option>`:''}${rows.map(r=>`<option value="${escapeText(r.model_id)}" ${r.model_id===selected?'selected':''}>${escapeText(r.name)} · ${escapeText(r.model_id)}</option>`).join('')}</select></label><div class="endpoint-settings-actions"><button type="button" class="button secondary" data-native-refresh ${endpointSaving?'disabled':''}>${rows.length?'刷新':'读取'}内置模型</button><button type="submit" class="button secondary" ${endpointSaving||!rows.length?'disabled':''}>保存模型选择</button></div></form>
     <p class="field-hint">列表来自 WorkBuddy 原生接口，读取和保存不生成内容。保存后用于该执行端的新任务，已有任务保留原模型。限免、折扣与可用权限以 WorkBuddy 当前账户为准；列表可选不代表已通过真实任务验证。</p>
     ${catalog.error?`<p class="form-error">${escapeText(catalog.error)}</p>`:''}
     <p class="field-hint">WorkBuddy 登录账户。原生检索、文件编辑、终端自测与联网读取；子代理和原会话续接未开放，主脑独立验收。积分/实际请求数未返回，启用强制金额或请求次数上限时拒绝调用。</p>
@@ -40,7 +45,7 @@ function renderEndpointCards(){
     const wallet=native?'<div class="endpoint-wallet"><div><span>WorkBuddy 账户积分</span><strong>未同步</strong></div><small>使用登录账户原生积分</small></div>':model?.billing?`<div class="endpoint-wallet endpoint-billing"><div class="endpoint-wallet-source">${escapeText(providerNames[model.provider]||model.provider)} API 账户余额</div>${renderBilling(model)}</div>`:`<div class="endpoint-wallet"><div><span>${model?.provider==='local'?'账户余额':'账户余额'}</span><strong>${model?.provider==='local'?'不适用':model?'暂不支持查询':'按任务模型显示'}</strong></div><small>${model?.provider==='local'?'本地运行，不经云端账户扣费':model?'此服务暂无余额读取适配':'展开设置查看模型及各自余额'}</small></div>`;
     return `<article class="endpoint-card ${model?.billing?'billing-model':''} ${endpoint.enabled?'':'endpoint-disabled'}" data-endpoint-id="${endpoint.id}">
       <div class="endpoint-head"><div class="endpoint-mark" aria-hidden="true">${({pi:'Pi',dsh:'DSH',workbuddy:'WB'})[endpoint.id]}</div><div><h3>${escapeText(endpoint.name)}</h3><span class="subtle">${native?'登录账户模型 / 原生积分':'API / 本地模型'}</span></div></div>
-      <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
+      <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}${native&&runtime.access_mode?' · '+(runtime.access_mode==='full'?'完全访问':'项目范围'):''}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
       <div class="endpoint-current"><span class="label">${native?'指定原生模型':'当前模型 · 自动路由'}</span><strong>${escapeText(name)}</strong><div class="model-code">${escapeText(modelCode)}</div></div>
       ${wallet}<div class="endpoint-status">${status}<span class="subtle">${jobs.length?`${jobs.length} 个本项目活动任务`:native?'原生账户 · 以派发预检为准':model?.last_check?.ok?'最近连接测试通过':'未验证当前连接'}</span></div>
       <button type="button" class="button secondary endpoint-expand" data-endpoint-expand="${endpoint.id}" aria-haspopup="dialog" aria-controls="endpoint-dialog">参数设置<span aria-hidden="true">↗</span></button>
@@ -107,7 +112,7 @@ function setupEndpointCards(){
     if(button.dataset.endpointAdd)openModel(null,button.dataset.endpointAdd);
     if(button.dataset.endpointParameters){const id=button.dataset.endpointParameters,row=state.execution_endpoints.rows.find(e=>e.id===id);$('agent-settings-open').onclick();$('agent-settings-agent').value=id;$('agent-settings-model').value=row?.model?.id||row?.models?.[0]?.id||'';renderAgentSettings();}
   });
-  target.addEventListener('change',event=>{if(event.target.hasAttribute('data-native-model'))nativeModelDraft=event.target.value;if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
+  target.addEventListener('change',event=>{if(event.target.hasAttribute('data-native-access')){saveEndpoint('workbuddy',{access_mode:event.target.value});return;}if(event.target.hasAttribute('data-native-model'))nativeModelDraft=event.target.value;if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
 }
 }
 
@@ -1061,7 +1066,7 @@ function renderDetail() {
     ${task.kind==='edit'&&task.changed_files?.length?`<div><span class="label">已修改文件</span><div class="chips">${task.changed_files.map(f=>`<span class="chip">${escapeText(f)}</span>`).join('')}</div></div>`:''}
     ${task.kind==='chat'&&task.files?.length?`<div><span class="label">只读上下文文件</span><div class="chips">${task.files.map(f=>`<span class="chip">${escapeText(f)}</span>`).join('')}</div><p class="field-hint">这些文件用于代码索引与交接文件范围；只读权限由 kind/engine 沙箱保证，不是可修改文件。</p></div>`:''}
     ${task.route?`<div class="route-note"><strong>${task.route.mode==='auto'?'自动路由':'手动指定'}</strong> · ${escapeText(task.route.reason)}<small>${task.route.requirements?.assessment?escapeText(task.route.requirements.assessment)+' · ':''}${task.engine==='workbuddy'?'原生底层请求次数未返回':`${task.model_calls||0} 次模型请求`} · ${taskCostText(task)}${task.route.budget_cny?' / '+money(task.route.budget_cny):''}${task.budget_error?' · '+escapeText(task.budget_error):''}</small></div>`:''}
-    ${task.engine==='workbuddy'?`<p class="session-note">WorkBuddy 原生会话 · 限定文件工具；无命令执行 · 清理状态：${escapeText(task.workbuddy?.cleanup||'待核实')} · ${escapeText(task.workbuddy_session_id||'会话待确认')}</p>`:''}
+    ${task.engine==='workbuddy'?`<p class="session-note">WorkBuddy 原生会话 · ${task.workbuddy_tool_mode==='native-development-v1'?(task.workbuddy_access_mode==='full'?'完全访问 · 原生开发工具':'项目范围 · 原生开发工具'):'限定文件工具'} · 清理状态：${escapeText(task.workbuddy?.cleanup||'待核实')} · ${escapeText(task.workbuddy_session_id||'会话待确认')}</p>`:''}
     ${task.engine==='pi'?`<p class="session-note">Pi Agent ${escapeText(task.executor_version||'')} · 记录目录保护：${task.record_protection?'已验证':'待验证'}</p>`:''}
     ${task.engine==='dsh'?`<p class="session-note">Agent：${escapeText(presetNames[task.agent_preset]||task.agent_preset||'历史配置')} · ${task.preset_verified?'实际绑定已验证':task.agent_preset?'等待执行验证':'预设未记录'} · <span title="${escapeText(thinking.note)}">思考等级：${escapeText(thinking.label)}</span> · 权限：${escapeText({'danger-full-access':'完全权限','workspace-write':'项目内写入','read-only':'只读'}[task.sandbox_mode]||'历史任务未记录')}</p>`:''}
     ${(task.pi_session_id||task.dsh_session_id)?`<p class="session-note">${task.parent_task_id?'已续接原会话':'独立会话'} · ${escapeText(task.pi_session_id||task.dsh_session_id)}</p>`:''}
@@ -1209,7 +1214,7 @@ function renderThinkingNote(){
 }
 function taskAgentHint(){
   const nativeModel=state.models.find(m=>m.id===$('task-model').value);
-  if($('task-route').value!=='auto'&&nativeModel?.provider==='workbuddy')return `使用 WorkBuddy 登录账户 ${nativeModel.model}；无命令/子代理/续接。积分与实际请求数未知，测试由主脑独立运行。`;
+  if($('task-route').value!=='auto'&&nativeModel?.provider==='workbuddy')return `使用 WorkBuddy 登录账户 ${nativeModel.model}；原生开发工具与终端自测，主脑独立验收。子代理/续接未开放，积分与实际请求数未知。`;
   const control=$('task-engine'),selected=control.value,automatic=$('task-route').value==='auto';
   if(continuingTask)return `继续使用原任务的 ${engineNames[continuingTask.engine]||continuingTask.engine}、原模型与原会话；当前模型偏好不会迁移已有任务。`;
   if(selected==='direct')return '本次显式使用“直接询问模型”。它不使用 Agent 会话，也不会被模型默认或全局默认替换。';
@@ -1272,7 +1277,7 @@ function openTask(parent=null) {
   const inScope=inScopeModels(enabled);
   if(!inScope.length){toast(`执行模型范围「${scopeLabel()}」下没有已启用的模型；请在模型范围与预算中调整范围或启用相应模型。`,true);return;}
   continuingTask=parent;
-  $('task-engine').innerHTML='<option value="model_default">使用模型默认（推荐）</option>'+Object.entries(registeredAgents()).map(([id,info])=>`<option value="${escapeText(id)}">${escapeText(info.name||id)} · ${id==='workbuddy'?'限定文件 / 新会话':'工具与会话'}</option>`).join('')+'<option value="direct">直接询问模型 · 简单咨询</option><option value="aider">Aider · 文件修改</option>';
+  $('task-engine').innerHTML='<option value="model_default">使用模型默认（推荐）</option>'+Object.entries(registeredAgents()).map(([id,info])=>`<option value="${escapeText(id)}">${escapeText(info.name||id)} · ${id==='workbuddy'?'原生开发工具 / 新会话':'工具与会话'}</option>`).join('')+'<option value="direct">直接询问模型 · 简单咨询</option><option value="aider">Aider · 文件修改</option>';
   $('task-form').reset();$('task-error').textContent='';$('task-model').innerHTML=enabled.map(m=>`<option value="${escapeText(m.id)}"${modelInScope(m)?'':' disabled'}>${escapeText(m.name)}${modelInScope(m)?'':'（范围外，不可选）'}</option>`).join('');$('task-model').value=parent?.model_id||(inScope.some(m=>m.id===state.default_model)?state.default_model:inScope[0].id);
   $('task-engine').value=parent?.engine||'model_default';$('task-kind').value=parent?.kind||'chat';$('task-project').value=parent?.project||(projectView.mode==='project'?projectView.project:'');$('task-files').value=(parent?.files||[]).join('\n');$('task-title').value=parent?'继续 · '+parent.title:'';
   $('task-route').querySelector('[value="auto"]').disabled=!state.workflow?.enabled;

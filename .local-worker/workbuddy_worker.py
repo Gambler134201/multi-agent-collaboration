@@ -126,6 +126,8 @@ def availability():
                                'subagents': False, 'session_reuse': False},
               'billing_source': 'workbuddy-native-account', 'message': ''}
     try:
+        import workbuddy_native_tools
+        result['access_mode'] = workbuddy_native_tools.access_mode()
         config = configuration()
         result['configuration_values'] = config
         if not config['home'] or not config['profile']:
@@ -238,6 +240,7 @@ def run_task(run, state, model, *, client_factory=None):
         execution_endpoints.gate('workbuddy', model, settings)
         validate_task(state, settings)
         native_mode = native_tools.mode(state) == native_tools.MODE
+        access = state.get('workbuddy_access_mode') or 'project'
         if state.get('route', {}).get('mode') == 'auto' and not settings.get('enabled'):
             raise ValueError('协作总开关已关闭，排队自动任务未启动')
         if 'workbuddy' in state:
@@ -260,8 +263,10 @@ def run_task(run, state, model, *, client_factory=None):
                    '\n额外只读文件：' + json.dumps(readonly, ensure_ascii=False))
         if native_mode:
             prompt += ('\n\n工作边界：已加载 WorkBuddy 原生开发工具，可浏览项目、编辑列明文件、运行代码和测试。'
-                       '请自行测试并据真实输出修正；交付中区分已运行和未验证项，主脑随后独立验收。'
-                       '只在本项目工作；只修改下列文件，不读写 .model-desk、认证文件或其他聊天，不派生子代理。'
+                       '请自行测试并据真实输出修正；交付中区分已运行和未验证项，主脑随后独立验收。' +
+                       ('业务目标为下列文件；完全访问允许必要的项目外普通文件操作。' if access == 'full' else
+                        '只在本项目工作；只修改下列文件。') +
+                       '不读写 .model-desk、认证文件或其他聊天，不派生子代理。'
                        '拒绝后停止并报告，不更换工具、改写命令或绕过权限。命令须前台返回结果，不启动常驻服务。'
                        '项目检索需排除 .model-desk、.git 和 .env；不擅自发布、推送或对外发消息。'
                        '\n可修改文件：' + json.dumps(files, ensure_ascii=False) +
@@ -278,7 +283,15 @@ def run_task(run, state, model, *, client_factory=None):
             expected_revision = state.get('workbuddy_tool_revision')
             if expected_revision != native_tools.revision():
                 raise ValueError('WorkBuddy 原生工具保护版本已变；旧任务不能隐式换版')
-            native_job = native_tools.prepare(run, project, state['id'], files, readonly, state['kind'])
+            native_job = native_tools.prepare(run, project, state['id'], files, readonly, state['kind'],
+                                             access=access, protected_roots=[config['profile']])
+            if access == 'full':
+                prompt += ('\n访问权限：用户明确开启完全访问。使用原生完全访问模式，允许访问项目外的普通文件，'
+                           '包括本任务生成的临时截图；工作台记录、认证数据、原生配置目录和其他会话仍受保护。'
+                           '优先在项目内完成任务；项目外修改需确为本任务必要，报告实际写入位置。'
+                           '仅列出的业务文件进入自动改动统计，不能把该统计当作全盘写入审计。')
+            else:
+                prompt += '\n访问权限：项目范围。截图与验证材料直接保存在项目内，不从系统临时目录读取或复制。'
         elif files or readonly:
             existing = run / 'workbuddy-tools-job.json'
             if existing.exists():
@@ -311,7 +324,8 @@ def run_task(run, state, model, *, client_factory=None):
         client = factory(info, project, config['profile'], model['model'], **client_args)
         client.cancel_check = cancel
         connected = client.connect()
-        registry.patch_task(run, workbuddy_session_id=connected['session_id'], phase='WorkBuddy 正在执行')
+        native['permission_mode'] = connected.get('permission_mode')
+        registry.patch_task(run, workbuddy_session_id=connected['session_id'], workbuddy=dict(native), phase='WorkBuddy 正在执行')
 
         def on_prompt():
             if cancel():
@@ -337,7 +351,9 @@ def run_task(run, state, model, *, client_factory=None):
             self_tests = [e for e in proof['events'] if e.get('event') in ('PostToolUse', 'PostToolUseFailure')
                           and e.get('tool') in ('Bash', 'PowerShell')]
             if proof['writes_paused']:
-                status, error = 'failed', '原生工具触发范围或权限拒绝；本轮已停止'
+                denial = native_tools.denial_summary(proof)
+                detail = (denial['tool'] + '：' + denial['message']) if denial else '范围或权限拒绝'
+                status, error = 'failed', '原生工具被拒绝（' + detail + '）；本轮已停止，不更换工具重试'
             if state.get('test_command'):
                 expected = hashlib.sha256(state['test_command'].encode('utf-8')).hexdigest()
                 matched = [e for e in self_tests if e.get('command_hash') == expected]

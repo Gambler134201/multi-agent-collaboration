@@ -93,6 +93,9 @@ def gate(engine, model, settings, *, controls=None, automatic=False):
 
 
 def update(endpoint, body, settings):
+    if endpoint == 'workbuddy' and isinstance(body, dict) and set(body) == {'access_mode'}:
+        import workbuddy_native_tools
+        return workbuddy_native_tools.set_access_mode(body['access_mode'])
     if endpoint in IDS and isinstance(body, dict) and set(body) == {'preset'}:
         preset = validate_preset(body['preset'])
         with registry.file_lock(Path(registry.HERE) / 'execution-endpoints.lock'):

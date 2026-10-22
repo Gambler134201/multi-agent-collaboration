@@ -6,6 +6,7 @@ import re
 import uuid
 
 import record_protection
+import model_registry as registry
 
 MODE = 'native-development-v1'
 LEGACY = 'scoped-files-v1'
@@ -14,6 +15,37 @@ POLICY = GUARD.with_name('record-policy.cjs')
 READS = ('Read', 'Glob', 'Grep', 'NotebookRead')
 TOOLS = READS + ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell',
                  'WebFetch', 'WebSearch')
+ACCESS_CONFIG = 'workbuddy-access.json'
+ACCESS_MODES = ('project', 'full')
+DENIAL_LABELS = {
+    'outside_project': '目标位于本任务项目外',
+    'protected_data': '工作台记录、认证数据或其他会话受到保护',
+    'undeclared_write': '目标未列入本任务可写范围',
+    'readonly_file': '任务只读上下文不可修改',
+    'prior_denial': '此前工具已被拒绝，本轮工具已暂停',
+    'tool_not_allowed': '本任务未授权此工具',
+    'guard_denied': '原生工具范围或权限保护拒绝',
+    'unknown': '旧事件未记录拒绝分类'}
+
+
+def access_mode():
+    path = Path(registry.HERE) / ACCESS_CONFIG
+    if not path.exists():
+        return 'project'
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        if set(data) != {'schema', 'mode'} or data['schema'] != 1 or data['mode'] not in ACCESS_MODES:
+            raise ValueError()
+        return data['mode']
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ValueError('WorkBuddy 访问权限配置无效；已阻止新派发') from None
+
+
+def set_access_mode(value):
+    if value not in ACCESS_MODES:
+        raise ValueError('WorkBuddy 访问权限仅支持 project / full')
+    registry.write_json(Path(registry.HERE) / ACCESS_CONFIG, {'schema': 1, 'mode': value})
+    return {'ok': True, 'endpoint': 'workbuddy', 'access_mode': value}
 
 
 def revision():
@@ -30,10 +62,12 @@ def mode(state):
     return value
 
 
-def prepare(run, project, task_id, files, readonly_files, kind):
+def prepare(run, project, task_id, files, readonly_files, kind, *, access='project', protected_roots=()):
     run, project = Path(run).resolve(), Path(project).resolve()
     if run.parent != project / '.model-desk/runs' or run.name != task_id or kind not in ('chat', 'edit'):
         raise ValueError('WorkBuddy 原生工具必须绑定当前项目与任务')
+    if access not in ACCESS_MODES:
+        raise ValueError('WorkBuddy 任务访问权限无效')
     record_protection.validate_files(files + readonly_files, project)
     for name in files + readonly_files:
         # Dispatch accepts both project-relative and in-project absolute files.
@@ -43,6 +77,7 @@ def prepare(run, project, task_id, files, readonly_files, kind):
             raise ValueError('WorkBuddy 文件范围越出当前项目')
     data = {'schema': 1, 'mode': MODE, 'task_id': task_id, 'project': str(project),
             'kind': kind, 'files': list(files), 'readonly_files': list(readonly_files),
+            'access_mode': access, 'protected_roots': [str(Path(p).resolve()) for p in protected_roots],
             'nonce': uuid.uuid4().hex, 'revision': revision(),
             'tools': list(TOOLS if kind == 'edit' else READS + ('WebFetch', 'WebSearch'))}
     run.mkdir(parents=True, exist_ok=True)
@@ -59,6 +94,9 @@ def load(job):
     if (not path.is_absolute() or path.resolve().parent != project / '.model-desk/runs' / data['task_id'] or
             data.get('schema') != 1 or data.get('mode') != MODE or data.get('revision') != revision() or
             data.get('kind') not in ('edit', 'chat') or
+            data.get('access_mode') not in ACCESS_MODES or
+            not isinstance(data.get('protected_roots'), list) or
+            any(not isinstance(p, str) or not Path(p).is_absolute() for p in data['protected_roots']) or
             data.get('tools') != list(TOOLS if data.get('kind') == 'edit' else READS + ('WebFetch', 'WebSearch'))):
         raise ValueError('WorkBuddy 原生工具身份或代码已变化；拒绝继续')
     return data
@@ -82,6 +120,7 @@ def verify(job, session_id):
     run = Path(job).parent
     proof = json.loads((run / 'workbuddy-native-proof.json').read_text(encoding='utf-8'))
     expected = {key: data[key] for key in ('task_id', 'project', 'nonce', 'revision', 'mode')}
+    expected.update(access_mode=data['access_mode'], job_hash=hashlib.sha256(Path(job).read_bytes()).hexdigest())
     if (any(proof.get(key) != value for key, value in expected.items()) or
             proof.get('session_id') != session_id or proof.get('probe') != 'ok'):
         raise ValueError('WorkBuddy 原生工具保护没有绑定本任务父会话')
@@ -114,5 +153,17 @@ def public_calls(proof):
                       'status': ('completed' if event.get('ok') else
                                  'unknown' if event.get('event') == 'PreToolUse' and event.get('allowed') else 'failed'),
                       'phase': event.get('event'), 'input_hash': event.get('input_hash'),
-                      'exit_code': event.get('exit_code')}
+                      'exit_code': event.get('exit_code'),
+                      'denial_reason': DENIAL_LABELS.get(event.get('reason_code')) if event.get('allowed') is False else None}
     return list(calls.values())
+
+
+def denial_summary(proof):
+    event = next((e for e in (proof or {}).get('events', [])
+                  if e.get('event') == 'PreToolUse' and e.get('allowed') is False), None)
+    if event is None:
+        return None
+    code = event.get('reason_code')
+    code = code if isinstance(code, str) and code in DENIAL_LABELS else 'unknown'
+    tool = event.get('tool') if event.get('tool') in TOOLS else 'Tool'
+    return {'tool': tool, 'reason_code': code, 'message': DENIAL_LABELS[code]}

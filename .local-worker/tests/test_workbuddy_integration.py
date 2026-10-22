@@ -2,6 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 import io
+import hashlib
 import queue
 import sys
 from unittest.mock import Mock, patch
@@ -120,6 +121,29 @@ class IntegrationTests(Base):
             with self.subTest(body=body), self.assertRaises(ValueError):
                 registry.upsert_model(body)
 
+    def test_access_switch_is_snapshotted_and_preserves_models_and_other_endpoints(self):
+        models = registry.REGISTRY.read_bytes()
+        endpoints = ep.snapshot()
+        ep.update('workbuddy', {'access_mode': 'full'}, self.settings)
+        task, run = self.dispatch()
+        self.assertEqual(task['workbuddy_access_mode'], 'full')
+        ep.update('workbuddy', {'access_mode': 'project'}, self.settings)
+        worker.run_task(run, task, registry.get_model(task['model_id']), client_factory=self.client())
+        self.assertEqual(registry.read_task(run)['status'], 'completed')
+        self.assertEqual(native_tools.load(self.native.native_job)['access_mode'], 'full')
+        self.assertIn('用户明确开启完全访问', self.last_prompt)
+        self.assertEqual(registry.REGISTRY.read_bytes(), models)
+        self.assertEqual(ep.snapshot(), endpoints)
+
+    def test_request_body_or_new_setting_cannot_elevate_an_old_task(self):
+        task, run = self.dispatch(workbuddy_access_mode='full')
+        self.assertEqual(task['workbuddy_access_mode'], 'project')
+        task.pop('workbuddy_access_mode')
+        registry.write_json(run / 'task.json', task)
+        ep.update('workbuddy', {'access_mode': 'full'}, self.settings)
+        worker.run_task(run, task, registry.get_model(task['model_id']), client_factory=self.client())
+        self.assertEqual(native_tools.load(self.native.native_job)['access_mode'], 'project')
+
     def test_model_and_explicit_engine_cannot_switch_billing_source(self):
         api = registry.list_models()['models'][0]
         for model, engine in [(api, 'workbuddy'), (self.model, 'pi'), (self.model, 'dsh'),
@@ -189,12 +213,14 @@ class IntegrationTests(Base):
                 if self.native_job:
                     data=native_tools.load(self.native_job)
                     registry.write_json(Path(self.native_job).parent/'workbuddy-native-proof.json', {
-                        **{k:data[k] for k in ('task_id','project','nonce','revision','mode')},
+                        **{k:data[k] for k in ('task_id','project','nonce','revision','mode','access_mode')},
+                        'job_hash':hashlib.sha256(Path(self.native_job).read_bytes()).hexdigest(),
                         'session_id':self.session_id,'probe':'ok'})
                 if self.job:
                     server = tools.FileTools(self.job);server.list_tools()
                 return {'session_id': 'fixture-native-session'}
             def chat(self, model, prompt, settings, timeout):
+                outer.last_prompt = prompt
                 outer.prompts += 1
                 self.on_prompt()
                 if scenario == 'unknown':

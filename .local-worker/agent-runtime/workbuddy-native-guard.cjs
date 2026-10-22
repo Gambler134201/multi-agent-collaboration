@@ -9,20 +9,32 @@ const reads=new Set(['Read','Glob','Grep','NotebookRead']);
 const writes=new Set(['Write','Edit','MultiEdit','NotebookEdit']);
 const shells=new Set(['Bash','PowerShell']);
 const web=new Set(['WebFetch','WebSearch']);
+function inside(root,p){const r=path.relative(policy.realpathDeep(root),policy.realpathDeep(p));return r!== '..'&&!r.startsWith('..'+path.sep)&&!path.isAbsolute(r);}
+function denialCode(reason){
+  if(reason==='文件不属于本任务项目')return 'outside_project';
+  if(reason==='文件未列入本任务可写范围')return 'undeclared_write';
+  if(reason==='任务只读上下文不可修改')return 'readonly_file';
+  if(reason.startsWith('本轮工具已暂停'))return 'prior_denial';
+  if(reason==='本任务未授权此原生工具'||reason==='只读任务没有终端权限')return 'tool_not_allowed';
+  if(/记录|认证|其他任务|原生配置|硬链接/.test(reason))return 'protected_data';
+  return 'guard_denied';
+}
 function target(job,value,write=false,browse=false){
   if(typeof value!=='string'||!value.trim())return '文件路径无效';
   const p=path.resolve(job.project,value),real=policy.realpathDeep(p),root=policy.realpathDeep(job.project);
   const relative=path.relative(root,real);
-  if(relative.startsWith('..'+path.sep)||relative==='..'||path.isAbsolute(relative))return '文件不属于本任务项目';
-  if(policy.hasProtectedComponent(p)||policy.hasProtectedComponent(real)||/(^|[\\/])(?:\.git|\.env(?:\.[^\\/]+)?)(?:[\\/]|$)/i.test(p))return '工作台记录、Git 元数据或认证配置不作为执行目标';
+  if(policy.hasProtectedComponent(p)||policy.hasProtectedComponent(real)||[p,real].some(n=>/(^|[\\/])(?:\.git|\.env(?:\.[^\\/]+)?)(?:[\\/]|$)/i.test(n)))return '工作台记录、Git 元数据或认证配置不作为执行目标';
   if(fs.existsSync(p)&&fs.statSync(p).isFile()&&fs.statSync(p).nlink>1)return '文件存在硬链接别名';
-  if(/(?:^|[\\/])(?:\.codebuddy|\.workbuddy|\.codex)(?:[\\/]|$)|(?:^|[\\/])(?:auth|credentials|tokens?|secrets?)\.json$/i.test(p))return '认证存储不作为执行目标';
-  if(/[\\/]\.local-worker[\\/](?:models|settings|panel-runtime|workbuddy)\.json$/i.test(p))return '运行账户配置不作为执行目标';
+  if([p,real].some(n=>/(?:^|[\\/])(?:\.codebuddy|\.workbuddy|\.codex|\.dsh)(?:[\\/]|$)|(?:^|[\\/])(?:auth|credentials|tokens?|secrets?)\.json$/i.test(n)))return '认证存储不作为执行目标';
+  if((job.protected_roots||[]).some(n=>inside(n,p)))return '原生配置目录不作为执行目标';
+  if([p,real].some(n=>/[\\/]\.local-worker[\\/](?:models|settings|workflow|execution-endpoints|panel-runtime|workbuddy(?:-access|-catalog)?|project-index|budget-ledger)\.json$/i.test(n)))return '运行账户配置不作为执行目标';
+  if(job.access_mode!=='full'&&(relative.startsWith('..'+path.sep)||relative==='..'||path.isAbsolute(relative)))return '文件不属于本任务项目';
   const own=[...job.files,...job.readonly_files];
   const ownsFile=own.some(n=>policy.normalizePath(path.resolve(job.project,n))===policy.normalizePath(p));
+  if(write&&job.readonly_files.some(n=>policy.normalizePath(path.resolve(job.project,n))===policy.normalizePath(p))&&!job.files.some(n=>policy.normalizePath(path.resolve(job.project,n))===policy.normalizePath(p)))return '任务只读上下文不可修改';
   const ownsDirectory=browse&&own.some(n=>policy.normalizePath(path.dirname(path.resolve(job.project,n)))===policy.normalizePath(p));
   if(/[\\/]\.local-worker[\\/](?:tasks|logs)[\\/]/i.test(p)&&!ownsFile&&!ownsDirectory)return '不读取其他任务或会话材料';
-  if(write&&!job.files.some(name=>policy.normalizePath(path.resolve(job.project,name))===policy.normalizePath(p)))return '文件未列入本任务可写范围';
+  if(write&&job.access_mode!=='full'&&!job.files.some(name=>policy.normalizePath(path.resolve(job.project,name))===policy.normalizePath(p)))return '文件未列入本任务可写范围';
   return null;
 }
 function decide(job,input){
@@ -31,6 +43,7 @@ function decide(job,input){
   if(reads.has(name)){
     const p=args.file_path??args.notebook_path??args.path??'.';
     const reason=target(job,p,false,name==='Glob'||name==='Grep');if(reason)return reason;
+    if(name==='Grep'&&(job.protected_roots||[]).some(root=>inside(path.resolve(job.project,p),root)))return '目录检索范围包含原生配置；请选择更具体的文件';
     // Search defaults exclude records even when the root itself is the target.
     if(name==='Glob'&&/\.model-desk|\.git(?:[\\/]|$)|\.env/i.test(args.pattern||''))return '搜索不包含记录或认证目录';
     return null;
@@ -39,6 +52,7 @@ function decide(job,input){
   if(shells.has(name)){
     if(job.kind!=='edit')return '只读任务没有终端权限';
     if(typeof args.command!=='string'||!args.command.trim())return '命令无效';
+    if((job.protected_roots||[]).some(root=>args.command.replace(/\\/g,'/').toLowerCase().includes(root.replace(/\\/g,'/').toLowerCase())))return '终端不能访问原生配置目录';
     if(/\bgit\s+(?:[^;\r\n]*?\s)?(?:push|commit|merge|worktree|switch|checkout|reset|clean)\b/i.test(args.command))return '执行任务不修改 Git 历史或向远端发布';
     if(args.run_in_background)return '本任务终端须前台完成并返回退出结果';
     if(args.dangerouslyDisableSandbox||args.disableSandbox)return '不能批准原生沙箱绕过';
@@ -53,12 +67,12 @@ function decide(job,input){
   return '未经适配的原生工具';
 }
 function main(file,input){
-  const job=JSON.parse(fs.readFileSync(file,'utf8')),run=path.dirname(file);
+  const jobBytes=fs.readFileSync(file),job=JSON.parse(jobBytes),run=path.dirname(file);
   const revision=hash(Buffer.concat([fs.readFileSync(__filename),fs.readFileSync(path.join(__dirname,'record-policy.cjs'))]));
-  if(job.schema!==1||job.revision!==revision||job.mode!=='native-development-v1'||path.resolve(run)!==path.resolve(job.project,'.model-desk','runs',job.task_id))throw Error('工具任务身份校验失败');
+  if(job.schema!==1||job.revision!==revision||job.mode!=='native-development-v1'||!['project','full'].includes(job.access_mode)||!Array.isArray(job.protected_roots)||job.protected_roots.some(p=>typeof p!=='string'||!path.isAbsolute(p))||path.resolve(run)!==path.resolve(job.project,'.model-desk','runs',job.task_id))throw Error('工具任务身份校验失败');
   if(!input||typeof input.session_id!=='string'||!input.session_id)throw Error('缺少父会话身份');
   const proofFile=path.join(run,'workbuddy-native-proof.json'),flag=path.join(run,'workbuddy-native-denied.flag');
-  const proof={...Object.fromEntries(['task_id','project','nonce','revision','mode'].map(k=>[k,job[k]])),session_id:input.session_id,probe:'ok'};
+  const proof={...Object.fromEntries(['task_id','project','nonce','revision','mode','access_mode'].map(k=>[k,job[k]])),job_hash:hash(jobBytes),session_id:input.session_id,probe:'ok'};
   if(input.hook_event_name==='SessionStart'){
     if(fs.existsSync(proofFile)&&JSON.parse(fs.readFileSync(proofFile,'utf8')).session_id!==input.session_id)throw Error('不能换绑原会话');
     if(policy.decide(policy.PROBE_TOOL,{}, {root:job.project})!==policy.PROBE_REASON)throw Error('记录保护探针失败');
@@ -72,7 +86,7 @@ function main(file,input){
   const raw=response?.rawResponse||response;
   const commandHash=typeof input.tool_input?.command==='string'?hash(input.tool_input.command):null;
   const row={event:input.hook_event_name,session_id:input.session_id,nonce:job.nonce,call_id:input.tool_use_id||input.call_id||null,tool:input.tool_name,
-    input_hash:hash(JSON.stringify(stable(input.tool_input||{}))),allowed:!reason,
+    input_hash:hash(JSON.stringify(stable(input.tool_input||{}))),allowed:!reason,reason_code:reason?denialCode(reason):null,
     command_hash:commandHash,exit_code:Number.isInteger(raw?.exitCode)?raw.exitCode:null,
     ok:input.hook_event_name==='PostToolUse'&&!(raw?.is_error||raw?.isError||raw?.interrupted||raw?.sandboxDenied||response?.error),at:new Date().toISOString()};
   fs.appendFileSync(path.join(run,'workbuddy-native-events.jsonl'),JSON.stringify(row)+'\n');

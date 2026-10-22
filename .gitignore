@@ -11,6 +11,7 @@
 .local-worker/execution-endpoints.json
 .local-worker/workbuddy.json
 .local-worker/workbuddy-catalog.json
+.local-worker/workbuddy-access.json
 .local-worker/budget-ledger.json
 .local-worker/project-index.json
 .local-worker/project-bookmarks.json

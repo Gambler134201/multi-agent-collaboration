@@ -6,8 +6,8 @@
   "files": [
     {
       "path": ".gitignore",
-      "sha256": "12000e44371e60a362f2fe32fc64fa9c3b72ece983c0a98c442b7516e277f736",
-      "bytes": 1103
+      "sha256": "130e2f358551624e72392084f7b978ee53ff5d9d08426b6976ae00cc3dce2624",
+      "bytes": 1139
     },
     {
       "path": ".local-worker/acceptance_profiles.json",
@@ -81,8 +81,8 @@
     },
     {
       "path": ".local-worker/agent-runtime/workbuddy-native-guard.cjs",
-      "sha256": "42e79f38ed6d340ae38c4a09ac413aeb94a333da570300b96c726e5664585f74",
-      "bytes": 8385
+      "sha256": "c3d998129c517266206ecc60b9b332c59f9e295977f2b6a9d3356c8a5e8648af",
+      "bytes": 10282
     },
     {
       "path": ".local-worker/aider.yml",
@@ -201,8 +201,8 @@
     },
     {
       "path": ".local-worker/execution_endpoints.py",
-      "sha256": "b48fa5613cb51e2f38f8d0fb675014ebf353f51e88946317d0becceeef5f5838",
-      "bytes": 9167
+      "sha256": "7583f3989f8acfa4352fcf0e8d1e0954b3c0dd2a28cf8825b972f6e36ca9b5e4",
+      "bytes": 9372
     },
     {
       "path": ".local-worker/execution_engines.py",
@@ -271,8 +271,8 @@
     },
     {
       "path": ".local-worker/panel/app.js",
-      "sha256": "0679791ed0a00236832a33890a8406d479b30a46b3ec74b68b6bafcb615b9ae9",
-      "bytes": 166984
+      "sha256": "a0a371e1b156da1c6cbcd1a1ab58891fd2ca5c31cdabea0db1fe50f63b2ef2ca",
+      "bytes": 168206
     },
     {
       "path": ".local-worker/panel/codex-bridge.js",
@@ -291,8 +291,8 @@
     },
     {
       "path": ".local-worker/panel_server.py",
-      "sha256": "ecc2875f72748e4e3d99868c48f627973738c967546aff535ef2033cc7b9d214",
-      "bytes": 145750
+      "sha256": "4e9d6fa3e64562c46a95f923341be61a99501c227ea22f8c11affc43e838e13b",
+      "bytes": 146007
     },
     {
       "path": ".local-worker/panel_service.py",
@@ -591,8 +591,8 @@
     },
     {
       "path": ".local-worker/tests/test_endpoint_cards.cjs",
-      "sha256": "8a33ecccf16b6e17fbfeccef5748c569f287140cbeaddb55ff10ef69fae7306f",
-      "bytes": 10108
+      "sha256": "72536922e6be27061d7e3ebb185aeb764d58f90d4cc5293734f9c13c3b47d753",
+      "bytes": 10790
     },
     {
       "path": ".local-worker/tests/test_execution_endpoints.py",
@@ -801,13 +801,13 @@
     },
     {
       "path": ".local-worker/tests/test_workbuddy_integration.py",
-      "sha256": "2398f88d803e95809fbaae80a3f99194e5e5fee7f83d778480d67ae432e8a504",
-      "bytes": 25497
+      "sha256": "c46f8b472eab6cdff4db7a88d5872eeaa6f67e9919429dca8dfc55946fc5c10b",
+      "bytes": 27113
     },
     {
       "path": ".local-worker/tests/test_workbuddy_native_tools.py",
-      "sha256": "7fb1f84c1674a683d15aca8ba1954272b2e71c5de10561afe03d77a7cd1f2879",
-      "bytes": 15826
+      "sha256": "39f3647bc12cd6ce193152b547cd64db4db17efe966230ef42484001676121ed",
+      "bytes": 22558
     },
     {
       "path": ".local-worker/tests/test_workbuddy_tools.py",
@@ -851,8 +851,8 @@
     },
     {
       "path": ".local-worker/workbuddy_executor.py",
-      "sha256": "7e56eb0f58673980345855e68840f2ca9f9106c42e75da8d40cdebd194e44256",
-      "bytes": 32032
+      "sha256": "9a01a4b2d3d4c91f10aadcd909c7656aec4555ee8e4995f16b56b51b32e5d6d8",
+      "bytes": 32991
     },
     {
       "path": ".local-worker/workbuddy_host_bridge.py",
@@ -861,8 +861,8 @@
     },
     {
       "path": ".local-worker/workbuddy_native_tools.py",
-      "sha256": "824b64c3ea691c4dbe5eb4225b85ce7f19c28a7bbfd2c9e93d5075fc7ef65e70",
-      "bytes": 5984
+      "sha256": "1767753b4083e9e47b1caf78c7cfa8e7b52d662bdf44811fa8af786444ac8e14",
+      "bytes": 8616
     },
     {
       "path": ".local-worker/workbuddy_tools.py",
@@ -871,8 +871,8 @@
     },
     {
       "path": ".local-worker/workbuddy_worker.py",
-      "sha256": "2d0e5bd70108b0327cb89d22052ceeba547b16804322a5f1cf7070e85e8ec9e7",
-      "bytes": 22512
+      "sha256": "a49236f8fe20b331904d5d38e7039be3ae603ae991a84b8c2bc2cbaf5961fd85",
+      "bytes": 24003
     },
     {
       "path": ".local-worker/workflow-guides/core.md",
@@ -946,8 +946,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "8a1c343cfa37ccbf7d71d21b37ad19ac8133f2ec7f57db1794625fb4331f6c5b",
-      "bytes": 5070
+      "sha256": "e2dc0aabc76985f5e40809fd73ecd236cfa4fb58a9e3558e130e1427e54e08e9",
+      "bytes": 5421
     },
     {
       "path": "LICENSE",
@@ -971,8 +971,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "25b66971aec2ac70577be31091e8c016e7020c33c1ec39791ec0f8e16fa6af79",
-      "bytes": 6541
+      "sha256": "5ee50100506212b0bcd602d09cd4aadfa8d2c356c1b6d7630d786885a039e66d",
+      "bytes": 6917
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1026,8 +1026,8 @@
     },
     {
       "path": "docs/WORKBUDDY_EXECUTOR.md",
-      "sha256": "760c1566a2b944bf16558dd310d40546fec028881ee5139a8dc6569685f180c7",
-      "bytes": 35684
+      "sha256": "72a8970f29bd27670b8474eb824330b4caa03b7a2d0a93fba2a324ecb1c15eca",
+      "bytes": 37899
     },
     {
       "path": "integrations/dsh-brain/LICENSE",

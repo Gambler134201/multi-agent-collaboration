@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import workbuddy_native_tools as native
 import workbuddy_executor as wb
+import model_registry as registry
 
 NODE = os.environ.get('MODEL_DESK_TEST_NODE') or shutil.which('node')
 
@@ -45,6 +46,117 @@ class NativeToolsTests(unittest.TestCase):
         self.assertEqual(args[args.index('--permission-mode') + 1], 'default')
         self.assertNotIn('--dangerously-skip-permissions', args)
         self.assertEqual(wb.command({'executable': NODE, 'cli': 'fixture'})[6], '')
+
+    def new_access_job(self, name, *, access='full', kind='edit', protected_roots=(), readonly=()):
+        self.run = self.root / '.model-desk/runs' / name
+        self.job = native.prepare(self.run, self.root, name, ['a.py'] if kind == 'edit' else [],
+                                  list(readonly), kind, access=access, protected_roots=protected_roots)
+        self.hook('SessionStart')
+        return self.job
+
+    def test_access_setting_is_explicit_local_and_invalid_config_fails_closed(self):
+        with patch.object(registry, 'HERE', self.root):
+            path = self.root / native.ACCESS_CONFIG
+            self.assertEqual(native.access_mode(), 'project')
+            self.assertFalse(path.exists())
+            native.set_access_mode('full')
+            self.assertEqual(native.access_mode(), 'full')
+            before = path.read_bytes()
+            with self.assertRaises(ValueError):
+                native.set_access_mode('ignore')
+            self.assertEqual(path.read_bytes(), before)
+            for value in [{'schema': 1, 'mode': 'unknown'}, {'schema': 1, 'mode': 'full', 'extra': True}, []]:
+                path.write_text(json.dumps(value), encoding='utf-8')
+                with self.assertRaises(ValueError):
+                    native.access_mode()
+
+    def test_full_access_uses_native_mode_and_keeps_hooks_and_empty_mcp(self):
+        self.new_access_job('full-command')
+        args = wb.command({'executable': NODE, 'cli': 'fixture'}, 'glm-test', native_job=self.job)
+        self.assertEqual(args[args.index('--permission-mode') + 1], 'fullAccess')
+        options = json.loads(args[args.index('--settings') + 1])
+        self.assertIn('PreToolUse', options['hooks'])
+        self.assertIn('--strict-mcp-config', args)
+        self.assertEqual(args[args.index('--mcp-config') + 1], '{"mcpServers":{}}')
+        self.assertNotIn('Agent', args[args.index('--tools') + 1].split(','))
+
+    def test_full_access_allows_temporary_image_read_and_ordinary_file_write(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        self.new_access_job('full-temp')
+        target = str(Path(outside.name) / 'screenshot.png')
+        for tool, args in [('Read', {'file_path': target}),
+                           ('Write', {'file_path': target, 'content': 'fixture'}),
+                           ('Bash', {'command': 'echo fixture', 'cwd': outside.name})]:
+            _, result = self.hook('PreToolUse', tool, args)
+            self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+        self.assertFalse(native.verify(self.job, self.sid)['writes_paused'])
+
+    def test_full_access_requires_native_ack_before_any_prompt(self):
+        self.new_access_job('full-ack')
+        for reported, option in [('fullAccess', 'fullAccess'), ('default', 'fullAccess'),
+                                 ('fullAccess', 'default'), (None, None)]:
+            client = wb.NativeChatClient.__new__(wb.NativeChatClient)
+            client.session_id = None
+            client.native_job = self.job
+            client.requested_model_id = 'glm-test'
+            client.project = str(self.root)
+            client.mcp_servers = []
+            client.wait_native_tools = Mock()
+            client.request = Mock(side_effect=[{'protocolVersion': 1},
+                {'sessionId': self.sid, 'models': {'currentModelId': 'glm-test',
+                    'availableModels': [{'modelId': 'glm-test'}]},
+                 'modes': {'currentModeId': reported},
+                 'configOptions': [{'id': 'mode', 'currentValue': option}]}])
+            if reported == option == 'fullAccess':
+                self.assertEqual(client.connect()['permission_mode'], 'fullAccess')
+            else:
+                with self.assertRaisesRegex(wb.ProtocolError, '未确认原生完全访问'):
+                    client.connect()
+            self.assertEqual([call.args[0] for call in client.request.call_args_list], ['initialize', 'session/new'])
+
+    def test_full_access_keeps_records_auth_profile_readonly_and_pause_guards(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        foreign = Path(outside.name)
+        profile = foreign / 'custom-profile'; profile.mkdir()
+        readonly = str(self.root / 'context.txt')
+        variants = [
+            ('Read', {'file_path': str(foreign / '.model-desk/records.db')}),
+            ('Read', {'file_path': str(foreign / '.codex/history.json')}),
+            ('Read', {'file_path': str(foreign / '.env')}),
+            ('Read', {'file_path': str(profile / 'storage.json')}),
+            ('Bash', {'command': 'cat "' + str(profile / 'storage.json') + '"'}),
+            ('Grep', {'path': str(foreign), 'pattern': 'fixture'}),
+            ('Write', {'file_path': readonly, 'content': 'bad'})]
+        for index, (tool, args) in enumerate(variants):
+            self.new_access_job('full-protected-' + str(index), protected_roots=[str(profile)], readonly=[readonly])
+            _, result = self.hook('PreToolUse', tool, args)
+            self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+            proof = native.verify(self.job, self.sid)
+            summary = native.denial_summary(proof)
+            self.assertIn(summary['reason_code'], ('protected_data', 'readonly_file'))
+            self.assertNotIn(str(foreign), json.dumps(proof))
+            _, result = self.hook('PreToolUse', 'Bash', {'command': 'echo no retry'})
+            self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertEqual(native.verify(self.job, self.sid)['events'][-1]['reason_code'], 'prior_denial')
+            self.assertEqual(native.denial_summary(native.verify(self.job, self.sid)), summary)
+
+    def test_readonly_full_access_has_no_write_or_shell_tools(self):
+        self.new_access_job('full-chat', kind='chat')
+        self.assertNotIn('Write', native.load(self.job)['tools'])
+        _, result = self.hook('PreToolUse', 'Bash', {'command': 'echo no'})
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_scope_snapshot_cannot_be_changed_after_hook_proof(self):
+        data = json.loads(self.job.read_text(encoding='utf-8'))
+        data['access_mode'] = 'full'
+        self.job.write_text(json.dumps(data), encoding='utf-8')
+        with self.assertRaises(ValueError):
+            native.verify(self.job, self.sid)
+        code, result = self.hook('PreToolUse', 'Read', {'file_path': 'a.py'})
+        self.assertNotEqual(code, 0)
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
 
     def test_parent_session_and_code_revision_are_verified(self):
         self.assertEqual(native.verify(self.job, self.sid)['probe'], 'ok')

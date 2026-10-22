@@ -137,7 +137,9 @@ def command(info, model_id=None, *, native_job=None):
         import workbuddy_native_tools
         options, tools = workbuddy_native_tools.settings(native_job, info['executable'])
         args[args.index('--tools') + 1] = ','.join(tools)
-        args.extend(['--settings', json.dumps(options, ensure_ascii=False), '--permission-mode', 'default'])
+        job = workbuddy_native_tools.load(native_job)
+        permission = 'fullAccess' if job['access_mode'] == 'full' else 'default'
+        args.extend(['--settings', json.dumps(options, ensure_ascii=False), '--permission-mode', permission])
     if model_id is not None:
         if not isinstance(model_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}', model_id):
             raise ValueError('WorkBuddy 模型 ID 无效')
@@ -230,6 +232,7 @@ class NativeChatClient:
             raise ValueError('WorkBuddy 必须绑定明确存在的项目绝对目录')
         self.project = str(project.resolve())
         self.native_job = None
+        self.native_permission_mode = None
         if native_job is not None:
             import workbuddy_native_tools
             if tool_job is not None or workbuddy_native_tools.load(native_job)['project'] != self.project:
@@ -473,6 +476,16 @@ class NativeChatClient:
         if not isinstance(session_id, str) or not re.fullmatch(r'[A-Za-z0-9_:-]{1,200}', session_id):
             raise ProtocolError('WorkBuddy 没有返回有效的新会话标识')
         self.session_id = session_id
+        reported_mode = (result.get('modes') or {}).get('currentModeId')
+        self.native_permission_mode = reported_mode
+        if getattr(self, 'native_job', None) is not None:
+            import workbuddy_native_tools
+            if workbuddy_native_tools.load(self.native_job)['access_mode'] == 'full':
+                options = result.get('configOptions') or []
+                confirmed = any(isinstance(o, dict) and o.get('id') == 'mode' and
+                                o.get('currentValue') == 'fullAccess' for o in options)
+                if reported_mode != 'fullAccess' or not confirmed:
+                    raise ProtocolError('WorkBuddy 未确认原生完全访问权限；未发送提示词')
         self.models = model_catalog(result)
         current = result.get('models', {}).get('currentModelId')
         # WorkBuddy's suggested picker list can omit an explicitly selected
@@ -487,7 +500,8 @@ class NativeChatClient:
         if getattr(self, 'native_job', None) is not None:
             self.wait_native_tools()
         return {'session_id': session_id, 'models': self.models, 'account_verified': False,
-                'current_model_id': current, 'project': self.project, 'model_called': False}
+                'current_model_id': current, 'project': self.project, 'model_called': False,
+                'permission_mode': self.native_permission_mode}
 
     def wait_file_tools(self, timeout=20):
         import workbuddy_tools
