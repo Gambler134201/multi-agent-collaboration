@@ -26,6 +26,7 @@ import executor_adapter
 import model_capabilities
 import recovery_retry
 import record_protection
+import endpoint_access
 import runtime_paths
 import subagent_runtime
 import task_timing
@@ -70,16 +71,17 @@ def availability():
             'edit_sandbox_mode': sandbox_mode('edit'), 'chat_sandbox_mode': sandbox_mode('chat')}
 
 
-def sandbox_mode(kind):
-    # Panel edit jobs use the official DSH full-access mode; chat jobs stay read-only.
-    return 'danger-full-access' if kind == 'edit' else 'read-only'
+def sandbox_mode(kind, access='full'):
+    return endpoint_access.sandbox(kind, access)
 
 
-def fingerprint(model, kind, project, preset=None):
+def fingerprint(model, kind, project, preset=None, access='full'):
     data = [model['id'], model['api_base'], model['model'], model.get('max_input_tokens'), model.get('max_output_tokens'), kind, str(project)]
+    if kind != 'edit' and access != 'full':
+        data += ['access', access]
     if kind == 'edit':
         # Older workspace-write edit sessions keep their fingerprint, so they must be recreated rather than silently upgraded.
-        data += ['sandbox', sandbox_mode(kind)]
+        data += ['sandbox', sandbox_mode(kind, access)]
         # A writable session created before the record-write guard existed must
         # not be silently resumed: the guard's content identity is part of the
         # session identity, so an old edit session is refused with "create a new
@@ -111,7 +113,7 @@ def fingerprint(model, kind, project, preset=None):
     return hashlib.sha256(json.dumps(data).encode()).hexdigest()
 
 
-def build_patch(model, kind, preset=None, subagent=False, child_config=None, record_root=None):
+def build_patch(model, kind, preset=None, subagent=False, child_config=None, record_root=None, access='full'):
     provider = 'desk-worker'
     rows = [
         {'id': 'llm-pi-ai', 'config': {'providers': {provider: {
@@ -126,7 +128,7 @@ def build_patch(model, kind, preset=None, subagent=False, child_config=None, rec
                         'maxTokens': model.get('max_output_tokens', 4096), 'reasoningEfforts': False}]}}}},
         {'id': 'acp', 'config': {'provider': provider, 'model': model['model']}},
         {'id': 'agent-default-model', 'config': {'provider': provider, 'model': model['model']}},
-        {'id': 'sandbox-policy', 'config': {'mode': sandbox_mode(kind)}},
+        {'id': 'sandbox-policy', 'config': {'mode': sandbox_mode(kind, access)}},
     ]
     for plugin in ('session-log-deepseek', 'session-telemetry-otel', 'llm-deepseek',
                    'llm-deepseek-account', 'tool-web', 'web-search-deepseek',
@@ -153,7 +155,12 @@ def build_patch(model, kind, preset=None, subagent=False, child_config=None, rec
                  'config': {'enabled': False, 'allowedModels': []}})
     # Add workspaceRoot in run_task after resolving the actual project directory.
     if preset:
-        rows += preset_runtime.patch_rows(preset, record_root=record_root)
+        mounted = preset_runtime.patch_rows(preset, record_root=record_root)
+        for row in mounted:
+            for plugin in row.get('insert', []):
+                if plugin.get('id') == record_protection.PLUGIN_ID:
+                    plugin['config']['access_mode'] = access
+        rows += mounted
     return rows
 
 
@@ -349,7 +356,8 @@ def _prepare_dsh(run, state, model, relay):
     before = {str(p.relative_to(project)): digest(p) for p in files}
     session_key = state.get('dsh_session_key') or 'desk-' + state['id']
     base_preset = preset_runtime.load(model, EXECUTABLE)
-    current_fingerprint = fingerprint(model, state['kind'], project, base_preset)
+    access = endpoint_access.task_mode(state)
+    current_fingerprint = fingerprint(model, state['kind'], project, base_preset, access=access)
     if state.get('connection_fingerprint') and state['connection_fingerprint'] != current_fingerprint:
         raise ValueError('原会话的模型接口、Agent 预设、权限或项目已变更，请创建新任务')
     decision = subagent_decision(model, run, preset=base_preset,
@@ -363,7 +371,7 @@ def _prepare_dsh(run, state, model, relay):
     else:
         preset = base_preset
     patch = build_patch({**model, 'api_base': relay.url}, state['kind'], preset, subagent=allowed_subagent,
-                        record_root=project)
+                        record_root=project, access=access)
     patch[3]['config']['workspaceRoot'] = str(project)
     patch_path = HERE / 'dsh-home/worker-patches' / (current_fingerprint + '.yml')
     patch_path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,7 +390,7 @@ def _prepare_dsh(run, state, model, relay):
     agent_prompt = run / 'dsh-prompt.txt'
     agent_prompt.write_text(prompt, encoding='utf-8')
     ledger = subagent_runtime.ledger_path(run) if allowed_subagent else None
-    job = {**availability(), 'task_id': state['id'], 'kind': state['kind'], 'model': model['model'],
+    job = {**availability(), 'access_mode': access, 'task_id': state['id'], 'kind': state['kind'], 'model': model['model'],
            'cwd': str(project), 'patch': str(patch_path), 'state_dir': str(RUNTIME / 'state'),
            'session_key': session_key, 'prompt_file': str(agent_prompt),
            'cancel_file': str(run / 'cancelled.flag'), 'timeout': state['timeout'],
@@ -405,7 +413,7 @@ def _prepare_dsh(run, state, model, relay):
     registry.patch_task(run, status='running', phase='连接 DeepSeek Harness', engine='dsh',
                         started_at=registry.now(), worker_pid=os.getpid(), project=str(project),
                         dsh_session_key=session_key, connection_fingerprint=current_fingerprint,
-                        sandbox_mode=sandbox_mode(state['kind']),
+                        sandbox_mode=sandbox_mode(state['kind'], access),
                         permission_mode='approve-all' if state['kind'] == 'edit' else 'approve-reads')
     registry.patch_task(run, agent_preset=preset['id'], preset_revision=preset['revision'], preset_source=preset['source'],
                         preset_policy_overrides=preset['policy_overrides'], thinking_policy='引擎默认' if model.get('provider') == 'local' else '服务商默认',

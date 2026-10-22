@@ -12,8 +12,8 @@ const directory=path.resolve(__dirname,'../panel');
       const paid={...model,id:'paid',name:'Paid fixture',provider:'deepseek',model:'deepseek-flash',
         api_base:'https://api.deepseek.com',default_agent:'dsh',billing:{pricing:{period:'unknown',label:'fixture'},
           balance:{status:'ready',balance_infos:[{currency:'CNY',total_balance:'12.33'}]}}};
-      const agents={pi:{name:'Pi Agent',ready:true,configuration:{model_fields:[]}},
-        dsh:{name:'DeepSeek Harness',ready:true,configuration:{model_fields:[]}}};
+      const agents={pi:{name:'Pi Agent',ready:true,access_mode:'full',configuration:{model_fields:[]}},
+        dsh:{name:'DeepSeek Harness',ready:true,access_mode:'full',configuration:{model_fields:[]}}};
       const fixture={models:[model,paid],default_model:'home',tasks:[],view:{mode:'project',project:'C:\\fixture'},
         execution_agents:agents,workflow:{enabled:true,execution_agent:'pi',model_scope:'all',paid_allowed:true,
           enforce_paid_budget:false,enforce_model_call_limit:false,daily:{}},
@@ -70,6 +70,14 @@ const directory=path.resolve(__dirname,'../panel');
       assert.equal(writes.find(w=>w.body.endpoint_settings?.values.preset).body.endpoint_settings.id,'pi');
       assert.equal(fixture.models[0].capability_notes,undefined,'saving endpoint preset must not rewrite a model');
       await page.locator('[data-endpoint-tab="models"]').click();
+      assert.equal(await page.locator('[data-access-endpoint="pi"]').inputValue(),'full');
+      await page.locator('[data-access-endpoint="pi"]').selectOption('project');
+      await page.waitForFunction(()=>document.querySelector('[data-endpoint-id="pi"]').textContent.includes('项目范围'));
+      assert.deepEqual(writes.find(w=>w.body.endpoint_settings?.values.access_mode==='project').body,
+        {endpoint_settings:{id:'pi',values:{access_mode:'project'}}});
+      assert.equal(agents.dsh.access_mode,'full');
+      await page.locator('[data-access-endpoint="pi"]').selectOption('full');
+      await page.waitForFunction(()=>document.querySelector('[data-endpoint-id="pi"]').textContent.includes('完全访问'));
       await page.locator('[data-endpoint-parameters="pi"]').click();
       assert.equal(await page.locator('#agent-settings-dialog').isVisible(),true);
       assert.equal(await page.locator('#agent-settings-agent').inputValue(),'pi');
@@ -83,6 +91,13 @@ const directory=path.resolve(__dirname,'../panel');
       assert.equal(await page.locator('#model-dialog #model-form').count(),1);
       await page.locator('#endpoint-dialog > .endpoint-modal > .dialog-heading .close-dialog').click();
       assert.equal((await page.locator('[data-endpoint-id="pi"]').boundingBox()).height,height);
+      await page.locator('[data-endpoint-expand="dsh"]').click();
+      await page.locator('[data-endpoint-tab="models"]').click();
+      await page.locator('[data-access-endpoint="dsh"]').selectOption('project');
+      await page.waitForFunction(()=>document.querySelector('[data-endpoint-id="dsh"]').textContent.includes('项目范围'));
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.id==='dsh'&&w.body.endpoint_settings.values.access_mode==='project'));
+      assert.equal(agents.pi.access_mode,'full');
+      await page.locator('#endpoint-dialog > .endpoint-modal > .dialog-heading .close-dialog').click();
       await page.locator('[data-endpoint-toggle="pi"]').click();
       await page.waitForFunction(()=>document.querySelector('[data-endpoint-toggle="pi"]').getAttribute('aria-checked')==='false');
       assert.deepEqual(writes.find(w=>w.body.endpoint_settings?.values.enabled===false).body,{endpoint_settings:{id:'pi',values:{enabled:false}}});

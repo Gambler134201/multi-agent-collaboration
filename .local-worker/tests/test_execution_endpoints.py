@@ -36,6 +36,19 @@ class EndpointTests(unittest.TestCase):
         registry.write_json(registry.REGISTRY, {'default_model': 'local', 'models': [self.local, self.other]})
         self.enterContext(patch.object(engines, 'availability', return_value={'ready': True, 'name': 'fixture'}))
 
+    def test_dispatch_freezes_access_and_does_not_trust_request_override(self):
+        import endpoint_access
+        endpoint_access.update('pi', 'project')
+        body = {'kind': 'edit', 'prompt': 'fixture', 'model_id': 'local', 'engine': 'pi',
+                'project': str(self.root), 'files': ['probe.txt'], 'execution_access_mode': 'full'}
+        with patch.object(panel.EXECUTOR, 'submit'), \
+             patch.object(workflow_settings, 'snapshot', return_value=self.settings), \
+             patch.object(panel, 'connectivity_gate', return_value={'blocked': False, 'checked': False, 'message': '', 'verdict': '', 'check': None}):
+            row = panel.submit_task(body)
+            self.assertEqual(row['execution_access_mode'], 'project')
+            endpoint_access.update('pi', 'full')
+            self.assertEqual(registry.read_task(registry.task_dir(row['id']))['execution_access_mode'], 'project')
+
     def test_missing_store_is_read_only_and_new_native_disabled(self):
         self.assertTrue(ep.snapshot()['endpoints']['pi']['enabled'])
         self.assertFalse(ep.snapshot()['endpoints']['workbuddy']['enabled'])

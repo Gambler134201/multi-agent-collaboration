@@ -8,8 +8,8 @@ export default function protection(pi: any) {
   const file = process.env.MODEL_DESK_PI_JOB;
   if (!file) throw new Error('缺少工作台 Pi 任务配置');
   const job = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const policy = require(job.policy);
-  const decide = policy.createGuard({ root: job.cwd });
+  const policy = require(require('path').join(require('path').dirname(job.policy), 'endpoint-access.cjs'));
+  const decide = policy.createGuard({ root: job.cwd, access_mode: job.access_mode || 'full' });
   const reads = new Set(['read', 'grep', 'find', 'ls']);
   const supported = new Set([...reads, 'write', 'edit', 'bash', 'powershell']);
   pi.on('tool_call', (event: any) => {
@@ -25,7 +25,7 @@ export default function protection(pi: any) {
     const sessionId = ctx.sessionManager.getSessionId();
     if (!sessionId || path.resolve(ctx.cwd) !== path.resolve(job.cwd)) throw new Error('Pi 父会话或项目绑定错误');
     fs.writeFileSync(job.proof_file, JSON.stringify({ source: 'model-desk-pi-protection',
-      revision: job.revision, root: job.cwd, session_id: sessionId, kind: job.kind,
+      revision: job.revision, root: job.cwd, session_id: sessionId, kind: job.kind, access_mode: job.access_mode || 'full',
       session_file: ctx.sessionManager.getSessionFile(), tools_guard: true, at: new Date().toISOString() }));
   });
 }

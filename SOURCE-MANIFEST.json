@@ -6,13 +6,18 @@
   "files": [
     {
       "path": ".gitignore",
-      "sha256": "130e2f358551624e72392084f7b978ee53ff5d9d08426b6976ae00cc3dce2624",
-      "bytes": 1139
+      "sha256": "3189fefe8429e5f1775ae7034059e84c58900fab5bb96f48699cda84d75029f8",
+      "bytes": 1210
     },
     {
       "path": ".local-worker/acceptance_profiles.json",
       "sha256": "a25b5c78df91f707a4d4fb64a4d8ab010bd97314e400401afb30391a45c6c128",
       "bytes": 20044
+    },
+    {
+      "path": ".local-worker/agent-runtime/endpoint-access.cjs",
+      "sha256": "1226b0645e901e2c6bdcdf517900c523e12e609c58a076b71a0a7ecec54e7fca",
+      "bytes": 2034
     },
     {
       "path": ".local-worker/agent-runtime/export-presets.cjs",
@@ -26,8 +31,8 @@
     },
     {
       "path": ".local-worker/agent-runtime/pi-protection.ts",
-      "sha256": "b51536b0b2a950165ce16f6b965aab17f39e8cd093c37a4c70c4b7f3ece54ed0",
-      "bytes": 1757
+      "sha256": "622310595faa99a3156a4320a37d6bea097d89c1d9a29d9449cfe85cfc7eac34",
+      "bytes": 1907
     },
     {
       "path": ".local-worker/agent-runtime/pnpm-lock.yaml",
@@ -51,18 +56,18 @@
     },
     {
       "path": ".local-worker/agent-runtime/record-protection.cjs",
-      "sha256": "28e5f1d32c699a4a8a1cb0f8caf0fb41cc864a9559c13c63b97bc1240f7fae30",
-      "bytes": 4717
+      "sha256": "b50927764ee5024bddde50b21b619fe3614b58b06d7502b1318c65dccfbdccd1",
+      "bytes": 4895
     },
     {
       "path": ".local-worker/agent-runtime/run-dsh.mjs",
-      "sha256": "ff9342ec60ceff375758dd4d892bed73ec38fc6133e5eb3bd9af916532c79ce3",
-      "bytes": 6287
+      "sha256": "03e556952899ff7496f7038655f57954fccd2c878fe87e52f1ec0bd056537537",
+      "bytes": 6414
     },
     {
       "path": ".local-worker/agent-runtime/run-pi.mjs",
-      "sha256": "0ad66dc11fa2c63dfbc8e1453ead60ca328da1f610c4ca4be02a330535ada057",
-      "bytes": 7053
+      "sha256": "f742dc8bf1e689e480bc6ddae651b994d801d11eb9ab359ccfd8009574935bc5",
+      "bytes": 7106
     },
     {
       "path": ".local-worker/agent-runtime/subagent-bridge.cjs",
@@ -191,8 +196,8 @@
     },
     {
       "path": ".local-worker/dsh_worker.py",
-      "sha256": "9015425ee64bb78a53807ce1549a2dce040b991dc565721098d247eb500ce048",
-      "bytes": 42800
+      "sha256": "5acfa9eade4821719406e19493bb7f9272bf7c40892c23b6cdbbc628708036cc",
+      "bytes": 43197
     },
     {
       "path": ".local-worker/empty.env",
@@ -200,9 +205,14 @@
       "bytes": 45
     },
     {
+      "path": ".local-worker/endpoint_access.py",
+      "sha256": "cc9a80ba489032a7ea8214abf611145bedd15e01a8c08cb30e866ec222f4dee6",
+      "bytes": 2050
+    },
+    {
       "path": ".local-worker/execution_endpoints.py",
-      "sha256": "7583f3989f8acfa4352fcf0e8d1e0954b3c0dd2a28cf8825b972f6e36ca9b5e4",
-      "bytes": 9372
+      "sha256": "4796761df87cc8f3ba0c8126664db9a7c57d4c0915d0b06e68ef454cd82988d6",
+      "bytes": 9824
     },
     {
       "path": ".local-worker/execution_engines.py",
@@ -271,8 +281,8 @@
     },
     {
       "path": ".local-worker/panel/app.js",
-      "sha256": "a0a371e1b156da1c6cbcd1a1ab58891fd2ca5c31cdabea0db1fe50f63b2ef2ca",
-      "bytes": 168206
+      "sha256": "602e7b63af63fc9a7f003b33afaf3124aa160e1e4b2f1abdc9ab7175edabc5e2",
+      "bytes": 168763
     },
     {
       "path": ".local-worker/panel/codex-bridge.js",
@@ -291,8 +301,8 @@
     },
     {
       "path": ".local-worker/panel_server.py",
-      "sha256": "4e9d6fa3e64562c46a95f923341be61a99501c227ea22f8c11affc43e838e13b",
-      "bytes": 146007
+      "sha256": "6157d2126522c08756bb8eca20beacbbb30805c9a712f0b588103065bb44de69",
+      "bytes": 146195
     },
     {
       "path": ".local-worker/panel_service.py",
@@ -301,8 +311,8 @@
     },
     {
       "path": ".local-worker/pi_worker.py",
-      "sha256": "b7d575e431fcb210faa4a663b9b6ed7eeeeb826ff685a18baf68cff92768756b",
-      "bytes": 10781
+      "sha256": "f431316396e4175943b62d014dfcc38215534de3dc8e0458eab3ea27730bf004",
+      "bytes": 11165
     },
     {
       "path": ".local-worker/powershell_runtime.py",
@@ -331,8 +341,8 @@
     },
     {
       "path": ".local-worker/record_protection.py",
-      "sha256": "fb787da1c8b75c9bb94e72ee983d1b64619a9e1a2854034a49ea28a7d7ed457d",
-      "bytes": 7247
+      "sha256": "92817690379fba14f63c0f7a26c67b6ba093ec87c5c045a5499b331f971a81ae",
+      "bytes": 7291
     },
     {
       "path": ".local-worker/recovery_retry.py",
@@ -551,8 +561,8 @@
     },
     {
       "path": ".local-worker/tests/test_dsh.py",
-      "sha256": "e39e711931d04c37a0a7d482f48991ca6b41c5e828df136ec3343d1350f1e650",
-      "bytes": 23360
+      "sha256": "b7054eddeb496be0c182b60c58437d5242d5ebbcb546d2907e786484681438cb",
+      "bytes": 23465
     },
     {
       "path": ".local-worker/tests/test_dsh_account.cjs",
@@ -590,14 +600,24 @@
       "bytes": 3617
     },
     {
+      "path": ".local-worker/tests/test_endpoint_access.cjs",
+      "sha256": "f3d95cb92b1dfb3e2b8674b4606094a73fe7b57581848c3ca111c684c4b50a71",
+      "bytes": 1823
+    },
+    {
+      "path": ".local-worker/tests/test_endpoint_access.py",
+      "sha256": "4249653bf30d7603d75a23a07bbdb0d21f577565be2e4c41cbf0c4ce2af44623",
+      "bytes": 4381
+    },
+    {
       "path": ".local-worker/tests/test_endpoint_cards.cjs",
-      "sha256": "72536922e6be27061d7e3ebb185aeb764d58f90d4cc5293734f9c13c3b47d753",
-      "bytes": 10790
+      "sha256": "7d7cd0591e58c86454509d3ee825c0bd540cb01083ffdaf82926e93669659f6c",
+      "bytes": 12177
     },
     {
       "path": ".local-worker/tests/test_execution_endpoints.py",
-      "sha256": "153edd9cb1054889e414a8ac32227777b8782c984e59dab43ce2d1eae897a6dd",
-      "bytes": 15882
+      "sha256": "039b3064dca9cf74a74dc53ae5104462fc630c6f9b8e586a8c2ebbfc004ca305",
+      "bytes": 16802
     },
     {
       "path": ".local-worker/tests/test_execution_engines.py",
@@ -681,8 +701,8 @@
     },
     {
       "path": ".local-worker/tests/test_pi_runtime.py",
-      "sha256": "5ac648289d3f69fbc051e9aaa52890e419ea1e390c6ddaf37901b642e3d1fd48",
-      "bytes": 10367
+      "sha256": "340c11496b0d0475f7d43d1a76b8079bce1a37497dadb1783d449a0a51a7dfbb",
+      "bytes": 11221
     },
     {
       "path": ".local-worker/tests/test_plugin_project_binding.mjs",
@@ -731,13 +751,13 @@
     },
     {
       "path": ".local-worker/tests/test_record_protection.py",
-      "sha256": "7c81b88bc72b74f94e40610c040f65a6934492ffe2c1534a583a7133f517ff88",
-      "bytes": 16302
+      "sha256": "758898371d00f1d47e08ed50710a40293f3436eff01bae71efdefea1e11cb496",
+      "bytes": 16393
     },
     {
       "path": ".local-worker/tests/test_record_protection_runtime.cjs",
-      "sha256": "d039fb38fe061a39d0b86b502c25a936dca0d9e75d8ac5613db2439e9bb7953d",
-      "bytes": 24091
+      "sha256": "7edfe04a76d8dbf3c15913daedc6733fabb33694377ca5698213248cd2fcbfa6",
+      "bytes": 25519
     },
     {
       "path": ".local-worker/tests/test_recovery_mcp_route.py",
@@ -946,8 +966,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "e2dc0aabc76985f5e40809fd73ecd236cfa4fb58a9e3558e130e1427e54e08e9",
-      "bytes": 5421
+      "sha256": "24e309f09991c063795267cdfeeca704deb5a2903ce6d10434b32b2a770c3de6",
+      "bytes": 5698
     },
     {
       "path": "LICENSE",
@@ -971,8 +991,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "5ee50100506212b0bcd602d09cd4aadfa8d2c356c1b6d7630d786885a039e66d",
-      "bytes": 6917
+      "sha256": "3eefa0d29007df801fb3ade164e5f0124a439264b99417702b00bde38dde9d35",
+      "bytes": 8196
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -996,8 +1016,8 @@
     },
     {
       "path": "docs/EXECUTION_ENDPOINTS.md",
-      "sha256": "77bc223397e11764eba0fc6cb2a48905d39c9339cd385cf0e6f43f3706b05012",
-      "bytes": 6091
+      "sha256": "b8c5dc335f43a807b769806be156a42e9a55b4cd0e0ad41062124caf8b2326c3",
+      "bytes": 6957
     },
     {
       "path": "docs/GIT_WORKFLOW.md",

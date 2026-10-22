@@ -50,3 +50,6 @@ build/
 Thumbs.db
 .DS_Store
 .local-worker/desktop-integrations/
+
+.local-worker/endpoint-access.json
+.local-worker/endpoint-access.lock

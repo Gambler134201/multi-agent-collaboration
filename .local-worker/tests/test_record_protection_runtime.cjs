@@ -64,13 +64,13 @@ const HELPER = [
   '             "model": "record-probe", "agent_preset": req["preset"], "api_base": req["api_base"],',
   '             "api_key": "", "bypass_proxy": True, "max_input_tokens": 32768, "max_output_tokens": 1024}',
   '    preset = preset_runtime.load(model, dsh_worker.EXECUTABLE)',
-  '    patch = dsh_worker.build_patch(model, req["kind"], preset, record_root=project)',
+  '    patch = dsh_worker.build_patch(model, req["kind"], preset, record_root=project, access=req.get("access", "full"))',
   '    patch[3]["config"]["workspaceRoot"] = str(project)',
   '    if req.get("extra_plugin"):',
   '        patch.append({"insert": [{"name": req["extra_plugin"], "config": req.get("extra_config") or {}}]})',
   '    Path(req["patch"]).write_text(yaml.dump(patch, Dumper=preset_runtime.Dumper, allow_unicode=True, sort_keys=False), encoding="utf-8")',
   '    job = dict(dsh_worker.availability())',
-  '    job.update({"task_id": req["task_id"], "kind": req["kind"], "model": model["model"], "cwd": str(project),',
+  '    job.update({"access_mode": req.get("access", "full"), "task_id": req["task_id"], "kind": req["kind"], "model": model["model"], "cwd": str(project),',
   '                "patch": req["patch"], "state_dir": req["state_dir"], "session_key": req["session_key"],',
   '                "prompt_file": req["prompt"], "cancel_file": req["cancel"], "timeout": 0,',
   '                "record_proof": req["record_proof"], "record_revision": req.get("revision_override") or record_protection.revision(),',
@@ -191,7 +191,7 @@ async function runDsh(box, kind, apiBase, options) {
   const settings = options || {};
   const request = {
     mode: 'render', root: ROOT, sandbox: box.sandbox, project: box.project, run: box.run,
-    task_id: box.taskId, kind, provider: settings.preset === 'native' ? 'local' : 'custom',
+    task_id: box.taskId, kind, access: settings.access || 'full', provider: settings.preset === 'native' ? 'local' : 'custom',
     preset: settings.preset, api_base: apiBase, state_dir: path.join(box.sandbox, 'state'),
     session_key: 'record-probe-' + box.taskId + '-' + kind,
     patch: path.join(box.sandbox, 'patch-' + kind + '.yml'),
@@ -428,6 +428,27 @@ async function staleIdentityScenario() {
   fs.rmSync(box.sandbox, { recursive: true, force: true });
 }
 
+async function accessScenario(access) {
+  const box=makeSandbox('access-'+access),outside=path.join(box.sandbox,'ordinary.txt');
+  const provider=await startProvider([{id:'outside-write',name:'write',args:{file_path:outside,content:'ordinary'}}]);
+  try{
+    const outcome=await runDsh(box,'edit','http://127.0.0.1:'+provider.port+'/v1',{preset:'native',access});
+    check('DSH '+access+': native adapter starts with matching access proof',()=>{
+      if(outcome.done.status!==0)throw Error(outcome.done.stderr||outcome.done.stdout);
+      const proof=JSON.parse(fs.readFileSync(path.join(box.run,'record-proof.json'),'utf8'));
+      if(proof.access_mode!==access)throw Error('permission snapshot mismatch');
+    });
+    check('DSH '+access+': actual outside write follows selected permission',()=>{
+      if(access==='full'){
+        if(fs.readFileSync(outside,'utf8')!=='ordinary')throw Error('full write failed');
+      }else{
+        if(fs.existsSync(outside))throw Error('outside write was allowed');
+        if(!(toolResults(provider.captured).get('outside-write')||'').includes('项目外'))throw Error('missing containment refusal');
+      }
+    });
+  }finally{provider.server.close();fs.rmSync(box.sandbox,{recursive:true,force:true});}
+}
+
 async function main() {
   if (!fs.existsSync(PYTHON)) throw new Error('the project venv python is missing: ' + PYTHON);
   if (!fs.existsSync(RUNNER)) throw new Error('the DSH runner is missing: ' + RUNNER);
@@ -436,6 +457,8 @@ async function main() {
   await editScenario('standard');
   await chatScenario();
   await staleIdentityScenario();
+  await accessScenario('full');
+  await accessScenario('project');
   console.log('\n' + checks + '/' + (checks + failures.length) + ' checks passed');
   if (failures.length) {
     for (const failure of failures) console.error('failed: ' + failure);

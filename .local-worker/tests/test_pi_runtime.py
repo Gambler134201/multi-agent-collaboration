@@ -81,11 +81,11 @@ class PiRuntimeTests(unittest.TestCase):
         registry.HERE, registry.REGISTRY, registry.RUNS = self.saved
         self.temp.cleanup()
 
-    def run_pi(self, kind='edit', name='pi-runtime', parent=None):
+    def run_pi(self, kind='edit', name='pi-runtime', parent=None, access='full'):
         run = self.project / '.model-desk' / 'runs' / name
         run.mkdir(parents=True)
         (run / 'prompt.txt').write_text('Execute the scripted fixture task.', encoding='utf-8')
-        state = dict(id=name, engine='pi', kind=kind, project=str(self.project), files=['source.txt'] if kind == 'edit' else [],
+        state = dict(id=name, engine='pi', kind=kind, execution_access_mode=access, project=str(self.project), files=['source.txt'] if kind == 'edit' else [],
                      model_id=self.model['id'], model=self.model['model'], timeout=60, route={'mode': 'manual'})
         if parent:
             for key in ('pi_session_id', 'pi_session_file', 'connection_fingerprint'):
@@ -100,6 +100,21 @@ class PiRuntimeTests(unittest.TestCase):
         self.assertTrue(record['record_protection'])
         self.assertEqual(record['engine'], 'pi')
         return run, record
+
+    def test_project_permission_blocks_real_pi_outside_write(self):
+        target = self.box / 'outside.txt'
+        self.steps = [('write', {'path': str(target), 'content': 'forbidden'})]
+        _, record = self.run_pi(access='project')
+        self.assertFalse(target.exists())
+        self.assertIn('项目外', self.tool_results()['tool-0'])
+        self.assertEqual(record['sandbox_mode'], 'project-argument-guard')
+
+    def test_full_permission_allows_real_pi_ordinary_outside_write(self):
+        target = self.box / 'outside.txt'
+        self.steps = [('write', {'path': str(target), 'content': 'allowed'})]
+        _, record = self.run_pi(access='full')
+        self.assertEqual(target.read_text(encoding='utf-8'), 'allowed')
+        self.assertEqual(record['sandbox_mode'], 'danger-full-access')
 
     def tool_results(self):
         return {message['tool_call_id']: str(message.get('content'))

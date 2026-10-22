@@ -25,6 +25,7 @@ const verifyRecordProtection=async sessionId=>{
   if(!recordProof)throw new Error('任务缺少工作台记录写入保护配置，已拒绝执行；请创建新任务');
   const data=await readRecordProof();
   if(!data)throw new Error('工作台记录写入保护未在 DSH 中装载，已拒绝执行；请创建新任务');
+  if((data.access_mode||'full')!==(job.access_mode||'full'))throw new Error('DSH 访问权限保护与任务快照不一致');
   if(data.source!=='model-desk-record-protection'||data.probe!=='ok'||data.scope!=='global')throw new Error('工作台记录写入保护未在全局工具层生效，已拒绝执行');
   if(String(data.revision||'')!==recordRevision)throw new Error('工作台记录写入保护内容与派发记录不一致，已拒绝执行；请创建新任务');
   if(normPath(data.root)!==normPath(recordRoot))throw new Error('工作台记录写入保护的项目目录与任务不一致，已拒绝执行');

@@ -1307,6 +1307,8 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     # A corrective round keeps the original model/project/files but starts a new
     # session by default; only --reuse-session copies the old session identity.
     link_parent = parent or rework_parent
+    import endpoint_access
+    execution_access = endpoint_access.for_dispatch(engine, link_parent) if engine in ('pi', 'dsh') else None
     if engine == 'pi' and not project:
         raise ValueError('Pi 任务请先选择项目目录；不能猜测当前项目')
     stage_id = str(body.get("stage_id") or "").strip()
@@ -1418,6 +1420,7 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         'workbuddy_connection': native_connection,
         'workbuddy_tool_mode': native_tool_mode, 'workbuddy_tool_revision': native_tool_revision,
         'workbuddy_access_mode': native_access_mode,
+        'execution_access_mode': execution_access,
         'connectivity_check': {'source': 'pre_dispatch',
                                'rechecked': bool(connectivity['checked']),
                                'blocked': bool(connectivity['blocked']),

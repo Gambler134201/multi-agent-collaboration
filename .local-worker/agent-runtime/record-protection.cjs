@@ -33,7 +33,7 @@ const PLUGIN_FILE = __filename;
 /** Content identity of the exact protection code DSH loaded. */
 function selfRevision() {
   const digest = crypto.createHash('sha256');
-  for (const file of [POLICY_FILE, PLUGIN_FILE]) digest.update(fs.readFileSync(file));
+  for (const file of [POLICY_FILE, PLUGIN_FILE, path.join(__dirname, 'endpoint-access.cjs')]) digest.update(fs.readFileSync(file));
   return digest.digest('hex');
 }
 
@@ -79,7 +79,8 @@ function apply(ctx, config) {
   if (!expected) throw new Error('Model Desk 记录保护缺少内容指纹，已拒绝装载');
   if (expected !== actual) throw new Error('Model Desk 记录保护内容指纹不一致，已拒绝装载');
 
-  const decide = policy.createGuard({ root });
+  const accessMode = settings.access_mode || 'full';
+  const decide = require('./endpoint-access.cjs').createGuard({ root, access_mode: accessMode });
   const guard = (exec) => decide(exec && exec.name, exec && exec.arguments);
 
   const dispose = ctx.tools.guard(guard);
@@ -101,6 +102,7 @@ function apply(ctx, config) {
     revision: actual,
     root,
     scope: 'global',
+    access_mode: accessMode,
     probe: 'ok',
     pid: process.pid,
     at: new Date().toISOString(),

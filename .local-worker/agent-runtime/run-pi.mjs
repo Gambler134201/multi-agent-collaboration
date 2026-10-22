@@ -75,7 +75,7 @@ try {
   if (!state.sessionFile || !samePath(path.dirname(state.sessionFile), job.session_file ? path.dirname(job.session_file) : job.session_dir)) throw new Error('Pi 会话文件不属于指定任务目录');
   const proof = JSON.parse(fs.readFileSync(job.proof_file, 'utf8'));
   if (extensionError || proof.source !== 'model-desk-pi-protection' || proof.revision !== job.revision ||
-      proof.session_id !== state.sessionId || !samePath(proof.root, job.cwd) || proof.kind !== job.kind || !proof.tools_guard) throw new Error('Pi 记录写入保护未绑定本任务，已拒绝开始');
+      proof.session_id !== state.sessionId || !samePath(proof.root, job.cwd) || proof.kind !== job.kind || proof.access_mode !== (job.access_mode || 'full') || !proof.tools_guard) throw new Error('Pi 记录写入保护未绑定本任务，已拒绝开始');
   emit({ type: 'session', session_id: state.sessionId, session_file: state.sessionFile });
   emit({ type: 'record_protection', engine: 'pi', session_id: state.sessionId });
   await request('set_auto_retry', { enabled: false });

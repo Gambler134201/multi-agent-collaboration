@@ -10,7 +10,7 @@ function endpointModelAction(model,action,label){
 
 function renderNativeAccess(endpoint){
   const access=endpoint.runtime?.access_mode,known=['project','full'].includes(access);
-  return `<label>WorkBuddy 访问权限<select data-native-access ${endpointSaving?'disabled':''}>${known?'':'<option value="" selected>权限未知，请选择</option>'}<option value="project" ${access==='project'?'selected':''}>项目范围</option><option value="full" ${access==='full'?'selected':''}>完全访问</option></select></label><p class="field-hint">完全访问允许项目外普通文件读写，使用原生完全访问权限。工作台记录、认证及原生配置目录仍受保护；不开放子代理或后台任务。仅影响新任务，旧任务/整改保持原权限；自动文件统计仍只覆盖列明的业务文件。</p>`;
+  return `<label>${escapeText(endpoint.name)} 访问权限<select data-native-access data-access-endpoint="${endpoint.id}" ${endpointSaving?'disabled':''}>${known?'':'<option value="" selected>权限未知，请选择</option>'}<option value="project" ${access==='project'?'selected':''}>项目范围</option><option value="full" ${access==='full'?'selected':''}>完全访问</option></select></label><p class="field-hint">${endpoint.id==='workbuddy'?'完全访问允许项目外普通文件读写，使用原生完全访问权限。工作台记录、认证及原生配置目录仍受保护；不开放子代理或后台任务。':endpoint.id==='pi'?'项目范围通过工具参数校验限制显式路径；Pi 没有操作系统沙箱，任意脚本的动态路径无法保证拦截。完全访问允许项目外普通文件读写。工作台记录保护始终保留。':'项目范围使用 DSH workspace-write 策略并校验工具显式路径；完全访问使用 danger-full-access。工作台记录保护始终保留。'}只读聊天始终只读。仅影响新任务，旧任务/整改保持原权限；自动文件统计仍只覆盖列明的业务文件。</p>`;
 }
 
 function renderNativeSettings(endpoint,model){
@@ -45,7 +45,7 @@ function renderEndpointCards(){
     const wallet=native?'<div class="endpoint-wallet"><div><span>WorkBuddy 账户积分</span><strong>未同步</strong></div><small>使用登录账户原生积分</small></div>':model?.billing?`<div class="endpoint-wallet endpoint-billing"><div class="endpoint-wallet-source">${escapeText(providerNames[model.provider]||model.provider)} API 账户余额</div>${renderBilling(model)}</div>`:`<div class="endpoint-wallet"><div><span>${model?.provider==='local'?'账户余额':'账户余额'}</span><strong>${model?.provider==='local'?'不适用':model?'暂不支持查询':'按任务模型显示'}</strong></div><small>${model?.provider==='local'?'本地运行，不经云端账户扣费':model?'此服务暂无余额读取适配':'展开设置查看模型及各自余额'}</small></div>`;
     return `<article class="endpoint-card ${model?.billing?'billing-model':''} ${endpoint.enabled?'':'endpoint-disabled'}" data-endpoint-id="${endpoint.id}">
       <div class="endpoint-head"><div class="endpoint-mark" aria-hidden="true">${({pi:'Pi',dsh:'DSH',workbuddy:'WB'})[endpoint.id]}</div><div><h3>${escapeText(endpoint.name)}</h3><span class="subtle">${native?'登录账户模型 / 原生积分':'API / 本地模型'}</span></div></div>
-      <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}${native&&runtime.access_mode?' · '+(runtime.access_mode==='full'?'完全访问':'项目范围'):''}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
+      <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}${runtime.access_mode?' · '+(runtime.access_mode==='full'?'完全访问':'项目范围'):''}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
       <div class="endpoint-current"><span class="label">${native?'指定原生模型':'当前模型 · 自动路由'}</span><strong>${escapeText(name)}</strong><div class="model-code">${escapeText(modelCode)}</div></div>
       ${wallet}<div class="endpoint-status">${status}<span class="subtle">${jobs.length?`${jobs.length} 个本项目活动任务`:native?'原生账户 · 以派发预检为准':model?.last_check?.ok?'最近连接测试通过':'未验证当前连接'}</span></div>
       <button type="button" class="button secondary endpoint-expand" data-endpoint-expand="${endpoint.id}" aria-haspopup="dialog" aria-controls="endpoint-dialog">参数设置<span aria-hidden="true">↗</span></button>
@@ -56,7 +56,7 @@ function renderEndpointCards(){
 function endpointConnections(endpoint){
   const data=state.execution_endpoints;
   const native=endpoint.id==='workbuddy',model=endpoint.model,group=endpoint.models||[];
-  return `        ${native?renderNativeSettings(endpoint,model):`
+  return `        ${native?renderNativeSettings(endpoint,model):`${renderNativeAccess(endpoint)}
         <label>自动路由使用模型<select data-endpoint-model="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><option value="">按任务选择（保留原有路由）</option>${endpoint.current_model&&!group.some(m=>m.id===endpoint.current_model)?`<option selected value="${escapeText(endpoint.current_model)}">已保存模型不可用，请重新选择</option>`:''}${group.map(m=>`<option value="${escapeText(m.id)}" ${endpoint.current_model===m.id?'selected':''} ${m.enabled?'':'disabled'}>${escapeText(m.name)}${m.enabled?'':'（已停用）'}</option>`).join('')}</select></label>
         <p class="field-hint">选择后自动路由使用此模型；手动任务可明确指定此执行端的其他模型。已有任务保持原模型。</p>
         ${endpoint.selection_error?`<p class="form-error">${escapeText(endpoint.selection_error)}</p>`:''}
@@ -112,7 +112,7 @@ function setupEndpointCards(){
     if(button.dataset.endpointAdd)openModel(null,button.dataset.endpointAdd);
     if(button.dataset.endpointParameters){const id=button.dataset.endpointParameters,row=state.execution_endpoints.rows.find(e=>e.id===id);$('agent-settings-open').onclick();$('agent-settings-agent').value=id;$('agent-settings-model').value=row?.model?.id||row?.models?.[0]?.id||'';renderAgentSettings();}
   });
-  target.addEventListener('change',event=>{if(event.target.hasAttribute('data-native-access')){saveEndpoint('workbuddy',{access_mode:event.target.value});return;}if(event.target.hasAttribute('data-native-model'))nativeModelDraft=event.target.value;if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
+  target.addEventListener('change',event=>{if(event.target.hasAttribute('data-native-access')){saveEndpoint(event.target.dataset.accessEndpoint,{access_mode:event.target.value});return;}if(event.target.hasAttribute('data-native-model'))nativeModelDraft=event.target.value;if(event.target.dataset.endpointModel)saveEndpoint(event.target.dataset.endpointModel,{current_model:event.target.value||null});});
 }
 }
 

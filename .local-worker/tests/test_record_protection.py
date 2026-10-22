@@ -38,7 +38,8 @@ def sha256_of(paths):
 class RevisionTests(unittest.TestCase):
     def test_revision_is_the_content_identity_of_both_runtime_files(self):
         self.assertEqual(protection.revision(),
-                         sha256_of([protection.POLICY_FILE, protection.PLUGIN_FILE]))
+                         sha256_of([protection.POLICY_FILE, protection.PLUGIN_FILE,
+                                    protection.HERE / 'agent-runtime/endpoint-access.cjs']))
         self.assertRegex(protection.revision(), r'^[0-9a-f]{64}$')
 
     def test_revision_changes_when_the_runtime_code_changes(self):

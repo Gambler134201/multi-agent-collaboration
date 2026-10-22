@@ -44,7 +44,7 @@ __all__ = ['PROTECTED_NAME', 'PROOF_NAME', 'PLUGIN_ID', 'SOURCE', 'revision', 'p
 def revision():
     """Content identity of the loaded guard code (both runtime files)."""
     digest = hashlib.sha256()
-    for path in (POLICY_FILE, PLUGIN_FILE):
+    for path in (POLICY_FILE, PLUGIN_FILE, HERE / 'agent-runtime/endpoint-access.cjs'):
         digest.update(path.read_bytes())
     return digest.hexdigest()
 

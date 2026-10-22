@@ -83,7 +83,7 @@ class DshTests(unittest.TestCase):
         parent = registry.task_dir('original')
         parent.mkdir(parents=True)
         registry.patch_task(parent, id='original', model_id='home', kind='edit', engine='dsh', status='completed',
-            project=str(registry.HERE), files=['sample.py'], dsh_session_key='desk-original', dsh_session_id='native-id')
+            project=str(registry.HERE), files=['sample.py'], execution_access_mode='project', dsh_session_key='desk-original', dsh_session_id='native-id')
         body = {'model_id': 'home', 'kind': 'edit', 'engine': 'dsh', 'project': str(registry.HERE),
                 'files': ['sample.py'], 'prompt': 'continue', 'continue_task': 'original'}
         # This checks continuation identity/scope, not a live DSH installation.
@@ -92,6 +92,7 @@ class DshTests(unittest.TestCase):
             child = panel.submit_task(body)
             self.assertEqual(child['dsh_session_key'], 'desk-original')
             self.assertEqual(child['parent_task_id'], 'original')
+            self.assertEqual(child['execution_access_mode'], 'project')
             queued.assert_called_once()
             with self.assertRaises(ValueError):
                 panel.submit_task({**body, 'files': ['different.py']})

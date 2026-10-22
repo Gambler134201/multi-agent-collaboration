@@ -93,6 +93,9 @@ def gate(engine, model, settings, *, controls=None, automatic=False):
 
 
 def update(endpoint, body, settings):
+    if endpoint in ('pi', 'dsh') and isinstance(body, dict) and set(body) == {'access_mode'}:
+        import endpoint_access
+        return endpoint_access.update(endpoint, body['access_mode'])
     if endpoint == 'workbuddy' and isinstance(body, dict) and set(body) == {'access_mode'}:
         import workbuddy_native_tools
         return workbuddy_native_tools.set_access_mode(body['access_mode'])
@@ -158,7 +161,13 @@ def public_rows(models, settings, agents=None):
         selected = next((m for m in group if m['id'] == pref['current_model']), None)
         # No migration: several legacy models remain eligible until explicitly selected.
         display = selected if pref['current_model'] else enabled_models[0] if len(enabled_models) == 1 else None
-        info = agents.get(key, {})
+        info = dict(agents.get(key, {}))
+        if key in ('pi', 'dsh'):
+            import endpoint_access
+            try:
+                info['access_mode'] = endpoint_access.saved(key)
+            except ValueError as exc:
+                info.update(access_mode=None, message=str(exc))
         rows.append({'id': key, 'name': LABELS[key], **pref, 'models': group,
                      'preset': pref.get('preset'),
                      'model': display, 'runtime': info, 'ready': bool(info.get('ready')),

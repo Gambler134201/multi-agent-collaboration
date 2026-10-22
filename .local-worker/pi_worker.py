@@ -10,6 +10,7 @@ import sys
 import context_manager
 import model_registry as registry
 import record_protection
+import endpoint_access
 import runtime_paths
 
 HERE = Path(__file__).resolve().parent
@@ -59,7 +60,7 @@ def availability():
 
 def revision():
     digest = hashlib.sha256()
-    for file in (EXTENSION, RUNNER, record_protection.POLICY_FILE):
+    for file in (EXTENSION, RUNNER, record_protection.POLICY_FILE, HERE / 'agent-runtime/endpoint-access.cjs'):
         digest.update(file.read_bytes())
     return digest.hexdigest()
 
@@ -67,7 +68,7 @@ def revision():
 def fingerprint(model, state, project):
     data = ['pi', availability()['version'], str(CLI), model['id'], model['model'], model['api_base'],
             model.get('max_input_tokens'), model.get('max_output_tokens'), model.get('thinking_level', 'default'),
-            state['kind'], str(project), revision()]
+            state['kind'], str(project), revision(), endpoint_access.task_mode(state)]
     return hashlib.sha256(json.dumps(data, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -114,7 +115,7 @@ def prepare(run, state, model, relay):
                     'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0}}]}}})
     registry.write_json(agent_dir / 'settings.json', {'retry': {'enabled': False}, 'packages': [],
                          'enableSkillCommands': False, 'quietStartup': True})
-    job = {'task_id': state['id'], 'kind': state['kind'], 'cwd': str(project), 'model': model['model'],
+    job = {'access_mode': endpoint_access.task_mode(state), 'task_id': state['id'], 'kind': state['kind'], 'cwd': str(project), 'model': model['model'],
            'node': str(NODE), 'cli': str(CLI), 'extension': str(EXTENSION), 'policy': str(record_protection.POLICY_FILE),
            'agent_dir': str(agent_dir), 'session_file': str(session_file) if session_file else None,
            'session_dir': str(run / 'pi-sessions'), 'session_id': state.get('pi_session_id'),
@@ -129,7 +130,7 @@ def prepare(run, state, model, relay):
                 'NO_PROXY': '127.0.0.1,localhost', 'no_proxy': '127.0.0.1,localhost'})
     registry.patch_task(run, engine='pi', status='running', phase='启动 Pi Agent', started_at=registry.now(),
                         worker_pid=os.getpid(), connection_fingerprint=identity,
-                        executor_version=info['version'], sandbox_mode='danger-full-access' if state['kind'] == 'edit' else 'read-only',
+                        executor_version=info['version'], sandbox_mode=('project-argument-guard' if state['kind'] == 'edit' and endpoint_access.task_mode(state) == 'project' else endpoint_access.sandbox(state['kind'])),
                         subagent_decision={'decision': 'deny', 'reason': 'Pi 尚无实测子代理授权，未加载额外工具或扩展'})
     process = subprocess.Popen([str(NODE), str(RUNNER), str(job_file)], cwd=project, env=env,
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -145,6 +146,8 @@ def verify(run, project, session_id):
     if Path(proof.get('root') or '').resolve() != project.resolve() or proof.get('source') != 'model-desk-pi-protection':
         raise ValueError('Pi 保护证据不属于当前项目')
     state = registry.read_task(run)
+    if proof.get('access_mode', 'full') != endpoint_access.task_mode(state):
+        raise ValueError('Pi 访问权限保护与任务快照不一致')
     if proof.get('tools_guard') is not True or proof.get('kind') != state.get('kind') or proof.get('session_file') != state.get('pi_session_file'):
         raise ValueError('Pi 工具保护证据与任务模式或原会话文件不匹配')
     return proof
