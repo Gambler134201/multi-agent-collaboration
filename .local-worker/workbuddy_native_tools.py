@@ -26,6 +26,35 @@ DENIAL_LABELS = {
     'tool_not_allowed': '本任务未授权此工具',
     'guard_denied': '原生工具范围或权限保护拒绝',
     'unknown': '旧事件未记录拒绝分类'}
+DENIAL_RULES = {
+    'native_profile': '触及 WorkBuddy 原生配置目录',
+    'shell_protected_reference': '命令文本提及工作台记录或认证数据',
+    'record_ancestor': '删除或修改范围覆盖工作台记录的上级目录',
+    'record_target': '工具目标位于工作台记录目录内',
+    'protected_file': '文件目标属于记录、Git 元数据或环境配置',
+    'credential_store': '文件目标属于认证存储',
+    'runtime_config': '文件目标属于工作台运行配置',
+    'other_task': '文件目标属于其他任务或会话材料',
+    'hardlink': '目标存在硬链接别名',
+    'readonly_file': '尝试修改本任务只读上下文',
+    'outside_project': '文件目标位于项目范围外',
+    'undeclared_write': '文件未列入任务可写范围',
+    'git_mutation': '命令涉及 Git 历史或远端发布',
+    'background_job': '命令请求在后台运行',
+    'sandbox_override': '命令请求绕过原生沙箱',
+    'unverified_recursive_cleanup': '递归清理使用了未核实的变量或通配符；请保留临时文件并报告主脑',
+    'profile_search': '检索目录覆盖原生配置',
+    'protected_search': '搜索表达式涉及受保护目录',
+    'tool_not_allowed': '本任务未授权此工具',
+    'prior_denial': '此前调用已被拒绝，本轮工具已暂停',
+    'unclassified': '未细分的保护规则',
+    'unknown': '旧事件未记录具体规则；不能还原命中路径'}
+
+
+def denial_detail(event):
+    rule = event.get('denial_rule')
+    rule = rule if isinstance(rule, str) and rule in DENIAL_RULES else 'unknown'
+    return {'rule': rule, 'detail': DENIAL_RULES[rule]}
 
 
 def access_mode():
@@ -154,7 +183,8 @@ def public_calls(proof):
                                  'unknown' if event.get('event') == 'PreToolUse' and event.get('allowed') else 'failed'),
                       'phase': event.get('event'), 'input_hash': event.get('input_hash'),
                       'exit_code': event.get('exit_code'),
-                      'denial_reason': DENIAL_LABELS.get(event.get('reason_code')) if event.get('allowed') is False else None}
+                      'denial_reason': DENIAL_LABELS.get(event.get('reason_code')) if event.get('allowed') is False else None,
+                      'denial_detail': denial_detail(event) if event.get('allowed') is False else None}
     return list(calls.values())
 
 
@@ -166,4 +196,4 @@ def denial_summary(proof):
     code = event.get('reason_code')
     code = code if isinstance(code, str) and code in DENIAL_LABELS else 'unknown'
     tool = event.get('tool') if event.get('tool') in TOOLS else 'Tool'
-    return {'tool': tool, 'reason_code': code, 'message': DENIAL_LABELS[code]}
+    return {'tool': tool, 'reason_code': code, 'message': DENIAL_LABELS[code], **denial_detail(event)}

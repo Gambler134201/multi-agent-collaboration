@@ -19,6 +19,42 @@ function denialCode(reason){
   if(/记录|认证|其他任务|原生配置|硬链接/.test(reason))return 'protected_data';
   return 'guard_denied';
 }
+// Fixed rule identifiers only: never log raw commands, paths or matched values.
+function denialRule(reason){
+  if(!reason)return null;
+  if(reason.startsWith('本轮工具已暂停'))return 'prior_denial';
+  if(reason==='终端不能访问原生配置目录'||reason==='原生配置目录不作为执行目标')return 'native_profile';
+  if(reason==='终端不能访问工作台记录或认证数据')return 'shell_protected_reference';
+  if(reason.includes('是工作台记录目录 .model-desk 的上级目录'))return 'record_ancestor';
+  if(reason.includes('位于工作台记录目录 .model-desk 内'))return 'record_target';
+  if(reason==='工作台记录、Git 元数据或认证配置不作为执行目标')return 'protected_file';
+  if(reason==='认证存储不作为执行目标')return 'credential_store';
+  if(reason==='运行账户配置不作为执行目标')return 'runtime_config';
+  if(reason==='不读取其他任务或会话材料')return 'other_task';
+  if(reason==='文件存在硬链接别名')return 'hardlink';
+  if(reason==='任务只读上下文不可修改')return 'readonly_file';
+  if(reason==='文件不属于本任务项目')return 'outside_project';
+  if(reason==='文件未列入本任务可写范围')return 'undeclared_write';
+  if(reason==='执行任务不修改 Git 历史或向远端发布')return 'git_mutation';
+  if(reason==='本任务终端须前台完成并返回退出结果')return 'background_job';
+  if(reason==='不能批准原生沙箱绕过')return 'sandbox_override';
+  if(reason==='递归清理目标包含未核实的变量或通配符，请保留临时文件并报告主脑')return 'unverified_recursive_cleanup';
+  if(reason==='目录检索范围包含原生配置；请选择更具体的文件')return 'profile_search';
+  if(reason==='搜索不包含记录或认证目录')return 'protected_search';
+  if(reason==='本任务未授权此原生工具'||reason==='只读任务没有终端权限')return 'tool_not_allowed';
+  return 'unclassified';
+}
+function unverifiedCleanup(command){
+  return (policy.commandGroups(command)||[command]).some(group=>{
+    const cleanup=/\b(?:rm|rmdir|remove-item|rd)\b/i.test(group);
+    const recursive=group.split(/\s+/).some(token=>{
+      const v=token.toLowerCase();
+      return ['-recurse','--recursive','/s'].includes(v)||v.startsWith('-recurse:')
+        || (/^-[a-z]{1,3}$/.test(v)&&v.includes('r'));
+    });
+    return cleanup&&recursive&&/[\$%*?`]/.test(group);
+  });
+}
 function target(job,value,write=false,browse=false){
   if(typeof value!=='string'||!value.trim())return '文件路径无效';
   const p=path.resolve(job.project,value),real=policy.realpathDeep(p),root=policy.realpathDeep(job.project);
@@ -57,6 +93,7 @@ function decide(job,input){
     if(args.run_in_background)return '本任务终端须前台完成并返回退出结果';
     if(args.dangerouslyDisableSandbox||args.disableSandbox)return '不能批准原生沙箱绕过';
     if(/\.model-desk(?![-\w.])|(?:^|[\\/\s"'])\.env(?:[.\s"']|$)|(?:auth|credential)[-_]?(?:token|store|file)/i.test(args.command))return '终端不能访问工作台记录或认证数据';
+    if(unverifiedCleanup(args.command))return '递归清理目标包含未核实的变量或通配符，请保留临时文件并报告主脑';
     if(args.cwd||args.workdir){const r=target(job,args.cwd||args.workdir,false,true);if(r)return r;}
     return policy.decide(name==='PowerShell'?'pwsh':'bash',args,{root:job.project})||null;
   }
@@ -87,6 +124,7 @@ function main(file,input){
   const commandHash=typeof input.tool_input?.command==='string'?hash(input.tool_input.command):null;
   const row={event:input.hook_event_name,session_id:input.session_id,nonce:job.nonce,call_id:input.tool_use_id||input.call_id||null,tool:input.tool_name,
     input_hash:hash(JSON.stringify(stable(input.tool_input||{}))),allowed:!reason,reason_code:reason?denialCode(reason):null,
+    denial_rule:denialRule(reason),
     command_hash:commandHash,exit_code:Number.isInteger(raw?.exitCode)?raw.exitCode:null,
     ok:input.hook_event_name==='PostToolUse'&&!(raw?.is_error||raw?.isError||raw?.interrupted||raw?.sandboxDenied||response?.error),at:new Date().toISOString()};
   fs.appendFileSync(path.join(run,'workbuddy-native-events.jsonl'),JSON.stringify(row)+'\n');
@@ -103,7 +141,7 @@ function main(file,input){
   return {}; // Native permission/sandbox rules still run for other tools.
 
 }
-module.exports={decide,target,main};
+module.exports={decide,target,main,denialRule};
 if(require.main===module){
   try{const input=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(main(process.argv[2],input)));}
   catch(_){process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'deny',permissionDecisionReason:'原生工具保护校验失败，请报告主脑'}}));process.exitCode=2;}

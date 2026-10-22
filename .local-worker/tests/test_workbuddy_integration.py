@@ -2,6 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 import io
+import json
 import hashlib
 import queue
 import sys
@@ -233,6 +234,15 @@ class IntegrationTests(Base):
                 if self.native_job:
                     if scenario != 'read_only':
                         (self.project/'a.py').write_text('native fixture changed',encoding='utf-8')
+                    if scenario == 'cleanup_denied':
+                        data = native_tools.load(self.native_job)
+                        event = {'event': 'PreToolUse', 'session_id': self.session_id,
+                                 'nonce': data['nonce'], 'call_id': 'fixture-cleanup', 'tool': 'Bash',
+                                 'allowed': False, 'reason_code': 'guard_denied',
+                                 'denial_rule': 'unverified_recursive_cleanup'}
+                        run = Path(self.native_job).parent
+                        (run/'workbuddy-native-events.jsonl').write_text(json.dumps(event)+'\n', encoding='utf-8')
+                        (run/'workbuddy-native-denied.flag').write_text('denied', encoding='utf-8')
                     native_proof=native_tools.verify(self.native_job,self.session_id)
                 if self.job:
                     server = tools.FileTools(self.job)
@@ -274,6 +284,20 @@ class IntegrationTests(Base):
         self.assertEqual(self.prompts, 1)
         with self.assertRaises(ValueError):
             worker.recovery_guard(row)
+
+    def test_generated_file_then_cleanup_denial_stays_failed_with_precise_rule(self):
+        task, run = self.dispatch()
+        code = worker.run_task(run, task, registry.get_model(task['model_id']), client_factory=self.client('cleanup_denied'))
+        row = registry.read_task(run)
+        self.assertEqual(code, 1)
+        self.assertEqual(row['status'], 'failed')
+        self.assertEqual(row['changed_files'], ['a.py'])
+        self.assertIn('unverified_recursive_cleanup', row['error'])
+        self.assertIn('变量或通配符', row['error'])
+        self.assertNotIn('认证', row['error'])
+        self.assertEqual(self.prompts, 1)
+        self.assertIn('不是验收条件', self.last_prompt)
+        self.assertNotIn(delegation_policy.load(run)['state'], {'accepted', 'final_accepted'})
 
     def test_cancel_closes_only_owned_client_before_terminal_status(self):
         task, run = self.dispatch()

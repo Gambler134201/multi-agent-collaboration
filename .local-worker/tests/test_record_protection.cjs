@@ -52,6 +52,15 @@ const allow = (tool, args, why) => {
 };
 
 // ------------------------------------------------- write / edit path handling
+test('literal cleanup and a separate read-only listing do not form a destructive pipeline', () => {
+  const ordinary=path.join(temp,'ordinary');
+  allow('bash',{command:`rm -rf "${ordinary}"; ls "${root}" | grep -c fixture || true`});
+  allow('pwsh',{command:'Remove-Item -LiteralPath src/cache -Recurse -Force; Get-ChildItem . | Format-List'});
+  deny('bash',{command:'ls . | xargs rm -rf'});
+  deny('pwsh',{command:'Get-ChildItem . | Remove-Item -Recurse -Force'});
+  deny('bash',{command:`rm -rf "${ordinary}"; ls . | xargs rm -rf`});
+});
+
 test('write into the record directory is denied (relative and absolute)', () => {
   deny('write', { file_path: path.join(records, 'records.db'), content: 'x' });
   deny('write', { file_path: '.model-desk/records.db', content: 'x' });

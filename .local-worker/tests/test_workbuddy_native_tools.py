@@ -92,6 +92,62 @@ class NativeToolsTests(unittest.TestCase):
             self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
         self.assertFalse(native.verify(self.job, self.sid)['writes_paused'])
 
+    def test_full_access_allows_specific_temporary_cleanup_without_executing_it(self):
+        self.new_access_job('specific-cleanup')
+        outside = self.root.parent / (self.root.name + '-ordinary')
+        commands = ['rm -f "' + str(outside / 'pelican-shot.png') + '" "' + str(outside / 'pelican-test.py') + '"',
+                    'Remove-Item -LiteralPath "' + str(outside / 'pelican-shot.png') + '" -Force']
+        for command in commands:
+            _, result = self.hook('PreToolUse', 'Bash', {'command': command})
+            self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+        self.assertFalse(native.verify(self.job, self.sid)['writes_paused'])
+
+    def test_literal_cleanup_then_readonly_listing_is_not_root_deletion(self):
+        self.new_access_job('cleanup-readonly-tail')
+        outside = str(self.root.parent / (self.root.name + '-ordinary'))
+        command = 'rm -rf "' + outside + '"; ls "' + str(self.root) + '" | grep -c fixture || true'
+        _, result = self.hook('PreToolUse', 'Bash', {'command': command})
+        self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+
+    def test_variable_wildcard_recursive_cleanup_has_accurate_noncredential_rule(self):
+        self.new_access_job('cleanup-variable-rule')
+        command = 'rm -f "$TEMP"/fixture-*.png && rm -rf "$TEMP"/browser-profile-* 2>/dev/null; ls "$TEMP" | grep -c fixture || true'
+        _, result = self.hook('PreToolUse', 'Bash', {'command': command})
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+        summary = native.denial_summary(native.verify(self.job, self.sid))
+        self.assertEqual(summary['rule'], 'unverified_recursive_cleanup')
+        self.assertNotEqual(summary['reason_code'], 'protected_data')
+        self.assertNotIn('认证', summary['detail'])
+
+    def test_denial_diagnostics_distinguish_profile_reference_and_record_ancestor(self):
+        profile = self.root.parent / (self.root.name + '-profile')
+        cases = [
+            ('profile-rule', 'rm -f "' + str(profile / 'ordinary.png') + '"', 'native_profile'),
+            ('record-reference-rule', 'rm -f .model-desk/records.db', 'shell_protected_reference'),
+            ('ancestor-rule', 'Remove-Item -LiteralPath . -Recurse -Force', 'record_ancestor')]
+        for name, command, expected in cases:
+            self.new_access_job(name, protected_roots=[profile])
+            _, result = self.hook('PreToolUse', 'Bash', {'command': command})
+            self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+            proof = native.verify(self.job, self.sid)
+            summary = native.denial_summary(proof)
+            self.assertEqual(summary['rule'], expected)
+            self.assertNotEqual(summary['detail'], native.DENIAL_RULES['unknown'])
+            self.assertEqual(native.public_calls(proof)[-1]['denial_detail']['rule'], expected)
+            events = (self.run / 'workbuddy-native-events.jsonl').read_text(encoding='utf-8')
+            self.assertNotIn(command, events)
+            self.assertNotIn(str(profile), events)
+            self.assertTrue(proof['writes_paused'])
+
+    def test_legacy_and_unknown_rule_remain_unknown_without_claiming_path(self):
+        for rule in [None, 'untrusted-secret-value']:
+            proof = {'events': [{'event': 'PreToolUse', 'allowed': False, 'tool': 'Bash',
+                                 'reason_code': 'protected_data', 'denial_rule': rule}]}
+            summary = native.denial_summary(proof)
+            self.assertEqual(summary['rule'], 'unknown')
+            self.assertIn('不能还原', summary['detail'])
+            self.assertNotIn('untrusted-secret-value', json.dumps(summary))
+
     def test_full_access_requires_native_ack_before_any_prompt(self):
         self.new_access_job('full-ack')
         for reported, option in [('fullAccess', 'fullAccess'), ('default', 'fullAccess'),

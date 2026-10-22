@@ -292,6 +292,12 @@ def run_task(run, state, model, *, client_factory=None):
                            '仅列出的业务文件进入自动改动统计，不能把该统计当作全盘写入审计。')
             else:
                 prompt += '\n访问权限：项目范围。截图与验证材料直接保存在项目内，不从系统临时目录读取或复制。'
+            prompt += ('\n收尾要求：非必要的临时截图、测试脚本与缓存清理不是验收条件，'
+                       '可以保留并在最终答复列明位置，不要为了清理临时文件执行宽泛的删除命令。'
+                       '如确需清理，仅针对本任务创建且已核实绝对位置的具体文件，'
+                       '不要枚举、递归删除或移动项目根、系统临时目录根或原生账户目录。'
+                       '任何工具被拒绝后保留原始原因并报告主脑，不换工具或改写命令重试；'
+                       '文件已生成也不等于执行或验收成功。')
         elif files or readonly:
             existing = run / 'workbuddy-tools-job.json'
             if existing.exists():
@@ -353,6 +359,8 @@ def run_task(run, state, model, *, client_factory=None):
             if proof['writes_paused']:
                 denial = native_tools.denial_summary(proof)
                 detail = (denial['tool'] + '：' + denial['message']) if denial else '范围或权限拒绝'
+                if denial:
+                    detail += '；规则 ' + denial['rule'] + '：' + denial['detail']
                 status, error = 'failed', '原生工具被拒绝（' + detail + '）；本轮已停止，不更换工具重试'
             if state.get('test_command'):
                 expected = hashlib.sha256(state['test_command'].encode('utf-8')).hexdigest()

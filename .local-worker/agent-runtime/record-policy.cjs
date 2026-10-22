@@ -50,6 +50,7 @@ const READONLY_VERBS = new Set([
   'echo', 'write-output', 'write-host', 'select-object',
   'format-list', 'format-table', 'out-string', 'where', 'which', 'strings',
   'od', 'cmp',
+  'true',
 ]);
 
 /** Verbs that destroy or replace data. */
@@ -310,6 +311,34 @@ function simpleCommands(command) {
 }
 
 /** Deleting/moving an ancestor of the protected directory.  Fail closed. */
+function commandGroups(text) {
+  // Separate literal command groups before deciding whether a listing feeds a
+  // mutation. Unknown quoting/substitution retains the conservative old check.
+  if (/[`\r\n(){}]/.test(text)) return null;
+  const parts=[];let quote='',start=0;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(ch==='"'||ch==="'"){
+      if(text[i-1]==='\\')return null;
+      if(!quote)quote=ch;else if(quote===ch)quote='';
+    }
+    if(quote)continue;
+    if(ch===';'||text.slice(i,i+2)==='&&'||text.slice(i,i+2)==='||'){
+      parts.push(text.slice(start,i));if(ch!==';')i++;start=i+1;
+    }
+  }
+  if(quote)return null;
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function listingMutationPipeline(text) {
+  const broad = value => /\|/.test(value) && /\b(get-childitem|gci|dir|ls|find)\b/i.test(value);
+  const parts=commandGroups(text);
+  if(!parts)return broad(text);
+  return parts.some(part=>broad(part)&&!isProvablyReadOnly(part));
+}
+
 function destructiveAncestor(command, base, tokens, config) {
   const text = String(command);
   const parts = simpleCommands(text);
@@ -329,7 +358,7 @@ function destructiveAncestor(command, base, tokens, config) {
   // Wildcards and implicit pipeline/git targets can include the record store
   // without ever spelling its name (e.g. Remove-Item .model*, git clean -fdx).
   if ((/\bgit\b/i.test(text)&&!/(?:^|\s)--\s+/.test(text))
-      || (/\|/.test(text)&&/\b(get-childitem|gci|dir|ls|find)\b/i.test(text))
+      || listingMutationPipeline(text)
       || /\bfind\s+\.(?:\s|$)/i.test(text)
       || /(?:rmtree|RemoveDirectory|remove_all)\s*\(\s*['"]\.['"]/i.test(text)) {
     if (isStrictAncestor(here, roots) || insideProtected(here, roots)) return denyAncestor(here);
@@ -462,6 +491,7 @@ module.exports = {
   hasProtectedComponent,
   isProvablyReadOnly,
   isGuardedTool,
+  commandGroups,
   createGuard,
   decide,
 };
