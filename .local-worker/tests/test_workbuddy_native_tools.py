@@ -132,6 +132,18 @@ class NativeToolsTests(unittest.TestCase):
         self.assertTrue(proof['events'][-1]['ok'])
         self.assertNotIn('private output', json.dumps(proof))
 
+    def test_glob_can_browse_own_artifact_directory_but_not_other_tasks(self):
+        scope=self.root/'.local-worker/tasks/own-smoke'
+        scope.mkdir(parents=True)
+        names=[str((scope/n).relative_to(self.root)) for n in ['a.py','test_a.py']]
+        self.job=native.prepare(self.root/'.model-desk/runs/own-dir',self.root,'own-dir',names,[],'edit')
+        self.hook('SessionStart')
+        _,result=self.hook('PreToolUse','Glob',{'path':str(scope),'pattern':'*'})
+        self.assertNotEqual(result.get('hookSpecificOutput',{}).get('permissionDecision'),'deny')
+        self.assertFalse(native.verify(self.job,self.sid)['writes_paused'])
+        _,result=self.hook('PreToolUse','Glob',{'path':str(scope.parent/'other-smoke'),'pattern':'*'})
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+
     def test_mode_and_job_cannot_silently_upgrade_old_tasks(self):
         self.assertEqual(native.mode({}), native.LEGACY)
         with self.assertRaises(ValueError):

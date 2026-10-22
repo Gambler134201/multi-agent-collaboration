@@ -248,3 +248,12 @@ python -m unittest discover -s .local-worker/tests -p 'test_workbuddy*.py' -v
 参考：[官方工具说明](https://www.codebuddy.ai/docs/cli/tools-reference)、[官方 Hooks](https://www.codebuddy.cn/docs/cli/hooks)。实际行为以本机受支持安装版本与独立测试为准。
 
 该配置离线检查：450 项中 449 通过、1 项既有条件检查跳过；Codex/DSH 两视图的浏览器 mock 检查通过。真实原生宿主已完成无提示词工具配置/SessionStart 保护加载预检；模型运行代码与测试的实测另记，不以装载成功代替执行成功。
+
+
+### 原生终端实测与产物目录修正
+
+首次真实开发任务 `20261022-091906-d33029` 固定 GLM-5.3-Flash，经 WorkBuddy 5.8.3 原生 Bash、Write、PowerShell、Read 执行；PowerShell 精确匹配指定测试命令，退出码 0。主脑独立复跑 17 项 unittest，并追加 48 个合法分块组合和 21 个非法参数检查，全部通过。两份产物业务文件已核对。
+
+该次任务的补充 Glob 将 `.local-worker/tasks/<本任务产物目录>` 误判为其他任务材料，触发暂停，因此原始状态保留 `failed`；主脑接手复核后仅登记 `final_accepted`，不把它计为执行器完整成功。修正只允许浏览明确声明文件的直接父目录，其他任务目录、记录和认证数据仍被拒绝；新增对应负向与正向回归。修正后的 109 项工具/传输/集成定向检查通过。后续任务即使晚些触发拒绝，也保留前面已经取得的自测退出证据，但不改变整项失败状态。
+
+本次为新的开发工具配置实测；没有切换模型或 API 来源，没有改预算、范围或用户端点预设。DSH 原生 GUI 发起的同类任务仍待单独实测，联网与 Notebook 工具仅有适配/隔离检查，尚未逐项真实模型验证。

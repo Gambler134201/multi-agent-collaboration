@@ -338,7 +338,7 @@ def run_task(run, state, model, *, client_factory=None):
                           and e.get('tool') in ('Bash', 'PowerShell')]
             if proof['writes_paused']:
                 status, error = 'failed', '原生工具触发范围或权限拒绝；本轮已停止'
-            if state.get('test_command') and status == 'completed':
+            if state.get('test_command'):
                 expected = hashlib.sha256(state['test_command'].encode('utf-8')).hexdigest()
                 matched = [e for e in self_tests if e.get('command_hash') == expected]
                 test = matched[-1] if matched else {}
@@ -346,7 +346,7 @@ def run_task(run, state, model, *, client_factory=None):
                     'command_sha256': expected, 'exit_code': test.get('exit_code'), 'output': None,
                     'call_id': test.get('call_id'), 'verified': bool(test.get('ok') and test.get('exit_code') == 0)}
                 registry.patch_task(run, test_result=test_result)
-                if not test.get('ok') or test.get('exit_code') != 0:
+                if status == 'completed' and (not test.get('ok') or test.get('exit_code') != 0):
                     status, error = 'failed', '没有核实指定测试命令成功结束；请主脑检查原生工具证据'
         if status != 'completed':
             error = error or 'WorkBuddy 未正常完成：' + str((result.get('execution_error') or {}).get('category') or result.get('stop_reason') or 'unknown')

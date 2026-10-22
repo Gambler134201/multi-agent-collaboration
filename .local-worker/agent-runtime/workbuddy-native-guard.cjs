@@ -9,7 +9,7 @@ const reads=new Set(['Read','Glob','Grep','NotebookRead']);
 const writes=new Set(['Write','Edit','MultiEdit','NotebookEdit']);
 const shells=new Set(['Bash','PowerShell']);
 const web=new Set(['WebFetch','WebSearch']);
-function target(job,value,write=false){
+function target(job,value,write=false,browse=false){
   if(typeof value!=='string'||!value.trim())return '文件路径无效';
   const p=path.resolve(job.project,value),real=policy.realpathDeep(p),root=policy.realpathDeep(job.project);
   const relative=path.relative(root,real);
@@ -18,7 +18,10 @@ function target(job,value,write=false){
   if(fs.existsSync(p)&&fs.statSync(p).isFile()&&fs.statSync(p).nlink>1)return '文件存在硬链接别名';
   if(/(?:^|[\\/])(?:\.codebuddy|\.workbuddy|\.codex)(?:[\\/]|$)|(?:^|[\\/])(?:auth|credentials|tokens?|secrets?)\.json$/i.test(p))return '认证存储不作为执行目标';
   if(/[\\/]\.local-worker[\\/](?:models|settings|panel-runtime|workbuddy)\.json$/i.test(p))return '运行账户配置不作为执行目标';
-  if(/[\\/]\.local-worker[\\/](?:tasks|logs)[\\/]/i.test(p)&&![...job.files,...job.readonly_files].some(n=>policy.normalizePath(path.resolve(job.project,n))===policy.normalizePath(p)))return '不读取其他任务或会话材料';
+  const own=[...job.files,...job.readonly_files];
+  const ownsFile=own.some(n=>policy.normalizePath(path.resolve(job.project,n))===policy.normalizePath(p));
+  const ownsDirectory=browse&&own.some(n=>policy.normalizePath(path.dirname(path.resolve(job.project,n)))===policy.normalizePath(p));
+  if(/[\\/]\.local-worker[\\/](?:tasks|logs)[\\/]/i.test(p)&&!ownsFile&&!ownsDirectory)return '不读取其他任务或会话材料';
   if(write&&!job.files.some(name=>policy.normalizePath(path.resolve(job.project,name))===policy.normalizePath(p)))return '文件未列入本任务可写范围';
   return null;
 }
@@ -27,7 +30,7 @@ function decide(job,input){
   if(!job.tools.includes(name)||!args||typeof args!=='object'||Array.isArray(args))return '本任务未授权此原生工具';
   if(reads.has(name)){
     const p=args.file_path??args.notebook_path??args.path??'.';
-    const reason=target(job,p);if(reason)return reason;
+    const reason=target(job,p,false,name==='Glob'||name==='Grep');if(reason)return reason;
     // Search defaults exclude records even when the root itself is the target.
     if(name==='Glob'&&/\.model-desk|\.git(?:[\\/]|$)|\.env/i.test(args.pattern||''))return '搜索不包含记录或认证目录';
     return null;
@@ -40,7 +43,7 @@ function decide(job,input){
     if(args.run_in_background)return '本任务终端须前台完成并返回退出结果';
     if(args.dangerouslyDisableSandbox||args.disableSandbox)return '不能批准原生沙箱绕过';
     if(/\.model-desk(?![-\w.])|(?:^|[\\/\s"'])\.env(?:[.\s"']|$)|(?:auth|credential)[-_]?(?:token|store|file)/i.test(args.command))return '终端不能访问工作台记录或认证数据';
-    if(args.cwd||args.workdir){const r=target(job,args.cwd||args.workdir);if(r)return r;}
+    if(args.cwd||args.workdir){const r=target(job,args.cwd||args.workdir,false,true);if(r)return r;}
     return policy.decide(name==='PowerShell'?'pwsh':'bash',args,{root:job.project})||null;
   }
   if(web.has(name)){
