@@ -1,11 +1,11 @@
 # DSH 安装与使用
 
-更新于 2026-10-20。本指南描述当前入口；开发历史另见 [实现记录](DSH_BRAIN_PLUGIN.md)，候选版本与交付边界见 [发布说明](DSH_RELEASE.md)。
+更新于 2026-10-22。本指南描述当前入口；开发历史另见 [实现记录](DSH_BRAIN_PLUGIN.md)，版本与交付边界见 [发布说明](DSH_RELEASE.md)。也可将 [Agent 安装指南](AGENT_INSTALL.md) 交给自己的 Agent 执行。
 
 ## 适用版本
 
 - Windows；维护者实测的 DSH 产品为 `0.2.1-rc.2`，Pi 执行器为 `1.3.0`。
-- 原生功能验证使用主脑插件 **0.2.6 加配套后台修复**。本分支的 **0.2.7 为发布候选**，尚未做真实新装/升级；已正常使用的 0.2.6 不必为本次文档整理重装。
+- 当前插件源码为 **0.2.11**。0.2.6 覆盖原生任务/通知闭环，0.2.10 的右侧入口和首轮状态信号已由用户确认；0.2.11 的无 Codex 环境隔离冷启动已通过。实际用户机器的独立冷启动、安装及主脑加载仍需单独验收，不从源码发布推定通过。
 - DSH 主脑插件、DSH/Pi 执行器和工作台是不同组件。只安装一个 tgz 无法替代完整工作台；其他宿主或版本不由本次测试保证。
 
 ## 首次安装
@@ -19,7 +19,7 @@ $workbenchRoot = 'D:\Work\multi-agent-collaboration'
 $workbenchPython = Join-Path $workbenchRoot '.local-worker\venv\Scripts\python.exe'
 $dshExecutable = 'D:\Apps\DSH\DeepSeek Harness.exe'
 $dshHome = Join-Path $env:USERPROFILE '.dsh' # 自定义 DSH_HOME 时改成实际目录
-$installRecord = 'D:\ToolConfigs\ModelDesk\dsh-brain-0.2.7'
+$installRecord = 'D:\ToolConfigs\ModelDesk\dsh-brain-0.2.11'
 $installer = Join-Path $workbenchRoot '.local-worker\dsh_brain_desktop.py'
 
 & $workbenchPython $installer prepare --output $installRecord --workbench $workbenchRoot --python $workbenchPython --executable $dshExecutable --home $dshHome
@@ -43,7 +43,7 @@ pwsh -NoProfile -File (Join-Path $workbenchRoot '打开模型工作台.ps1') -No
 
 1. 在 DSH 选择项目及其聊天，从右侧入口打开工作台，确认“当前项目”正确。没有明确项目就保持未绑定，不借用服务目录。
 2. 在工作台添加本地/自建或付费 API 执行模型。给各模型保存自己的执行 Agent，例如本地 Qwen → Pi、DeepSeek API → DSH；“各执行 Agent 参数设置”只调整 Agent 参数。见 [每模型默认 Agent](USAGE.md#每模型默认执行-agent)。
-3. 按需要选择“全部/仅付费/仅本地”范围，打开多 Agent 协作，正常描述需求。主脑按候选和任务风险决定是否派发；手动默认越界不代表整个范围没有模型，不静默切换。
+3. 通过各执行端卡片的独立开关选择可用执行端；旧模型范围仍作为兼容限制共同生效。打开多 Agent 协作，正常描述需求。主脑按真实预检、候选和任务风险决定是否派发；手动默认越界不代表整个范围没有模型，不静默切换。
 4. 主脑取得原任务编号，确认通知订阅成功后结束轮次。任务和等待状态可在工作台查看；用户仍可主动询问或补充需求。
 5. 原聊天打开且空闲时，任务结束后自动回来取交付、独立测试并验收；不把执行模型自报完成直接算通过。
 
@@ -86,7 +86,7 @@ $oldRecord = 'D:\ToolConfigs\ModelDesk\dsh-brain-0.2.6'
 
 | 现象 | 处理 |
 | --- | --- |
-| 无法连接工作台 | 显式启动匹配后台；插件本身不启动服务 |
+| 无法连接工作台 | 当前原生入口可按需启动匹配后台；检查 PowerShell 7、Python venv 和安装指纹。也可显式启动，不能以启动 Codex 作为依赖修复 |
 | 项目未选择/不正确 | 在原生项目聊天重新打开入口，不把 URL 改到别的项目来冒充绑定 |
 | 仅付费却说无模型 | 读取真实候选/范围排除原因，检查手动默认是否越界；不自动换模型或放宽授权 |
 | 执行失败详情读不到 | 匹配后台应返回 `execution_error`，status 还兼容 `error`；更新后重开 MCP，不反复派同一任务 |

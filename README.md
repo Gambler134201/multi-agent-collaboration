@@ -8,8 +8,6 @@
 
 最近更新见 [更新记录](CHANGELOG.md)：多主脑核心、DSH 原生工作台与余额同步、单任务/整批完成通知，以及每模型默认执行 Agent。
 
-DSH 0.2.8 独立启动/新聊天预检修复目前为未部署候选，改动与验证边界见 [修复说明](docs/DSH_STARTUP_PREFLIGHT.md)。
-
 开发流程见 [Git 工作流](docs/GIT_WORKFLOW.md)，日常操作与测试见 [使用说明](docs/USAGE.md)，DSH 用户见 [DSH 安装与使用](docs/DSH_USAGE.md)。源码整合事项见 [源码整合清单](docs/SOURCE_RECONCILIATION.md)，主脑权限边界见 [多主脑通用接口](docs/MAIN_BRAIN_CORE.md)。功能路线见 [后续待更新功能](后续待更新功能/README.md)。
 
 ## 你会得到什么
