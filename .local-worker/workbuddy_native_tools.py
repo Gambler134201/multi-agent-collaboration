@@ -36,8 +36,10 @@ def prepare(run, project, task_id, files, readonly_files, kind):
         raise ValueError('WorkBuddy 原生工具必须绑定当前项目与任务')
     record_protection.validate_files(files + readonly_files, project)
     for name in files + readonly_files:
-        p = Path(name)
-        if p.is_absolute() or not (project / p).resolve().is_relative_to(project):
+        # Dispatch accepts both project-relative and in-project absolute files.
+        # Resolve the actual target before checking containment (including aliases),
+        # keeping the original spellings so task/delivery scope stays unchanged.
+        if not (project / Path(name)).resolve().is_relative_to(project):
             raise ValueError('WorkBuddy 文件范围越出当前项目')
     data = {'schema': 1, 'mode': MODE, 'task_id': task_id, 'project': str(project),
             'kind': kind, 'files': list(files), 'readonly_files': list(readonly_files),

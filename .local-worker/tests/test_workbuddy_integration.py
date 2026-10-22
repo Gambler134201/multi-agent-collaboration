@@ -205,7 +205,8 @@ class IntegrationTests(Base):
                 proof = None
                 native_proof = None
                 if self.native_job:
-                    (self.project/'a.py').write_text('native fixture changed',encoding='utf-8')
+                    if scenario != 'read_only':
+                        (self.project/'a.py').write_text('native fixture changed',encoding='utf-8')
                     native_proof=native_tools.verify(self.native_job,self.session_id)
                 if self.job:
                     server = tools.FileTools(self.job)
@@ -371,6 +372,49 @@ class IntegrationTests(Base):
                 self.assertFalse(delivery['accepted'])
             finally:
                 brain_gateway._CAPABILITIES.pop(capability, None)
+
+    def test_both_hosts_run_absolute_file_scopes_in_fresh_projects(self):
+        for host in ('codex', 'dsh'):
+            for kind in ('edit', 'chat'):
+                with self.subTest(host=host, kind=kind):
+                    project = self.project / ('新项目 with spaces ' + host + '-' + kind)
+                    project.mkdir()
+                    self.assertEqual(list(project.iterdir()), [])
+                    target = project / 'a.py'
+                    if kind == 'chat':
+                        target.write_text('read-only fixture', encoding='utf-8')
+                    files = [str(target)]
+                    identity = 'absolute-' + host + '-' + kind
+                    context = brain_context.build_context(project=str(project), host=host,
+                        owner=identity, role='brain', operator_session=identity, session_binding='user_bound')
+                    capability = brain_gateway.register_connection(context.declaration())['capability']
+                    try:
+                        with patch.object(panel.EXECUTOR, 'submit') as queue:
+                            receipt = brain_gateway.handle('dispatch', {'request_id': identity,
+                                'prompt': 'fixture task', 'kind': kind, 'files': files,
+                                'model_id': self.model['id'], 'acceptance': ['fixture result']}, capability)
+                        queue.assert_called_once()
+                        tid = receipt['task']['task_id']
+                        run = registry.task_dir(tid)
+                        task = registry.read_task(run)
+                        self.assertEqual(task['files'], files)
+                        scenario = 'read_only' if kind == 'chat' else 'ok'
+                        code = worker.run_task(run, task, registry.get_model(task['model_id']),
+                                               client_factory=self.client(scenario))
+                        self.assertEqual(code, 0, registry.read_task(run).get('error'))
+                        self.assertEqual(self.prompts, 1)
+                        status = brain_gateway.handle('status', {'task_id': tid}, capability)
+                        delivery = brain_gateway.handle('delivery', {'task_id': tid}, capability)
+                        self.assertEqual(status['status'], 'completed')
+                        self.assertEqual(status['engine'], 'workbuddy')
+                        self.assertTrue(status['native_execution']['tool_protection_verified'])
+                        self.assertFalse(delivery['accepted'])
+                        expected = 'read-only fixture' if kind == 'chat' else 'native fixture changed'
+                        self.assertEqual(target.read_text(encoding='utf-8'), expected)
+                        if kind == 'chat':
+                            self.assertEqual(delivery['executor']['changed_files'], [])
+                    finally:
+                        brain_gateway._CAPABILITIES.pop(capability, None)
 
     def test_workbuddy_executor_cannot_review_itself(self):
         task, run = self.dispatch()

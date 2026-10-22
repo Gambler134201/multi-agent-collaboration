@@ -67,6 +67,61 @@ class NativeToolsTests(unittest.TestCase):
         _, result = self.hook('PreToolUse', 'PowerShell', {'command': 'echo retry'})
         self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
 
+    def test_fresh_project_accepts_absolute_write_and_readonly_files(self):
+        self.root = self.root / '全新项目 with spaces'
+        self.root.mkdir()
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.run = self.root / '.model-desk/runs/absolute-files'
+        writable = str(self.root / 'new file.py')
+        readonly = str(self.root / 'context.txt')
+        (self.root / 'context.txt').write_text('fixture context', encoding='utf-8')
+        self.job = native.prepare(self.run, self.root, 'absolute-files', [writable, 'relative.py'], [readonly], 'edit')
+        data = native.load(self.job)
+        self.assertEqual(data['files'], [writable, 'relative.py'])
+        self.assertEqual(data['readonly_files'], [readonly])
+        self.hook('SessionStart')
+        for tool, args in [('Write', {'file_path': writable, 'content': 'fixture'}),
+                           ('Write', {'file_path': str(self.root / 'relative.py'), 'content': 'fixture'}),
+                           ('Read', {'file_path': readonly})]:
+            _, result = self.hook('PreToolUse', tool, args)
+            self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+        _, result = self.hook('PreToolUse', 'Write', {'file_path': str(self.root / 'undeclared.py'), 'content': 'bad'})
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_outside_absolute_relative_and_record_scopes_are_refused_before_job(self):
+        outside = str(self.root.parent / (self.root.name + '-sibling') / 'a.py')
+        variants = [outside, str(self.root.parent / 'foreign.py'), '../foreign.py',
+                    str(self.root / '.model-desk/records.db')]
+        if os.name == 'nt':
+            other_drive = 'Z:' if self.root.drive.upper() != 'Z:' else 'Y:'
+            variants.append(other_drive + r'\foreign.py')
+        for index, name in enumerate(variants):
+            for readonly in (False, True):
+                task = 'invalid-%s-%s' % (index, readonly)
+                run = self.root / '.model-desk/runs' / task
+                with self.subTest(name=name, readonly=readonly), self.assertRaises(ValueError):
+                    native.prepare(run, self.root, task, [] if readonly else [name], [name] if readonly else [], 'edit')
+                self.assertFalse(run.exists())
+
+    def test_absolute_and_relative_aliases_outside_project_are_refused(self):
+        foreign = tempfile.TemporaryDirectory()
+        self.addCleanup(foreign.cleanup)
+        link = self.root / 'outside-alias'
+        try:
+            os.symlink(foreign.name, link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            if os.name != 'nt':
+                self.skipTest('directory symlink unavailable')
+            made = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), foreign.name],
+                                  capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            if made.returncode:
+                self.skipTest('directory symlink/junction unavailable')
+        for index, name in enumerate((str(link / 'a.py'), 'outside-alias/a.py')):
+            run = self.root / '.model-desk/runs' / ('alias-%s' % index)
+            with self.assertRaisesRegex(ValueError, '文件范围越出当前项目'):
+                native.prepare(run, self.root, run.name, [name], [], 'edit')
+            self.assertFalse(run.exists())
+
     def test_records_auth_paths_nested_agents_and_sandbox_escape_are_denied(self):
         variants = [('Write', {'file_path': '.model-desk/task.json', 'content': 'bad'}),
                     ('Read', {'file_path': '.env'}), ('Read', {'file_path': '../foreign.py'}),

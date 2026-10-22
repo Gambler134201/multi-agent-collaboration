@@ -801,13 +801,13 @@
     },
     {
       "path": ".local-worker/tests/test_workbuddy_integration.py",
-      "sha256": "d13942b561fd4b330fc3c44a9e57800701c2f9369984c0e1a82b93269abed330",
-      "bytes": 22466
+      "sha256": "2398f88d803e95809fbaae80a3f99194e5e5fee7f83d778480d67ae432e8a504",
+      "bytes": 25497
     },
     {
       "path": ".local-worker/tests/test_workbuddy_native_tools.py",
-      "sha256": "95c07675de654bec2efc46dd10766c6b8e87e7b5545a7831385b5e1f5aaa1879",
-      "bytes": 12361
+      "sha256": "7fb1f84c1674a683d15aca8ba1954272b2e71c5de10561afe03d77a7cd1f2879",
+      "bytes": 15826
     },
     {
       "path": ".local-worker/tests/test_workbuddy_tools.py",
@@ -861,8 +861,8 @@
     },
     {
       "path": ".local-worker/workbuddy_native_tools.py",
-      "sha256": "1c6b38632c1faa8ede67fdf24c260a9fe287ff7e87c38ddaba5f60bf265c31c0",
-      "bytes": 5771
+      "sha256": "824b64c3ea691c4dbe5eb4225b85ce7f19c28a7bbfd2c9e93d5075fc7ef65e70",
+      "bytes": 5984
     },
     {
       "path": ".local-worker/workbuddy_tools.py",
@@ -946,8 +946,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "1ec33053ca5f6269f92fe34a5f215501fc173f35e8a5a41ff75140d974569151",
-      "bytes": 4859
+      "sha256": "8a1c343cfa37ccbf7d71d21b37ad19ac8133f2ec7f57db1794625fb4331f6c5b",
+      "bytes": 5070
     },
     {
       "path": "LICENSE",
@@ -971,8 +971,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "4b2ba37f11ef3876594f2dcdb726f57010c993630bdf4a46149fe5b54f4506e2",
-      "bytes": 6179
+      "sha256": "25b66971aec2ac70577be31091e8c016e7020c33c1ec39791ec0f8e16fa6af79",
+      "bytes": 6541
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1026,8 +1026,8 @@
     },
     {
       "path": "docs/WORKBUDDY_EXECUTOR.md",
-      "sha256": "b61ebf230276f024890a51c7057530924e2aefe5a0e1bcbef72ed59daee0368e",
-      "bytes": 34324
+      "sha256": "760c1566a2b944bf16558dd310d40546fec028881ee5139a8dc6569685f180c7",
+      "bytes": 35684
     },
     {
       "path": "integrations/dsh-brain/LICENSE",
