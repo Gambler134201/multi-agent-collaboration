@@ -1,5 +1,9 @@
 # 跨主脑功能更新约定
 
+## 请求回执可靠性与原请求查询
+
+宿主中立的 brain 请求通道共用 `brain_requests` 的异常结果确认和 `brain_request_status` 只读查询；Codex/DSH 身份均覆盖 stdio/HTTP 临时记录检查。DSH 0.2.12 增加工具白名单和规则提示，已在本机安装并核对八文件哈希。Codex 默认工作台 MCP/CLI 并未自动转成 broker 派发；没有 broker request_id 的旧 CLI 任务继续按 task_id 查询。源码回归、安装后协议检查与原生人工验收分别记录，桌面端新连接加载尚待复核。详见 [请求可靠性](REQUEST_RELIABILITY.md)。
+
 ## 收尾清理与保护诊断
 
 共享 `record-policy.cjs` 的命令组判定同时覆盖 DSH、Pi 和 WorkBuddy，区分具体临时文件清理、独立只读列表和实际破坏性管道。WorkBuddy 的原生钩子额外拒绝未核实变量/通配符递归清理，并记录脱敏固定规则标识；Codex/DSH 主脑读取同一执行端任务错误和工具明细。旧拒绝不自动重跑或改状态。离线策略、模拟原生钩子与已安装执行器连接本地模拟接口的测试，不等于真实模型复验。

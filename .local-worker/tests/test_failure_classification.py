@@ -55,6 +55,29 @@ REAL_SYSTEM_TEXTS = (
 
 
 class ClassificationTests(unittest.TestCase):
+    def test_business_permission_and_budget_words_are_not_system_faults(self):
+        for text in ('权限配置功能实现不符合需求，断言失败', '费用预算计算逻辑错误，断言失败',
+                     'Permission configuration assertion failed', 'Budget calculation assertion failed'):
+            with self.subTest(text=text):
+                task = {'id':'business-bug', 'status':'failed', 'error':text}
+                self.assertEqual(fc.classify(task)['outcome'], fc.OUTCOME_UNKNOWN)
+                task['review'] = {'state':'returned', 'executor_status':'completed', 'returned_criteria':['c1']}
+                found = fc.classify(task)
+                self.assertEqual(found['outcome'], fc.OUTCOME_QUALITY)
+                self.assertTrue(found['verified'])
+                self.assertFalse(found['system_excluded'])
+
+    def test_authoritative_completed_review_wins_over_legacy_text_and_text_stays_inferred(self):
+        found = fc.classify({'id':'reviewed', 'status':'completed', 'error':'permission denied in fixture',
+            'review':{'state':'returned', 'executor_status':'completed', 'returned_criteria':['c1']}})
+        self.assertEqual(found['source'], 'independent_review')
+        self.assertEqual(found['outcome'], fc.OUTCOME_QUALITY)
+        inferred = fc.classify({'id':'old', 'status':'failed', 'error':'permission denied'})
+        self.assertEqual(inferred['reason'], 'permission_denied')
+        self.assertFalse(inferred['verified'])
+        self.assertEqual(inferred['confidence'], 'medium')
+        self.assertFalse(fc.classify({'failure_class':'quality', 'status':'failed'})['verified'])
+
     def finding(self, record):
         return fc.classify(record)
 

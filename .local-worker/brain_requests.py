@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import re
 import threading
 
@@ -219,6 +220,10 @@ def _finish(project, owner, request_id, state, receipt=None, task_id='', detail=
         existing = _select(conn, owner, request_id)
         if existing is None:
             raise RequestError('请求记录不存在')
+        if state == 'unknown' and existing['state'] in {'completed', 'rejected'}:
+            # A late diagnostic failure must not erase an already committed receipt.
+            conn.execute('COMMIT')
+            return _row(existing)
         conn.execute('UPDATE brain_requests SET state=?, task_id=?, receipt=?, detail=?, updated_at=? '
                      'WHERE owner=? AND request_id=?',
                      (state, str(task_id or '')[:80],
@@ -263,6 +268,57 @@ def status(project, owner, request_id):
         return _row(row) if row is not None else None
     finally:
         conn.close()
+
+
+def lookup(project, owner, request_id):
+    """Read one journal row without initializing/migrating a project database."""
+    owner = _clean_owner(owner)
+    request_id = _clean_id(request_id, 'request_id')
+    project = project_storage.normalize(project)
+    path = project_storage.records_db(project)
+    if project_storage._is_link(path.parent) or project_storage._is_link(path):
+        raise RequestError('请求记录路径不可核实')
+    if not path.is_file():
+        return None
+    conn = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True,
+                           timeout=5, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute('PRAGMA query_only=ON')
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='brain_requests'").fetchone() is None:
+            return None
+        return _row(_select(conn, owner, request_id))
+    finally:
+        conn.close()
+
+
+def _unknown_after_reservation(project, owner, kind, request_id, error):
+    # Persisting an uncertainty marker can itself fail (locked disk, full disk,
+    # unreadable DB). The public outcome must still remain unknown, never a 400
+    # rejection that invites a new request ID. No raw storage error is exposed.
+    try:
+        mark_unknown(project, owner, request_id,
+                     'outcome confirmation failed: ' + type(error).__name__)
+    except Exception:
+        pass
+    finally:
+        try:
+            normalized = project_storage.normalize(project)
+        except (OSError, ValueError):
+            normalized = str(project)
+        with _ACTIVE_LOCK:
+            _ACTIVE.discard((normalized, owner, request_id))
+    raise UnknownOutcome(
+        '变更结果未知（请求已保留，结果确认失败）；未自动重试。请按原请求引用核查。',
+        reference(owner, request_id), kind, request_id) from error
+
+
+def _complete_or_unknown(project, owner, kind, request_id, receipt):
+    try:
+        return complete(project, owner, request_id, receipt,
+                        task_id=receipt.get('task_id', '') if isinstance(receipt, dict) else '')
+    except Exception as error:
+        _unknown_after_reservation(project, owner, kind, request_id, error)
 
 
 def replay(project, owner, kind, request_id, payload):
@@ -311,7 +367,10 @@ def run_once(project, owner, kind, request_id, payload, effect, recover=None,
         receipt = effect()
     except Exception as error:
         if reject_on and isinstance(error, reject_on):
-            reject(project, owner, request_id, str(error))
+            try:
+                reject(project, owner, request_id, str(error))
+            except Exception as confirmation_error:
+                _unknown_after_reservation(project, owner, kind, request_id, confirmation_error)
             raise RequestRejected(str(error)) from error
         found = None
         if recover is not None:
@@ -320,11 +379,6 @@ def run_once(project, owner, kind, request_id, payload, effect, recover=None,
             except Exception:
                 found = None
         if isinstance(found, dict) and found:
-            return complete(project, owner, request_id, found, task_id=found.get('task_id', ''))
-        mark_unknown(project, owner, request_id,
-                     'effect raised after reservation; outcome unknown: ' + type(error).__name__)
-        raise UnknownOutcome(
-            '变更结果未知（异常发生在请求保留之后）；未自动重试。请按原请求引用核查。',
-            reference(owner, request_id), kind, request_id) from error
-    return complete(project, owner, request_id, receipt,
-                    task_id=receipt.get('task_id', '') if isinstance(receipt, dict) else '')
+            return _complete_or_unknown(project, owner, kind, request_id, found)
+        _unknown_after_reservation(project, owner, kind, request_id, error)
+    return _complete_or_unknown(project, owner, kind, request_id, receipt)

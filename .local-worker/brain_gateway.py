@@ -15,6 +15,7 @@ workbench does not claim to resist arbitrary same-user scripts.
 from __future__ import annotations
 
 import secrets
+import sqlite3
 import threading
 
 import brain_context
@@ -30,11 +31,12 @@ OP_CANDIDATES = 'candidates'
 OP_PREVIEW = 'route_preview'
 OP_DISPATCH = 'dispatch'
 OP_STATUS = 'status'
+OP_REQUEST_STATUS = 'request_status'
 OP_DELIVERY = 'delivery'
 OP_REVIEW = 'review'
 OP_REWORK = 'rework'
 OPERATIONS = (OP_DESCRIBE, OP_CANDIDATES, OP_PREVIEW, OP_DISPATCH,
-              OP_STATUS, OP_DELIVERY, OP_REVIEW, OP_REWORK)
+               OP_STATUS, OP_DELIVERY, OP_REVIEW, OP_REWORK, OP_REQUEST_STATUS)
 
 _LOCK = threading.RLock()
 _CAPABILITIES = {}
@@ -117,6 +119,7 @@ def handle(operation, payload, capability):
         OP_PREVIEW: _preview,
         OP_DISPATCH: _dispatch,
         OP_STATUS: _status,
+        OP_REQUEST_STATUS: _request_status,
         OP_DELIVERY: _delivery,
         OP_REVIEW: _review,
         OP_REWORK: _rework,
@@ -243,11 +246,13 @@ def _task_receipt(task):
     }
 
 
-def _find_task_receipt(context, request_id):
-    """Recover only an existing task attributable to this owner and request."""
+def _find_task_receipts(context, request_id):
+    """Find all attributable records; ambiguity must never pick the first task."""
     runs = project_storage.runs_dir(context.project)
+    if project_storage._is_link(runs):
+        raise BrokerError('任务记录路径不可核实')
     if not runs.is_dir():
-        return None
+        return []
     matches = []
     for folder in runs.iterdir():
         if not folder.is_dir() or project_storage._is_link(folder):
@@ -266,7 +271,64 @@ def _find_task_receipt(context, request_id):
             except (BrokerError, ValueError):
                 continue
             matches.append(_task_receipt(task))
+    return matches
+
+
+def _find_task_receipt(context, request_id):
+    matches = _find_task_receipts(context, request_id)
     return matches[0] if len(matches) == 1 else None
+
+
+def _request_status(context, payload):
+    """Read the original responsibility's request and tasks; never reconcile writes."""
+    _keys(payload, ('request_id',), required=('request_id',))
+    if context.role != 'brain':
+        raise BrokerError('执行器不能查询主脑请求记录')
+    request_id = brain_context.clean_request_id(payload['request_id'])
+    import brain_requests
+    result = {'request_id': request_id, 'project': context.project,
+              'owner': context.owner,
+              'request_reference': brain_requests.reference(context.binding_key, request_id),
+              'request_state': 'unknown', 'journal_state': None, 'request_kind': None,
+              'task': None, 'read_only': True, 'automatic_retry': False,
+              'safe_to_redispatch': False,
+              'note': '仅查询原请求，不修写记录；未查到或结果未知都不授权重派。'}
+    try:
+        row = brain_requests.lookup(context.project, context.binding_key, request_id)
+        matches = _find_task_receipts(context, request_id)
+        if row:
+            result.update(journal_state=row.get('state'), request_kind=row.get('kind'))
+            task_id = row.get('task_id')
+            if task_id:
+                _, task = _task(context, task_id)
+                # Review receipts refer to the original dispatch task, whose own
+                # request_id is different. Immutable ownership still must match.
+                if task_id not in {item['task_id'] for item in matches}:
+                    matches.append(_task_receipt(task))
+        if len(matches) > 1:
+            result['note'] = '原请求匹配多个任务，保持未知；未选择任务、修写记录或重派。'
+            return result
+        state = row.get('state') if row else None
+        if state == 'rejected':
+            if not matches:
+                result['request_state'] = 'rejected'
+            return result
+        if matches:
+            if row and row.get('kind') in {'dispatch', 'rework'} and matches[0].get('request_id') != request_id:
+                return result
+            result['task'] = {key: matches[0].get(key) for key in (
+                'task_id', 'status', 'phase', 'request_id', 'engine', 'model_id', 'project')}
+            result['request_state'] = 'completed' if state == 'completed' else 'task_found'
+        elif state in {'reserved', 'unknown'}:
+            result['request_state'] = state
+        elif row is None:
+            result['request_state'] = 'not_found'
+        return result
+    except (OSError, ValueError, sqlite3.Error):
+        # Corrupt or inaccessible evidence is not proof that a request was refused.
+        result.update(task=None, request_state='unknown',
+                      note='原请求记录暂不可核实；未修写、重试或重新派发。')
+        return result
 
 
 # ----------------------------------------------------------------- broker ops

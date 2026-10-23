@@ -593,6 +593,7 @@ test('switch is re-read per dispatch and is never a cached allow flag', async (t
       assert.equal(ownerGuard(agent)({name:publicName(name),agent,args:{action}}),undefined);
   }
   assert.equal(guardCall(agent, publicName('brain_status')), undefined, 'status remains available');
+  assert.equal(guardCall(agent, publicName('brain_request_status')), undefined, 'request query is read-only while switch is off');
   assert.equal(guardCall(agent, publicName('brain_delivery')), undefined, 'delivery remains available');
   assert.equal(guardCall(agent, publicName('brain_review')), undefined, 'review/return remains available');
   assert.equal(guardCall(agent, 'read_file'), undefined);

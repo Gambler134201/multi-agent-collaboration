@@ -21,6 +21,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 import brain_gateway
+import brain_requests
 import brain_mcp_server as brain
 import delegation_policy as policy
 import model_registry as registry
@@ -326,7 +327,8 @@ class StdioProtocolTests(unittest.TestCase):
             self.assertEqual(initialized['result']['serverInfo']['name'], 'model-desk-brain')
             tools = {tool['name']: tool for tool in client.list_tools()}
             self.assertEqual(set(tools), set(brain.TOOLS))
-            self.assertEqual(len(tools), 10)
+            self.assertEqual(len(tools), 11)
+            self.assertTrue(tools['brain_request_status']['annotations']['readOnlyHint'])
             for name, tool in tools.items():
                 self.assertFalse(tool['inputSchema'].get('additionalProperties', True),
                                  name)
@@ -377,6 +379,38 @@ class StdioProtocolTests(unittest.TestCase):
 
 
 class EndToEndLoopTests(unittest.TestCase):
+    def test_request_lookup_over_stdio_http_for_both_hosts_after_receipt_loss(self):
+        responses = []
+        for host in ('codex', 'dsh'):
+            with self.subTest(host=host):
+                client = StdioClient([
+                    '--project',str(self.project),'--host',host,'--owner','main-a',
+                    '--role','brain','--session-binding','user_bound','--session-id','s-a',
+                    '--panel-url','http://127.0.0.1:%d'%self.server.server_address[1]],
+                    registry_home=registry.HERE)
+                try:
+                    client.initialize()
+                    self.assertFalse(client.call('brain_connect')['isError'])
+                    req = 'stdio-lost-' + host
+                    with mock.patch.object(brain_requests, 'complete', side_effect=OSError('fixture disk full')):
+                        lost = client.call('brain_dispatch', {'request_id':req,'prompt':'Mock only',
+                            'kind':'edit','files':['a.py'],'acceptance':['criterion']})
+                    self.assertTrue(lost['isError'])
+                    self.assertEqual(payload(lost)['outcome'], 'unknown')
+                    submitted = list(self.submitted)
+                    found = client.call('brain_request_status', {'request_id':req})
+                    data = visible_payload(found)
+                    self.assertFalse(found['isError'])
+                    self.assertEqual(data['request_state'], 'task_found')
+                    self.assertEqual(data['task']['task_id'], submitted[-1])
+                    self.assertEqual(data['journal_state'], 'unknown')
+                    self.assertEqual(self.submitted, submitted)
+                    self.assertFalse(data['safe_to_redispatch'])
+                    responses.append({'name':'brain_request_status','result':found})
+                finally:
+                    client.close()
+        assert_native_projection(self, responses)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = registry.HERE, registry.REGISTRY, registry.RUNS
@@ -520,6 +554,11 @@ class EndToEndLoopTests(unittest.TestCase):
             'request_id': 'loop-dispatch', 'prompt': 'Do the work', 'kind': 'edit',
             'model_id': 'mock', 'files': ['a.py'], 'acceptance': ['criterion one']})
         self.assertEqual(payload(duplicate)['task']['task_id'], task_id)
+        self.assertEqual(self.submitted, [task_id])
+
+        request = visible_payload(self.client.call('brain_request_status', {'request_id':'loop-dispatch'}))
+        self.assertEqual(request['request_state'], 'completed')
+        self.assertEqual(request['task']['task_id'], task_id)
         self.assertEqual(self.submitted, [task_id])
 
         status = payload(self.client.call('brain_status', {'task_id': task_id}))

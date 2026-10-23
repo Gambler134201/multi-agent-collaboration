@@ -20,6 +20,7 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import brain_context
 import brain_gateway
+import brain_requests
 import brain_transport
 import delegation_policy as policy
 import host_balance
@@ -70,6 +71,33 @@ class LossServer(BaseHTTPRequestHandler):
 
 
 class BrainHttpTests(unittest.TestCase):
+    def test_post_effect_receipt_failure_is_unknown_over_real_http_and_query_does_not_replay(self):
+        transport, _ = self.connect()
+        request = {'request_id':'http-receipt-lost', 'prompt':'Mock only', 'kind':'edit',
+                   'files':['a.py'], 'acceptance':['criterion']}
+        with mock.patch.object(brain_requests, 'complete', side_effect=OSError('fixture storage failure')):
+            with self.assertRaises(brain_transport.OutcomeUnknown) as caught:
+                transport.call('dispatch', request)
+        self.assertIn('http-receipt-lost', caught.exception.reference)
+        self.assertEqual(len(self.submitted), 1)
+        result = transport.call('request_status', {'request_id':request['request_id']})
+        self.assertEqual(result['request_state'], 'task_found')
+        self.assertEqual(result['task']['task_id'], self.submitted[0])
+        self.assertEqual(result['journal_state'], 'unknown')
+        self.assertFalse(result['safe_to_redispatch'])
+        self.assertNotIn(transport._capability, json.dumps(result))
+        with self.assertRaises(brain_transport.OutcomeUnknown):
+            transport.call('dispatch', request)
+        self.assertEqual(len(self.submitted), 1)
+
+    def test_request_query_unknown_is_read_data_not_transport_error(self):
+        transport, _ = self.connect()
+        with mock.patch.object(brain_requests, 'lookup', side_effect=brain_gateway.sqlite3.DatabaseError('fixture corrupt')):
+            result = transport.call('request_status', {'request_id':'corrupt-request'})
+        self.assertEqual(result['request_state'], 'unknown')
+        self.assertTrue(result['read_only'])
+        self.assertEqual(self.submitted, [])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = registry.HERE, registry.REGISTRY, registry.RUNS

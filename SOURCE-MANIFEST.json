@@ -1,7 +1,7 @@
 {
   "project": "多agent协作",
   "license": "MIT",
-  "release_date": "2026-10-22",
+  "release_date": "2026-10-23",
   "scope": "Git-tracked source files; excludes this manifest itself and ignored runtime data.",
   "files": [
     {
@@ -96,28 +96,28 @@
     },
     {
       "path": ".local-worker/brain_context.py",
-      "sha256": "9fbe8bc62c64091be6d2cc99e694d138e9d7e2653dc43b40701d20b67549c21c",
-      "bytes": 17645
+      "sha256": "9059508e745a2524e127fb94430990ec22a01357678fe574ff60495f712c7827",
+      "bytes": 17663
     },
     {
       "path": ".local-worker/brain_gateway.py",
-      "sha256": "6a2e1b09296c28fffd21c2a66745b27a64ba2942df12f41e20684886f89278f4",
-      "bytes": 39376
+      "sha256": "fb375ac5803413c57b2e160a7185ace8471a903dc00cd3f4ed5a19532300d637",
+      "bytes": 42562
     },
     {
       "path": ".local-worker/brain_mcp_server.py",
-      "sha256": "4d8bff1f3ac8c1244c285e31898e7f63c561775c626b070448d64f476e35779b",
-      "bytes": 36624
+      "sha256": "6e6c030b1e3444ca5b584f2a18f9cecd3bba83d374144c8081dd2539c1616f4e",
+      "bytes": 37595
     },
     {
       "path": ".local-worker/brain_requests.py",
-      "sha256": "d8b05b31752971a1b8b41be513a9ea415b31dbe256a47cf48a2e8c864e817a7f",
-      "bytes": 13475
+      "sha256": "7cf9fb9f9eb2bb117c128c8695486a295f98178a544c058e520f6e6a9f5710f5",
+      "bytes": 15754
     },
     {
       "path": ".local-worker/brain_transport.py",
-      "sha256": "dd8ed4a4c11f451e5582f75ac1ab2a7545fff636a91df1a43d1a84ba3065782c",
-      "bytes": 13078
+      "sha256": "b4c7387a444d9513bcf8aade6b5d49757939687989634b16430684ddc5cc59fa",
+      "bytes": 13486
     },
     {
       "path": ".local-worker/budget_relay.py",
@@ -181,8 +181,8 @@
     },
     {
       "path": ".local-worker/dsh_brain_desktop.py",
-      "sha256": "5dfa0ebc03519f590a6a0c24e32558a76a56f92db96cbe6f0ccb3db7d5519f6c",
-      "bytes": 29918
+      "sha256": "4b9f41a78355d8b9c7fafab5359fe217a0edb72404b055e88ded5a77b81c10e6",
+      "bytes": 29984
     },
     {
       "path": ".local-worker/dsh_brain_plugin.py",
@@ -226,8 +226,8 @@
     },
     {
       "path": ".local-worker/failure_classification.py",
-      "sha256": "8c2160c1dec422398bfb57c531cc7dcf86df3d3b24aa16cfa41771f74208d149",
-      "bytes": 22514
+      "sha256": "3fb6e425ad56d3f49c1bd5daac37b201a18fdb59be7ebbdccee8aa8b71b8a6aa",
+      "bytes": 22944
     },
     {
       "path": ".local-worker/folder_picker.py",
@@ -466,18 +466,18 @@
     },
     {
       "path": ".local-worker/tests/test_brain_gateway.py",
-      "sha256": "5792827b339beba3f5a61cddaaaf186d0f9d94a300db5ae99fdea39feb3922d7",
-      "bytes": 25781
+      "sha256": "59899a53fd7523cc02cf9598536266eed27e731d92ecd1fa6dab31b1fe8b9703",
+      "bytes": 29309
     },
     {
       "path": ".local-worker/tests/test_brain_http.py",
-      "sha256": "6d7ef7ae48626b93929fab1abe57d78f6a85207b25d00841a00ab086e58f4fb3",
-      "bytes": 14713
+      "sha256": "ea0d1345e442ae6ae8c617665d36d5aa08cfe07d6005a2bd3185d091199c919d",
+      "bytes": 16434
     },
     {
       "path": ".local-worker/tests/test_brain_mcp_server.py",
-      "sha256": "199d615402e2e1557ecd313edc348309fd61bff4be4d8a5b0c87833e078779ce",
-      "bytes": 29569
+      "sha256": "26bbbb6daa2e1c8473c15756c476ab0ba77235169bb0d24ca3c90e3e18ec4f0c",
+      "bytes": 31913
     },
     {
       "path": ".local-worker/tests/test_brain_ownership.py",
@@ -486,8 +486,8 @@
     },
     {
       "path": ".local-worker/tests/test_brain_requests.py",
-      "sha256": "434fe926349f93cd8d78ba83fc8683c36df648ee6c0635f94319392f60ee555f",
-      "bytes": 8831
+      "sha256": "c19e3400d3ee349aa48ee9754b737909ba9a1756e2937a5b6722945e7523641d",
+      "bytes": 13031
     },
     {
       "path": ".local-worker/tests/test_brain_text_projection.cjs",
@@ -571,13 +571,13 @@
     },
     {
       "path": ".local-worker/tests/test_dsh_brain_desktop.py",
-      "sha256": "2e8036838adb0c5bf3ab35a82cd9ef999623a060a1a5ae459fdf6d37a6daf8e6",
-      "bytes": 30170
+      "sha256": "04479b6d15b7c461daae4179b90791cca04226daa9d15c196e0b9a361cc2eebd",
+      "bytes": 30605
     },
     {
       "path": ".local-worker/tests/test_dsh_brain_plugin.cjs",
-      "sha256": "8bc1668beeae8ff29203e4d75e81df24b5cb2a8b25eca56f54eccb6442815a6d",
-      "bytes": 42071
+      "sha256": "8b753b2d946be0fb074bb907ab51dffe3a7ef79b2402a4b23a3a7a0128a242c8",
+      "bytes": 42202
     },
     {
       "path": ".local-worker/tests/test_dsh_brain_plugin.py",
@@ -631,8 +631,8 @@
     },
     {
       "path": ".local-worker/tests/test_failure_classification.py",
-      "sha256": "b5a8abc599bd20b8f75a4451fdfdc8acaed8b05538501d6b275d6fa15b9f40c6",
-      "bytes": 12406
+      "sha256": "099cb1866c6ce900db23817ea8f7bacd7c444e9ce96d395225549dc8ce5a4130",
+      "bytes": 14058
     },
     {
       "path": ".local-worker/tests/test_folder_picker.py",
@@ -991,8 +991,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "41829face3577abe332c4cb74898d1c2c80ea903f0284e5a52aa2c0b758c9d39",
-      "bytes": 8730
+      "sha256": "44a3348ec0c5805c4f0e0c541f3d81d2204bd2e2b18175ff1305998404eb82e9",
+      "bytes": 9346
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1035,6 +1035,11 @@
       "bytes": 16140
     },
     {
+      "path": "docs/REQUEST_RELIABILITY.md",
+      "sha256": "96a680f4f7886a236d7c41040517ba9853a8bcf1f2b0d750c5860c7c45090625",
+      "bytes": 4179
+    },
+    {
       "path": "docs/SOURCE_RECONCILIATION.md",
       "sha256": "0bbbd01ffeb2db2d733f9a781c9ae576c353e41b5a82e72269a900d989f241cb",
       "bytes": 6359
@@ -1056,8 +1061,8 @@
     },
     {
       "path": "integrations/dsh-brain/README.md",
-      "sha256": "07043e88bc7e81d73cc7ede5e061e6f1e6ab32485e995808e27c49a7c0e3786b",
-      "bytes": 7497
+      "sha256": "b84706637eb36b86b5c5ddc6ce679c902782e45f3a4ea408c4c5a613435e4b52",
+      "bytes": 7673
     },
     {
       "path": "integrations/dsh-brain/account.cjs",
@@ -1076,12 +1081,12 @@
     },
     {
       "path": "integrations/dsh-brain/index.cjs",
-      "sha256": "397f43abead9b2fc5892c05758411508aa87a6573e8240ef9fcc2960ebd7ba36",
-      "bytes": 54429
+      "sha256": "4207735f9a9bbd23a9bc10bd143c9c852fb211ba8a80344121de4dec741351ef",
+      "bytes": 54602
     },
     {
       "path": "integrations/dsh-brain/package.json",
-      "sha256": "13fcf84326d88879166f5b19d6cf2c702b0a94dfe27d43ee0bc170cb01e1cdea",
+      "sha256": "c67e86187058f624d15958d117b658d350765ac245b4d58770d0392fe1e9a32f",
       "bytes": 1247
     },
     {
@@ -1106,8 +1111,13 @@
     },
     {
       "path": "后续待更新功能/README.md",
-      "sha256": "09a3bc3d640e58db3a97be1f9942e4a33601b0aca821ceaf3cb120538046b2c9",
-      "bytes": 1900
+      "sha256": "c86b64b331a6d06c34f28658147ed290dc0f9ad5dc1afa5b13df9448707732f1",
+      "bytes": 3062
+    },
+    {
+      "path": "后续待更新功能/协作核心可靠性与并行能力更新路线-20261023.md",
+      "sha256": "b9d16a5055e129d85f80d3fc6fcd6693f5d0316c6ad30de9dffb58f59ccc65b0",
+      "bytes": 15261
     },
     {
       "path": "后续待更新功能/多主脑Agent与模型适配-可行性与更新计划.md",
@@ -1120,9 +1130,19 @@
       "bytes": 7766
     },
     {
+      "path": "后续待更新功能/开源多Agent项目调研与采纳建议-20261023.md",
+      "sha256": "25bedf2139f5683a012ff82d88c8f4d1d9dde4ee52a0341eabd0acf42c1e54f5",
+      "bytes": 15612
+    },
+    {
       "path": "后续待更新功能/跨工作区任务完成唤醒-后续更新计划.md",
       "sha256": "f44f6d99fc66018afcd4913fc6eb7807bdb05136136cfd240bfa41c00d67ec57",
       "bytes": 3894
+    },
+    {
+      "path": "后续待更新功能/项目地图-参考与增量方案-20261023.md",
+      "sha256": "0de6e4e51e7e8c376b621b5580671caf036fcfdbc375e4f06d0bf0aae7b69957",
+      "bytes": 6893
     },
     {
       "path": "启动模型面板.ps1",

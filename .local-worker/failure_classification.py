@@ -92,7 +92,8 @@ _SYSTEM_RULES = (
         r'max[_ ]?model[_ ]?calls', r'maximum number of (?:model )?calls',
     )),
     ('user_budget_limit', (
-        r'保守费用会超出', r'费用会超出', r'预算', r'budget', r'insufficient_quota', r'quota exceeded',
+        r'保守费用会超出', r'费用会超出', r'预算不足', r'超出.{0,12}预算', r'预算.{0,10}(?:已到|耗尽|超限)',
+        r'budget (?:exceeded|limit|exhausted)', r'insufficient_quota', r'quota exceeded',
         r'余额不足', r'额度不足', r'金额上限', r'超支',
     )),
     ('token_estimate_gate', (
@@ -122,7 +123,7 @@ _SYSTEM_RULES = (
     )),
     ('permission_denied', (
         r'permission denied', r'access is denied', r'\beperm\b', r'\beacces\b', r'拒绝访问', r'权限不足',
-        r'权限', r'sandbox.{0,24}(?:deny|denied|block)', r'沙箱.{0,10}(?:拒绝|禁止)',
+        r'sandbox.{0,24}(?:deny|denied|block)', r'沙箱.{0,10}(?:拒绝|禁止)',
     )),
     ('windows_task_save', (
         r'文件被占用', r'sharing violation', r'winerror', r'无法写入', r'保存失败', r'任务保存', r'写入失败',
@@ -261,7 +262,7 @@ def classify(record):
         return _finding(record, task_id, outcome, reason, 'executor_field', 'medium',
                         [_evidence('executor_field', 'failure_class', record.get('failure_class') or
                                    _dict(record.get('failure')).get('kind'))],
-                        verified=True, note='记录自带的显式分类')
+                        verified=outcome != OUTCOME_UNKNOWN, note='记录自带的显式分类')
 
     # 2) recorded cancellation
     if status in ('cancelled', 'canceled', 'cancelling') or review_state in ('cancelled', 'canceled'):
@@ -270,10 +271,14 @@ def classify(record):
 
     # 3) the task's own structured error / termination text (never reviewer prose)
     reason, hit = _match_system(error_text)
-    if reason:
+    completed_review = (executor_status == 'completed'
+                        and review_state in ('accepted', 'returned')
+                        and not record.get('review_unreadable'))
+    if reason and not completed_review:
         outcome = OUTCOME_CANCELLED if reason in _CANCELLED_REASONS else OUTCOME_SYSTEM
-        return _finding(record, task_id, outcome, reason, 'executor_field', 'high',
-                        [_evidence('executor_field', 'error', hit or error_text)], verified=True)
+        return _finding(record, task_id, outcome, reason, 'executor_field', 'medium',
+                        [_evidence('executor_field', 'error', hit or error_text)], verified=False,
+                        note='历史错误文本规则推断；不是结构化故障证据')
 
     # 3b) the authoritative review record could not be trusted (corrupt, or
     #     missing while the task carried a stale embedded verdict).  The caller

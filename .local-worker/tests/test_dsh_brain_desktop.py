@@ -36,7 +36,8 @@ class DesktopTests(unittest.TestCase):
         (self.root / '.local-worker').mkdir(parents=True)
         (self.root / '打开模型工作台.ps1').write_bytes(b'# fixture native opener\n')
         (self.root / '启动模型面板.ps1').write_bytes(b'# fixture native starter\n')
-        for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py', 'workflow_settings.py', 'host_balance.py',
+        for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py',
+                     'brain_requests.py', 'failure_classification.py', 'workflow_settings.py', 'host_balance.py',
                      'completion_wait.py','desktop_notify.py','completion_host.py','dsh_notify.py','panel_service.py','powershell_runtime.py'):
             (self.root / '.local-worker' / name).write_bytes(b'# temporary fixture\n')
         self.home = self.base / 'dsh-home'
@@ -107,7 +108,7 @@ class DesktopTests(unittest.TestCase):
         with tarfile.open(self.folder / 'plugin.tgz') as archive:
             manifest = json.loads(archive.extractfile('package/package.json').read())
             client = archive.extractfile('package/client.mjs').read()
-        self.assertEqual(manifest['version'], '0.2.11')
+        self.assertEqual(manifest['version'], '0.2.12')
         self.assertEqual(set(manifest['files']), set(setup.FILES) - {'package.json'})
         self.assertEqual(manifest['exports']['./client'], './client.mjs')
         self.assertEqual(manifest['exports']['./account'], './account.cjs')
@@ -179,6 +180,14 @@ class DesktopTests(unittest.TestCase):
         (self.root / '.local-worker' / 'workflow_settings.py').write_bytes(b'changed')
         with self.assertRaises(setup.SetupError):
             self.install()
+        self.assertEqual(self.environment.writes, [])
+
+    def test_request_journal_code_drift_refuses_installation(self):
+        self.prepare()
+        (self.root / '.local-worker' / 'brain_requests.py').write_bytes(b'changed journal code')
+        with self.assertRaises(setup.SetupError):
+            self.install()
+        self.assertEqual(self.commands, [])
         self.assertEqual(self.environment.writes, [])
 
     def test_existing_foreign_plugin_or_environment_is_not_adopted(self):

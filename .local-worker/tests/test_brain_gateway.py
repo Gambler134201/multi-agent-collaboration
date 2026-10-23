@@ -54,9 +54,9 @@ class BrokerTests(unittest.TestCase):
         registry.HERE, registry.REGISTRY, registry.RUNS = self.saved
         self.tmp.cleanup()
 
-    def context(self, owner='main-a', project=None, role='brain', session='s-a'):
+    def context(self, owner='main-a', project=None, role='brain', session='s-a', host='test-host'):
         return brain_context.build_context(
-            project=str(project or self.project), host='test-host', owner=owner, role=role,
+            project=str(project or self.project), host=host, owner=owner, role=role,
             operator_session=session, session_binding='user_bound')
 
     def capability(self, **kwargs):
@@ -85,6 +85,58 @@ class BrokerTests(unittest.TestCase):
                  'evidence': [{'source': 'reviewer_file', 'detail': 'inspected a.py'}]}]
 
     # ------------------------------------------------------------------ tests
+
+    def test_request_lookup_recovers_unknown_task_read_only_for_codex_and_dsh(self):
+        for host in ('codex', 'dsh'):
+            with self.subTest(host=host):
+                cap = self.capability(host=host)
+                req = 'lost-receipt-' + host
+                with mock.patch.object(brain_requests, 'complete', side_effect=OSError('fixture disk failure')):
+                    with self.assertRaises(brain_requests.UnknownOutcome):
+                        self.dispatch(cap, req)
+                context = brain_gateway._connection(cap)['context']
+                before = brain_requests.lookup(str(self.project), context.binding_key, req)
+                submitted = list(self.submitted)
+                result = brain_gateway.handle('request_status', {'request_id': req}, cap)
+                self.assertEqual(result['request_state'], 'task_found')
+                self.assertEqual(result['journal_state'], 'unknown')
+                self.assertIn(result['task']['task_id'], submitted)
+                self.assertFalse(result['automatic_retry'])
+                self.assertFalse(result['safe_to_redispatch'])
+                self.assertEqual(brain_requests.lookup(str(self.project), context.binding_key, req), before)
+                self.assertEqual(self.submitted, submitted)
+                # A different responsibility may read project history, but not
+                # this private request journal or request->task association.
+                for foreign in (self.capability(owner='other'),
+                                self.capability(project=self.other_project),
+                                self.capability(host=host, session='other-chat')):
+                    hidden = brain_gateway.handle('request_status', {'request_id': req}, foreign)
+                    self.assertEqual(hidden['request_state'], 'not_found')
+                    self.assertIsNone(hidden['task'])
+
+    def test_request_lookup_empty_project_is_read_only_and_executor_cannot_use_it(self):
+        cap = self.capability(project=self.other_project)
+        result = brain_gateway.handle('request_status', {'request_id': 'absent'}, cap)
+        self.assertEqual(result['request_state'], 'not_found')
+        self.assertEqual(list(self.other_project.iterdir()), [])
+        with self.assertRaises(brain_gateway.BrokerError):
+            brain_gateway.handle('request_status', {'request_id': 'absent'}, self.capability(role='executor'))
+
+    def test_request_lookup_keeps_reserved_corrupt_and_ambiguous_records_unresolved(self):
+        cap = self.capability()
+        context = brain_gateway._connection(cap)['context']
+        brain_requests.reserve(str(self.project), context.binding_key, 'dispatch', 'in-flight', {})
+        result = brain_gateway.handle('request_status', {'request_id': 'in-flight'}, cap)
+        self.assertEqual(result['request_state'], 'reserved')
+        with mock.patch.object(brain_gateway, '_find_task_receipts', return_value=[{'task_id':'a'}, {'task_id':'b'}]):
+            result = brain_gateway.handle('request_status', {'request_id': 'in-flight'}, cap)
+        self.assertEqual(result['request_state'], 'unknown')
+        self.assertIsNone(result['task'])
+        with mock.patch.object(brain_requests, 'lookup', side_effect=brain_gateway.sqlite3.DatabaseError('corrupt')):
+            result = brain_gateway.handle('request_status', {'request_id': 'in-flight'}, cap)
+        self.assertEqual(result['request_state'], 'unknown')
+        self.assertFalse(result['safe_to_redispatch'])
+
 
     def test_current_queue_running_edit_allows_next_task_but_executes_serially(self):
         from concurrent.futures import ThreadPoolExecutor

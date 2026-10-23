@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import brain_requests as journal
@@ -14,6 +15,70 @@ import project_storage
 
 
 class RequestJournalTests(unittest.TestCase):
+    def test_receipt_save_failure_after_effect_is_unknown_and_effect_is_not_replayed(self):
+        calls = []
+        effect = lambda: calls.append(1) or {'task_id': 'original-task'}
+        with patch.object(journal, 'complete', side_effect=OSError('fixture disk full')):
+            with self.assertRaises(journal.UnknownOutcome) as caught:
+                journal.run_once(str(self.project), 'main-a', 'dispatch', 'save-failed', {}, effect)
+        self.assertIn('main-a/save-failed', str(caught.exception))
+        self.assertEqual(journal.lookup(str(self.project), 'main-a', 'save-failed')['state'], 'unknown')
+        with self.assertRaises(journal.UnknownOutcome):
+            journal.run_once(str(self.project), 'main-a', 'dispatch', 'save-failed', {}, effect)
+        self.assertEqual(calls, [1])
+
+    def test_unknown_marker_failure_cannot_hide_unknown_or_leave_active_claim(self):
+        calls = []
+        with patch.object(journal, 'complete', side_effect=OSError('fixture save failed')), \
+             patch.object(journal, 'mark_unknown', side_effect=OSError('fixture journal unavailable')):
+            with self.assertRaises(journal.UnknownOutcome):
+                journal.run_once(str(self.project), 'main-a', 'dispatch', 'both-failed', {},
+                                 lambda: calls.append(1) or {'task_id': 'original'})
+        self.assertFalse(journal._ACTIVE)
+        with self.assertRaises(journal.UnknownOutcome):
+            journal.run_once(str(self.project), 'main-a', 'dispatch', 'both-failed', {},
+                             lambda: calls.append(2) or {'task_id': 'duplicate'})
+        self.assertEqual(calls, [1])
+
+    def test_failure_after_commit_preserves_original_receipt(self):
+        original = journal.complete
+        calls = []
+        def committed_then_lost(*args, **kwargs):
+            original(*args, **kwargs)
+            raise OSError('fixture response after commit lost')
+        with patch.object(journal, 'complete', side_effect=committed_then_lost):
+            with self.assertRaises(journal.UnknownOutcome):
+                journal.run_once(str(self.project), 'main-a', 'dispatch', 'committed', {},
+                                 lambda: calls.append(1) or {'task_id': 'original'})
+        row = journal.lookup(str(self.project), 'main-a', 'committed')
+        self.assertEqual(row['state'], 'completed')
+        self.assertEqual(row['receipt']['task_id'], 'original')
+        replay = journal.run_once(str(self.project), 'main-a', 'dispatch', 'committed', {},
+                                  lambda: calls.append(2))
+        self.assertTrue(replay['reused'])
+        self.assertEqual(calls, [1])
+
+    def test_recovered_receipt_save_failure_and_rejection_save_failure_are_unknown(self):
+        with patch.object(journal, 'complete', side_effect=OSError('fixture save failed')):
+            with self.assertRaises(journal.UnknownOutcome):
+                journal.run_once(str(self.project), 'main-a', 'dispatch', 'recovery-save', {},
+                                 lambda: (_ for _ in ()).throw(RuntimeError('lost')),
+                                 recover=lambda: {'task_id': 'found'})
+        with patch.object(journal, 'reject', side_effect=OSError('fixture reject save failed')):
+            with self.assertRaises(journal.UnknownOutcome):
+                journal.run_once(str(self.project), 'main-a', 'dispatch', 'reject-save', {},
+                                 lambda: (_ for _ in ()).throw(ValueError('proven refusal')),
+                                 reject_on=(ValueError,))
+
+    def test_lookup_does_not_initialize_empty_project_or_change_reservation(self):
+        self.assertIsNone(journal.lookup(str(self.project), 'main-a', 'absent'))
+        self.assertEqual(list(self.project.iterdir()), [])
+        journal.reserve(str(self.project), 'main-a', 'dispatch', 'pending', {})
+        before = journal.lookup(str(self.project), 'main-a', 'pending')
+        self.assertEqual(before['state'], 'reserved')
+        self.assertEqual(journal.lookup(str(self.project), 'main-a', 'pending'), before)
+        self.assertIsNone(journal.lookup(str(self.project), 'other-owner', 'pending'))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = registry.HERE, registry.REGISTRY, registry.RUNS
