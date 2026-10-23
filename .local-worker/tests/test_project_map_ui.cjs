@@ -42,6 +42,21 @@ test('search and graph selection use real node identities with limits',()=>{
   assert.deepEqual(ui.graphSlice(d,'a.py',false).nodes.map(n=>n.id),['a.py','b.py']);
   const limited=ui.graphSlice(d,'c.py',true,'',1);assert.equal(limited.nodes[0].id,'c.py');assert.equal(limited.truncated,true);
 });
+test('overview explains inferred areas and counts only current-project tasks',()=>{
+  const d={...data('E:/a'),nodes:[
+    {id:'ui/app.js',path:'ui/app.js'},
+    {id:'worker.py',path:'worker.py'},
+    {id:'tests/test_worker.py',path:'tests/test_worker.py'}
+  ],edges:[{source:'ui/app.js',target:'worker.py'}]};
+  const result=ui.overview(d,[
+    {project:'E:/a',status:'running'},
+    {project:'E:/a',status:'completed'},
+    {project:'E:/b',status:'queued'}
+  ]);
+  assert.equal(result.tasks,2);assert.equal(result.active,1);
+  assert.deepEqual(result.groups.map(group=>group.name),['测试与检查','界面与交互','执行与工具']);
+  assert.deepEqual(result.links,[{from:'界面与交互',to:'执行与工具'}]);
+});
 test('markup values are escaped, module uses no network/storage or code execution',()=>{
   assert.equal(ui.escapeText('<img src=x onerror="alert(1)">'), '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
   const code=fs.readFileSync(path.join(__dirname,'../panel/project-map.js'),'utf8');
@@ -70,6 +85,9 @@ test('dialog is created once, renders escaped files, and clears on project chang
     assert.equal(require('../panel/project-map.js').create({api,getView:()=>view}),instance);
     await instance.open();await instance.open();assert.equal(calls,1);assert.equal(body.children.length,1);
     const dialog=body.children[0];assert.equal(dialog.open,true);
+    assert.match(dialog.innerHTML,/读懂这个项目/);
+    assert.match(dialog.querySelector('#pm-overview').innerHTML,/代码大致分为这些部分/);
+    assert.equal(dialog.querySelector('#pm-code').hidden,true);
     const list=dialog.querySelector('#pm-list').innerHTML;
     assert.ok(list.includes('&lt;img'));assert.ok(!list.includes('<img'));
     view={mode:'project',project:'E:/b'};instance.onProjectChange();assert.equal(dialog.open,false);

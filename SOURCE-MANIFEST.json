@@ -286,8 +286,8 @@
     },
     {
       "path": ".local-worker/panel/app.js",
-      "sha256": "5c0c2017e916d50ca0e813ec42c134fcb0d7800ce549697e53e4463c9886c251",
-      "bytes": 169372
+      "sha256": "825bf28ae6dac737b2a7975cc70a439aa49ad202092b25baba4006cde66f4f49",
+      "bytes": 169401
     },
     {
       "path": ".local-worker/panel/codex-bridge.js",
@@ -311,13 +311,13 @@
     },
     {
       "path": ".local-worker/panel/project-map.css",
-      "sha256": "64d1087d8184a04db3521c71254134252499a100726a4c4f5ecb68f3e226f048",
-      "bytes": 5028
+      "sha256": "fa668da0793415c08f912f2c8aad709c2b8bf4600f9f26c43e429ca481014d3a",
+      "bytes": 7429
     },
     {
       "path": ".local-worker/panel/project-map.js",
-      "sha256": "059dc6ada6f25b9d19322a99b9ed37b4a5377f10f676b326b652e7f0d097ca57",
-      "bytes": 12208
+      "sha256": "cae237d562765df45a8d2d2e0a29b45f4cc379b4baa3b18ead78613eb2d0768e",
+      "bytes": 16801
     },
     {
       "path": ".local-worker/panel/style.css",
@@ -781,8 +781,8 @@
     },
     {
       "path": ".local-worker/tests/test_project_map_ui.cjs",
-      "sha256": "ca56442edf58a47e284fb4e0b3738de8267f3485addb9a731c2b185e1a29c4a1",
-      "bytes": 5432
+      "sha256": "d6d389da317cfc2170d8a2e61c92fbf5c5a4fa7edb5a00e084c0e6fb1c4be206",
+      "bytes": 6379
     },
     {
       "path": ".local-worker/tests/test_project_scope.py",
@@ -1101,8 +1101,8 @@
     },
     {
       "path": "docs/PROJECT_MAP.md",
-      "sha256": "2707a20aca66705ea85b83b719ccc77a4c1ffe1e60c6cdeaf7b18467325ca4c6",
-      "bytes": 5758
+      "sha256": "1b2048dda612fe8df321fd0ac3bae3f35afb40e6e9faac591ccc9b3e45d6c597",
+      "bytes": 6334
     },
     {
       "path": "docs/REQUEST_RELIABILITY.md",

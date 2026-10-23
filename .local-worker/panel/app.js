@@ -207,7 +207,7 @@ if(isDshHost){
   if(note)note.textContent='模型、DSH 登录账户余额与每日预算总账全局共享';
 }
 let viewEpoch=0;
-const projectMapUI=window.ModelDeskProjectMap?.create({api,getView:()=>({...projectView}),toast});
+const projectMapUI=window.ModelDeskProjectMap?.create({api,getView:()=>({...projectView}),getTasks:()=>state.tasks||[],toast});
 if($('project-map-open'))$('project-map-open').onclick=()=>projectMapUI?projectMapUI.open():toast('项目地图资源尚未加载，请刷新工作台。',true);
 let recentProjects=[];
 let knownProjects=[];
