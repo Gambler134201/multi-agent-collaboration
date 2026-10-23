@@ -1,5 +1,9 @@
 # 跨主脑功能更新约定
 
+## 执行结果与失败阶段
+
+Pi、DSH、WorkBuddy 的控制器阶段证据共用 `execution_result.py`；工作台两种宿主视图、`brain_status` / `brain_delivery` 及 Codex CLI 交付包使用相同只读摘要。执行、指定自测、会话关闭、已有文件与独立验收分别展示；历史缺少阶段时为未知，不根据文字补造。Pi/DSH 完成通知在本任务子进程关闭后发布终态。两宿主及三执行端的离线检查与真实原生 GUI/模型任务分开记录；这不是 WorkBuddy 主脑适配。参见[结果字段与证据边界](EXECUTION_RESULTS.md)。
+
 ## 项目地图
 
 公共 `project_map.py` 提供受限只读索引，工作台按请求所选项目调用；Codex 默认 MCP 的 `query_project_map` 与通用 brain MCP/DSH 的 `brain_project_map` 共用核心。Codex 入口可离线查询、不启动后台；DSH 使用原有固定项目/会话绑定。DSH 0.2.13 已在本机安装并核对工具白名单和规则，旧连接加载及原生界面待分别确认。两种工作台共用地图 JS/CSS，Codex MCP Apps 内联相同资源。未加入任何执行端的自动上下文消费，不据此宣称 Pi/DSH/WorkBuddy 执行器都会自动读取地图。详见[首版能力与限制](PROJECT_MAP.md)。

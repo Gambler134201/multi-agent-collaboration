@@ -756,6 +756,8 @@ def public_tasks(view=None):
                 row["review"] = review_facts(folder.name)
             else:
                 row["review"] = None
+            import execution_result
+            row['execution_result'] = execution_result.project(row, row['review'])
             rows.append(public_task_cost(row))
         except (OSError, ValueError, IndexError):
             continue
@@ -940,7 +942,11 @@ def execute_task(task_id):
     state = json.loads((run / "task.json").read_text(encoding="utf-8"))
     if (run / "cancelled.flag").exists():
         return
+    import execution_result
+    tracker = execution_result.Tracker(state.get('engine') or 'unknown')
+    tracker.mark('prepare', 'running', '控制器派发前校验')
     try:
+        registry.patch_task(run, execution_evidence=tracker.snapshot())
         settings = workflow_settings.snapshot()
         if state.get('route', {}).get('mode') == 'auto' and not settings['enabled']:
             raise ValueError('协作总开关已关闭，排队中的自动任务未启动；请由 Codex 按默认方式继续')
@@ -977,10 +983,20 @@ def execute_task(task_id):
         current = json.loads((run / "task.json").read_text(encoding="utf-8"))
         if current["status"] in {"queued", "running"}:
             message = (run / "launcher.log").read_text(encoding="utf-8", errors="replace")[-1500:]
-            registry.patch_task(run, status="failed", phase="执行失败", ended_at=registry.now(), error=message)
+            # A crashed child did not publish a definitive stage. Retain its
+            # existing evidence when present instead of guessing from log prose.
+            evidence = current.get('execution_evidence') or tracker.snapshot()
+            registry.patch_task(run, status="failed", phase="执行失败", ended_at=registry.now(), error=message,
+                                execution_evidence=evidence)
     except Exception as exc:
         if not (run / "cancelled.flag").exists():
-            registry.patch_task(run, status="failed", phase="执行失败", ended_at=registry.now(), error=safe_error(exc))
+            tracker.fail('prepare', 'STARTUP_FAILED', '控制器启动执行端失败；原始原因见任务错误')
+            current = registry.read_task(run)
+            registry.patch_task(run, status="failed", phase="执行失败", ended_at=registry.now(),
+                                error=current.get('error') or safe_error(exc),
+                                execution_evidence=current.get('execution_evidence') if
+                                (current.get('execution_evidence') or {}).get('stages', {}).get('execute', {}).get('state') not in (None, 'not_run')
+                                else tracker.snapshot())
     finally:
         with ACTIVE_LOCK:
             ACTIVE.pop(task_id, None)
@@ -2306,17 +2322,22 @@ class Handler(BaseHTTPRequestHandler):
                         row.pop("worker_pid", None)
                         row.pop("process_pid", None)
                         row.pop("launcher_pid", None)
+                        row['review'] = review_facts(parts[3])
+                        import execution_result
+                        row['execution_result'] = execution_result.project(row, row['review'])
                 if not isinstance(row, dict):
                     return self.send_json({"task": None, "transient": True,
                                            "error": "任务记录暂时不可读，请重试"}, 503)
                 return self.send_json({"task": public_task_cost(row), "prompt": prompt.read_text(encoding="utf-8") if prompt.exists() else ""})
             assets = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
-                      '/project-map.js': 'project-map.js', '/project-map.css': 'project-map.css'}
+                      '/project-map.js': 'project-map.js', '/project-map.css': 'project-map.css',
+                      '/execution-result.js': 'execution-result.js', '/execution-result.css': 'execution-result.css'}
             if path not in assets:
                 return self.send_json({"error": "页面不存在"}, 404)
             raw = (WEB / assets[path]).read_bytes()
             mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css",
-                    '/project-map.js': 'text/javascript', '/project-map.css': 'text/css'}[path]
+                    '/project-map.js': 'text/javascript', '/project-map.css': 'text/css',
+                    '/execution-result.js': 'text/javascript', '/execution-result.css': 'text/css'}[path]
             self.send_response(200)
             self.send_header("Content-Type", mime + "; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))

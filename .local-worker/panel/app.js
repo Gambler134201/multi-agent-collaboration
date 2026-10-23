@@ -464,7 +464,7 @@ function toast(message, error=false) {
 }
 function clock(value) { return value ? new Date(value).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—'; }
 function taskAccepted(task) {
-  return ['accepted','final_accepted'].includes(task.review?.state);
+  return ['accepted','final_accepted'].includes(task.review?.state)&&task.review?.acceptance_valid!==false;
 }
 function taskDisplayStatus(task) {
   // Acceptance comes from the real review attached by the backend. Preserve
@@ -1064,6 +1064,7 @@ function renderDetail() {
   setMarkup($('task-detail'),`<div class="detail-head"><div><h3>${escapeText(task.title)}</h3><p>${escapeText(task.model_name)} · ${escapeText(engineNames[task.engine]||'历史执行器')} · ${task.kind==='chat'?'咨询 / 分析':'修改项目文件'} · ${clock(task.started_at||task.created_at)}</p></div>${active?`<button class="button secondary" id="stop-task">停止任务</button>`:pendingRecovery?'<button class="button primary" id="recover-task">恢复执行（需确认）</button>':hasAgentSession(task)?'<button class="button secondary" id="continue-task">继续会话</button>':badge(taskDisplayStatus(task),independentlyAccepted?'已完成':undefined)}</div>
     <div class="detail-body"><div class="phase-track">${phases.map((phase,i)=>`${i?'<span class="phase-arrow">→</span>':''}<span class="phase-item ${i<phaseIndex?'done':i===phaseIndex?'current':''}">${escapeText(phase)}</span>`).join('')}</div>
     <div class="detail-facts"><div><span class="label">当前状态</span><span class="value">${escapeText(displayPhase)} · ${escapeText(duration(task))}</span></div><div><span class="label">${task.kind==='chat'?'Token 用量':'项目文件夹'}</span><span class="value">${task.kind==='chat'?(usage?.total_tokens?`${usage.total_tokens.toLocaleString()} tokens${task.cost_unknown_calls>0?`（另有 ${task.cost_unknown_calls} 次未返回用量，未知；不是全目标总量）`:''}`:'服务端尚未返回用量'):escapeText(task.project||'—')}</span></div></div>
+    ${window.ModelDeskExecutionResult?.render(task.execution_result)||''}
     ${task.completion_wait?`<p class="session-note" role="status">${escapeText(completionWaitText(task))}</p>`:''}
     ${independentlyAccepted&&task.status==='recovery_pending'?'<p class="session-note">原执行器曾中断，历史记录予以保留；本任务已由主脑接管完成并通过独立验收，无需恢复原执行。</p>':''}
     ${pendingRecovery?`<section class="route-note recovery-note" aria-label="待恢复"><strong>待恢复 · 不会自动重发</strong>${task.recovery?.reason?`<p>原因：${escapeText(task.recovery.reason)}</p>`:''}<p class="field-hint">执行是否完成、工具副作用与实际费用都未知；原任务、模型、项目、文件范围与已记录进度都保留。核对改动影响后，点“恢复执行（需确认）”会用<b>同一个任务记录</b>继续（不创建新记录，也不会自动验收）。</p></section>`:''}

@@ -101,8 +101,8 @@
     },
     {
       "path": ".local-worker/brain_gateway.py",
-      "sha256": "8e8e719c21f62701d48a5db6a689502edaa62c6d08e47044cf4e2f7b096534e2",
-      "bytes": 42930
+      "sha256": "88e2925d25083f296e096b5d93205697e0f0e7806c44e58e2e5f5e236e27996c",
+      "bytes": 43177
     },
     {
       "path": ".local-worker/brain_mcp_server.py",
@@ -131,8 +131,8 @@
     },
     {
       "path": ".local-worker/codex_mcp_server.py",
-      "sha256": "0e2b999ff6be24b74467a12369bea50776f7b06f0bd59abfc6d892c20bf17a92",
-      "bytes": 29749
+      "sha256": "a1a9f3e22c6c2c3ab8e78330ef37d9ba1d0689f88fadd35807fc87f35cb145cf",
+      "bytes": 30471
     },
     {
       "path": ".local-worker/codex_usage.py",
@@ -166,8 +166,8 @@
     },
     {
       "path": ".local-worker/delegation_policy.py",
-      "sha256": "2b5006d5cd0c6c1be68012f8a9568924f2b7ce07379ffcceb4f84bd55b3ee036",
-      "bytes": 38628
+      "sha256": "1a388a9007c25c95deef16add0791459c46be75833727797255744dba63ae421",
+      "bytes": 38914
     },
     {
       "path": ".local-worker/desktop_notify.py",
@@ -181,8 +181,8 @@
     },
     {
       "path": ".local-worker/dsh_brain_desktop.py",
-      "sha256": "ec8420cbb1d1e3aae8aa392ebafdabe6d58c8c13248f6684d67d1c4bb6c7b073",
-      "bytes": 30040
+      "sha256": "ce4ac22b25dd6cfd8d185eca132a7c68e56f3a2edeb1229c6b3ba6b942ed3dff",
+      "bytes": 30062
     },
     {
       "path": ".local-worker/dsh_brain_plugin.py",
@@ -196,8 +196,8 @@
     },
     {
       "path": ".local-worker/dsh_worker.py",
-      "sha256": "5acfa9eade4821719406e19493bb7f9272bf7c40892c23b6cdbbc628708036cc",
-      "bytes": 43197
+      "sha256": "a64f5ebe443b08f60b8bec9d046225416ff792102ffecf870ab5c6b57eb1a2d5",
+      "bytes": 49003
     },
     {
       "path": ".local-worker/empty.env",
@@ -220,14 +220,19 @@
       "bytes": 6251
     },
     {
+      "path": ".local-worker/execution_result.py",
+      "sha256": "648c564c2c62b855d1a28828434cf32315279f58dfea4ba1ab7d5fe4c49783bc",
+      "bytes": 8592
+    },
+    {
       "path": ".local-worker/executor_adapter.py",
       "sha256": "22ffcb3cc087aa7a4a60f9aa53472a081d8d91853e5f181dff0a4eaa1be26164",
       "bytes": 38804
     },
     {
       "path": ".local-worker/failure_classification.py",
-      "sha256": "3fb6e425ad56d3f49c1bd5daac37b201a18fdb59be7ebbdccee8aa8b71b8a6aa",
-      "bytes": 22944
+      "sha256": "d93f9a4227472577f7aa5246b778e430a98fa045e1d3a691413d111a9b1e473e",
+      "bytes": 24423
     },
     {
       "path": ".local-worker/folder_picker.py",
@@ -281,8 +286,8 @@
     },
     {
       "path": ".local-worker/panel/app.js",
-      "sha256": "61ecac9139a0ce55d2ac22b9e6f04880e8c3b53355eb2708b9023cde35971914",
-      "bytes": 169259
+      "sha256": "5c0c2017e916d50ca0e813ec42c134fcb0d7800ce549697e53e4463c9886c251",
+      "bytes": 169372
     },
     {
       "path": ".local-worker/panel/codex-bridge.js",
@@ -290,9 +295,19 @@
       "bytes": 5309
     },
     {
+      "path": ".local-worker/panel/execution-result.css",
+      "sha256": "ec61fb2f11a19d858fd13d9568391035d7ed91a2863351c3560665696402dc73",
+      "bytes": 9618
+    },
+    {
+      "path": ".local-worker/panel/execution-result.js",
+      "sha256": "23fc876b68e9afca31ac32faa3fd7235c9e0038c4e0750edabe24b5844514c1c",
+      "bytes": 17217
+    },
+    {
       "path": ".local-worker/panel/index.html",
-      "sha256": "ddbe3d8a6ed079b3a51d72c48b1acd373bffd9b9211a2b345c4081aca7d5541a",
-      "bytes": 34912
+      "sha256": "7f6c9df5624d9a78ef5822f340a81202644ec4568753b97c42e4c0f6b9548b64",
+      "bytes": 35008
     },
     {
       "path": ".local-worker/panel/project-map.css",
@@ -311,8 +326,8 @@
     },
     {
       "path": ".local-worker/panel_server.py",
-      "sha256": "2258954b902442c7370c4a734bf0889e9f14c11ab8764d8b6ee7b70868c0d5a3",
-      "bytes": 146954
+      "sha256": "6257c37fb1f2c5625ae46618afa89b80db1857004d394f0f65ee2ef063c306f2",
+      "bytes": 148549
     },
     {
       "path": ".local-worker/panel_service.py",
@@ -415,6 +430,11 @@
       "bytes": 3284
     },
     {
+      "path": ".local-worker/tests/check_execution_result.cjs",
+      "sha256": "d8fc1a3f161443506dfe4b3a39ca88db84437ec63d1a83e8b4d37e94871211a8",
+      "bytes": 5379
+    },
+    {
       "path": ".local-worker/tests/check_project_views.cjs",
       "sha256": "eab390ca2627b02956aeee73a8310274fa6be7ab1ec45ee17fc2704612b4c0c1",
       "bytes": 19667
@@ -481,8 +501,8 @@
     },
     {
       "path": ".local-worker/tests/test_brain_gateway.py",
-      "sha256": "59899a53fd7523cc02cf9598536266eed27e731d92ecd1fa6dab31b1fe8b9703",
-      "bytes": 29309
+      "sha256": "ce1d40f04a371898bb0dbb5614803d1f810b9bb15c4fe3d2e546828c4f4d47e8",
+      "bytes": 31352
     },
     {
       "path": ".local-worker/tests/test_brain_http.py",
@@ -521,8 +541,8 @@
     },
     {
       "path": ".local-worker/tests/test_codex_mcp_server.py",
-      "sha256": "ac49dd9e4aa9d711fb981b8c88b29fcd3e90eb419b5e80e496ea6d9b9a2ae7bd",
-      "bytes": 23238
+      "sha256": "97bdc036720a8a6b898ed744d1afd9ce9f97115c1393ea06036912a330a4018b",
+      "bytes": 23689
     },
     {
       "path": ".local-worker/tests/test_codex_usage.py",
@@ -586,8 +606,8 @@
     },
     {
       "path": ".local-worker/tests/test_dsh_brain_desktop.py",
-      "sha256": "4c5f17daf7113b16586760f95844d242f28784c340d79abdeb455b4f7a6e25a8",
-      "bytes": 30645
+      "sha256": "6bf535fca481835a3300396b210ffc5ea05f9a7931784ce91389eaabba85e41f",
+      "bytes": 30668
     },
     {
       "path": ".local-worker/tests/test_dsh_brain_plugin.cjs",
@@ -638,6 +658,16 @@
       "path": ".local-worker/tests/test_execution_engines.py",
       "sha256": "4de9f84fc4bb6c605f849319c104d4be14358bfa9cbdbf0d58bd459099b893fc",
       "bytes": 12419
+    },
+    {
+      "path": ".local-worker/tests/test_execution_result.mjs",
+      "sha256": "a56505b0013732cba1dc77351a9d9d34947819062d85d05efbee0e0b575c0736",
+      "bytes": 37278
+    },
+    {
+      "path": ".local-worker/tests/test_execution_result.py",
+      "sha256": "18dd9058fd9bb66f30242cadf947ecc40b00edd97fc06d4ba06cc6fafb08726a",
+      "bytes": 8683
     },
     {
       "path": ".local-worker/tests/test_executor_adapter.py",
@@ -766,8 +796,8 @@
     },
     {
       "path": ".local-worker/tests/test_project_views.py",
-      "sha256": "598c8bb84ce4a0189bd57e230e336f1ffbcce0967fca25b98c778933ea41a358",
-      "bytes": 10604
+      "sha256": "d833ee23bcccb09631bb0d51c07429a0297cd4eddb9db329ea5292b92826c360",
+      "bytes": 11692
     },
     {
       "path": ".local-worker/tests/test_record_io.py",
@@ -796,8 +826,8 @@
     },
     {
       "path": ".local-worker/tests/test_recovery_reliability.py",
-      "sha256": "d2f6bfd9570f1f8ec89c67c41e77b098c1e5c30e80eede7844cf895ead671814",
-      "bytes": 82880
+      "sha256": "8b2b658ce0632c1acdf300e0f93afd3f5c9f63d0c152053a7b3f9b988334cb0d",
+      "bytes": 85326
     },
     {
       "path": ".local-worker/tests/test_router.py",
@@ -851,8 +881,8 @@
     },
     {
       "path": ".local-worker/tests/test_workbuddy_integration.py",
-      "sha256": "36672d61f8b6a8e512d029a1a2d802caa63a4b3e945fc31f8b01852b8ae9bb5a",
-      "bytes": 28672
+      "sha256": "7323c6797d838f75274bf4bde5be421076ab4c87c23409a99678f42e86a59794",
+      "bytes": 29743
     },
     {
       "path": ".local-worker/tests/test_workbuddy_native_tools.py",
@@ -921,8 +951,8 @@
     },
     {
       "path": ".local-worker/workbuddy_worker.py",
-      "sha256": "170e886bd020c61138439dc3e7448e7f6d1f7ae214a1693d92a8d6cf9d7b263b",
-      "bytes": 24795
+      "sha256": "e656e3a82daf6e27dd8fbdcd6850ab32bfec06cfde42861e255c7dcea4ab27aa",
+      "bytes": 28687
     },
     {
       "path": ".local-worker/workflow-guides/core.md",
@@ -941,8 +971,8 @@
     },
     {
       "path": ".local-worker/workflow-guides/efficiency.md",
-      "sha256": "051082776f56d5d1d5251ff2148b17ddaba19e95a2ac94d5cffeb6cb10a851ea",
-      "bytes": 2177
+      "sha256": "551b2da4fb0104724e91c57c6d7bfafb350c515ae2fea6dbb43e2080de0b701e",
+      "bytes": 2805
     },
     {
       "path": ".local-worker/workflow-guides/limits.md",
@@ -981,8 +1011,8 @@
     },
     {
       "path": ".local-worker/workflow_assist.py",
-      "sha256": "f13bc1f45efddb70118a0b7e048774dca0a0454759699efbdb291c67642e599c",
-      "bytes": 56929
+      "sha256": "ded2b4753a526007f66e5dc7266dd770273d3e3601eb5efbfada72925959a9f1",
+      "bytes": 57119
     },
     {
       "path": ".local-worker/workflow_settings.py",
@@ -991,8 +1021,8 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "fa19fe826b2f3bd438394e5ea4d84b00e5629226ae9c98b08f3e4e3464e5897b",
-      "bytes": 2117
+      "sha256": "10428f4f260a0940513c64259af7c42f224b8d02db74b711e4be97f7cedb1f2b",
+      "bytes": 2621
     },
     {
       "path": "CHANGELOG.md",
@@ -1021,8 +1051,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "28fbd2ae4283170a6616c1805d3143f1198de30a1aed1b0444a95a404a271358",
-      "bytes": 10096
+      "sha256": "66dba84accc3dad6c42947c34b692e9e2e6e2f090be0c1e660e537b8b58b231a",
+      "bytes": 10703
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1048,6 +1078,11 @@
       "path": "docs/EXECUTION_ENDPOINTS.md",
       "sha256": "b8c5dc335f43a807b769806be156a42e9a55b4cd0e0ad41062124caf8b2326c3",
       "bytes": 6957
+    },
+    {
+      "path": "docs/EXECUTION_RESULTS.md",
+      "sha256": "4efa2a99612ee2b51cca59a4b42e5d652a9ccd81d2ae88f7c9e33233d325caf7",
+      "bytes": 3569
     },
     {
       "path": "docs/GIT_WORKFLOW.md",
@@ -1146,13 +1181,13 @@
     },
     {
       "path": "后续待更新功能/README.md",
-      "sha256": "d48b41a7e3f869b4d1252969da26cb9575af64e8d1b2aebb277f88e04397bc05",
-      "bytes": 3144
+      "sha256": "627aee1b9ee91dd0a8d807ef6f6305372f53ed0719f0cf22552af2fc2babe309",
+      "bytes": 3496
     },
     {
       "path": "后续待更新功能/协作核心可靠性与并行能力更新路线-20261023.md",
-      "sha256": "7f1bc92e52a50c50542f6826e83a28705fdb98874ee9c77afe2bd207c35d585b",
-      "bytes": 15447
+      "sha256": "30e3ebd269bced1162c5a102c71eb8b816e501f61ebfae54d36e04b0276ca8fd",
+      "bytes": 15921
     },
     {
       "path": "后续待更新功能/多主脑Agent与模型适配-可行性与更新计划.md",

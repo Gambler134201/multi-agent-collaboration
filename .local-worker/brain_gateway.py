@@ -672,6 +672,8 @@ def _status(context, payload):
     import delegation_policy
     run, task = _task(context, payload.get('task_id'), read_only=True)
     record, error = delegation_policy.safe_load(run)
+    import execution_result
+    review = delegation_policy.panel_summary(record)
     return {'task_id': task.get('id'), 'status': task.get('status'), 'phase': task.get('phase'),
             'owner': task.get('owner'), 'request_id': task.get('request_id'),
             'access':_read_access(context, task),
@@ -682,7 +684,8 @@ def _status(context, payload):
             'ended_at': task.get('ended_at'), 'error': _text(task.get('error'), 1500),
             'execution_error': _text(task.get('error'), 1500),
             'native_execution': _native_execution(task),
-            'review': delegation_policy.panel_summary(record) if record else None,
+            'execution_result': execution_result.project(task, review, review_error=error),
+            'review': review,
             'review_error': _text(error, 500),
             'note': '状态读取不等待模型、不重复派发；工具超时不是任务总时限。'}
 
@@ -691,8 +694,10 @@ def _delivery(context, payload):
     _keys(payload, ('task_id',), required=('task_id',))
     import delegation_policy
     import task_handover
+    import execution_result
     run, task = _task(context, payload.get('task_id'), read_only=True)
     record, review_error = delegation_policy.safe_load(run)
+    review = delegation_policy.panel_summary(record)
     answer = ''
     for name in ('answer.txt', 'result.md'):
         path = run / name
@@ -743,8 +748,9 @@ def _delivery(context, payload):
             'engine': task.get('engine'), 'model_id': task.get('model_id'),
             'native_execution': _native_execution(task),
             'execution_error': _text(task.get('error'), 1500),
+            'execution_result': execution_result.project(task, review, review_error=review_error),
             'review_state': (record or {}).get('state'),
-            'review': delegation_policy.panel_summary(record) if record else None,
+            'review': review,
             'review_error': _text(review_error, 500),
             'accepted': accepted, 'acceptance_problems': problems,
             'independent_evidence': independent,

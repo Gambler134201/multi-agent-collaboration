@@ -60,6 +60,22 @@ class ProjectHttpTests(Base):
         with self.assertRaises(HTTPError) as e:self.opener.open(req,timeout=10)
         self.assertEqual(e.exception.code,400)
 
+    def test_transient_list_fallback_keeps_result_and_rejects_cached_acceptance(self):
+        import execution_result
+        run = registry.task_dir('a')
+        evidence = execution_result.Tracker('pi')
+        evidence.fail('session_close', 'SESSION_CLOSE_UNCONFIRMED', 'fixture close unknown', source='child_process')
+        registry.patch_task(run, engine='pi', status='failed', changed_files=['a.py'],
+                            execution_evidence=evidence.snapshot(),
+                            review={'state':'accepted', 'acceptance_valid':True})
+        before = (run/'task.json').read_bytes()
+        with mock.patch.object(panel, 'public_tasks', return_value=[]):
+            row = self.call('/api/tasks/a', {'mode':'project', 'project':str(self.project)})['task']
+        self.assertEqual(row['execution_result']['failure']['stage'], 'session_close')
+        self.assertEqual(row['execution_result']['artifacts']['files'], ['a.py'])
+        self.assertFalse(row['execution_result']['review']['accepted'])
+        self.assertEqual(before, (run/'task.json').read_bytes())
+
     def test_missing_scope_cannot_read_global_history_or_by_id(self):
         for query in ('','?project='+str(self.other)):
             with mock.patch.object(panel.deepseek_billing,'enrich_models',side_effect=lambda rows:rows), \

@@ -1,0 +1,395 @@
+/*
+ * Model Desk · 执行结果摘要组件样式（只读）
+ * ------------------------------------------------------------------
+ * 深色工作台为主，全部颜色走 var(--...) 并带字面量兜底；窄侧栏自适应；
+ * 不加载外部资源，不使用大卡片、阴影、fixed 定位或内嵌图片。
+ *
+ * 主题取值说明：
+ *   工作台主题由页面手动选择（app.js 把 document.documentElement.dataset.theme
+ *   始终写成 light 或 dark），可与系统 prefers-color-scheme 不一致。
+ *   因此字面量兜底也按 [data-theme] 走：只有宿主没有写 data-theme 时，
+ *   才用 prefers-color-scheme 兜底，绝不用系统偏好覆盖宿主已选主题。
+ *   宿主变量名取自 panel/style.css：--ink --ink-soft --muted --line
+ *   --line-strong --surface --inset --green --green-bg --orange --orange-bg
+ *   --red --red-bg --accent --accent-ink --mono
+ */
+
+.mdx-res {
+  /* 字面量兜底集合（宿主未定义变量时才用到）：默认深色工作台 */
+  --mdx-t-fg: #ededeb;
+  --mdx-t-fg-soft: #d6d5d2;
+  --mdx-t-muted: #aaa9a6;
+  --mdx-t-line: #383838;
+  --mdx-t-line-strong: #4b4b48;
+  --mdx-t-bg: #222222;
+  --mdx-t-bg-sub: #1c1c1c;
+  --mdx-t-ok: #75cca6;
+  --mdx-t-ok-bg: #1e2a24;
+  --mdx-t-err: #ef8b96;
+  --mdx-t-err-bg: #2e1e22;
+  --mdx-t-warn: #e0a95f;
+  --mdx-t-warn-bg: #2c2318;
+  --mdx-t-info: #e3e2df;
+  --mdx-t-info-bg: #2b2b2b;
+
+  /* 实际取值：宿主主题变量优先，缺失时落到上面的兜底集合 */
+  --mdx-fg: var(--ink, var(--mdx-t-fg));
+  --mdx-fg-soft: var(--ink-soft, var(--mdx-t-fg-soft));
+  --mdx-muted: var(--muted, var(--mdx-t-muted));
+  --mdx-line: var(--line, var(--mdx-t-line));
+  --mdx-line-strong: var(--line-strong, var(--mdx-t-line-strong));
+  --mdx-bg: var(--surface, var(--mdx-t-bg));
+  --mdx-bg-sub: var(--inset, var(--mdx-t-bg-sub));
+  --mdx-ok: var(--green, var(--mdx-t-ok));
+  --mdx-ok-bg: var(--green-bg, var(--mdx-t-ok-bg));
+  --mdx-err: var(--red, var(--mdx-t-err));
+  --mdx-err-bg: var(--red-bg, var(--mdx-t-err-bg));
+  --mdx-warn: var(--orange, var(--mdx-t-warn));
+  --mdx-warn-bg: var(--orange-bg, var(--mdx-t-warn-bg));
+  --mdx-info: var(--accent, var(--mdx-t-info));
+  --mdx-info-bg: var(--surface-hover, var(--mdx-t-info-bg));
+  --mdx-mono: var(--mono, ui-monospace, Consolas, Menlo, monospace);
+
+  /* 让内部布局按组件自身宽度重排，而不是按视口宽度 */
+  container-type: inline-size;
+  container-name: mdx-res;
+
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--mdx-fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* 宿主手动选择浅色：兜底集合换成浅色工作台取值 */
+[data-theme="light"] .mdx-res {
+  --mdx-t-fg: #202020;
+  --mdx-t-fg-soft: #3b3b39;
+  --mdx-t-muted: #656565;
+  --mdx-t-line: #e3e3df;
+  --mdx-t-line-strong: #cfcfc9;
+  --mdx-t-bg: #ffffff;
+  --mdx-t-bg-sub: #f2f2ef;
+  --mdx-t-ok: #1a765d;
+  --mdx-t-ok-bg: #eaf7f1;
+  --mdx-t-err: #c15361;
+  --mdx-t-err-bg: #fff0f2;
+  --mdx-t-warn: #8e5a14;
+  --mdx-t-warn-bg: #fff4e4;
+  --mdx-t-info: #2b2b29;
+  --mdx-t-info-bg: #f2f2ef;
+}
+
+/* 宿主未写 data-theme 时才看系统偏好；已写 data-theme 时不覆盖宿主主题 */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .mdx-res {
+    --mdx-t-fg: #202020;
+    --mdx-t-fg-soft: #3b3b39;
+    --mdx-t-muted: #656565;
+    --mdx-t-line: #e3e3df;
+    --mdx-t-line-strong: #cfcfc9;
+    --mdx-t-bg: #ffffff;
+    --mdx-t-bg-sub: #f2f2ef;
+    --mdx-t-ok: #1a765d;
+    --mdx-t-ok-bg: #eaf7f1;
+    --mdx-t-err: #c15361;
+    --mdx-t-err-bg: #fff0f2;
+    --mdx-t-warn: #8e5a14;
+    --mdx-t-warn-bg: #fff4e4;
+    --mdx-t-info: #2b2b29;
+    --mdx-t-info-bg: #f2f2ef;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .mdx-res {
+    --mdx-t-fg: #ededeb;
+    --mdx-t-fg-soft: #d6d5d2;
+    --mdx-t-muted: #aaa9a6;
+    --mdx-t-line: #383838;
+    --mdx-t-line-strong: #4b4b48;
+    --mdx-t-bg: #222222;
+    --mdx-t-bg-sub: #1c1c1c;
+    --mdx-t-ok: #75cca6;
+    --mdx-t-ok-bg: #1e2a24;
+    --mdx-t-err: #ef8b96;
+    --mdx-t-err-bg: #2e1e22;
+    --mdx-t-warn: #e0a95f;
+    --mdx-t-warn-bg: #2c2318;
+    --mdx-t-info: #e3e2df;
+    --mdx-t-info-bg: #2b2b2b;
+  }
+}
+
+.mdx-res *,
+.mdx-res *::before,
+.mdx-res *::after {
+  box-sizing: border-box;
+}
+
+.mdx-res-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--mdx-line);
+  border-left: 2px solid var(--mdx-muted);
+  border-radius: 6px;
+  background: var(--mdx-bg);
+}
+
+.mdx-res[data-execution-status="failed"] .mdx-res-box,
+.mdx-res[data-execution-status="cancelled"] .mdx-res-box {
+  border-left-color: var(--mdx-err);
+}
+
+.mdx-res[data-execution-status="completed"] .mdx-res-box {
+  border-left-color: var(--mdx-ok);
+}
+
+.mdx-res[data-execution-status="running"] .mdx-res-box {
+  border-left-color: var(--mdx-info);
+}
+
+/* ---------- 头部 ---------- */
+
+.mdx-res-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.mdx-res-title {
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+
+.mdx-res-chip,
+.mdx-res-tag {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0 5px;
+  border: 1px solid var(--mdx-line);
+  border-radius: 4px;
+  background: var(--mdx-bg-sub);
+  color: var(--mdx-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.mdx-res-tag.is-ok { color: var(--mdx-ok); border-color: currentColor; background: var(--mdx-ok-bg); }
+.mdx-res-tag.is-err { color: var(--mdx-err); border-color: currentColor; background: var(--mdx-err-bg); }
+.mdx-res-tag.is-warn { color: var(--mdx-warn); border-color: currentColor; background: var(--mdx-warn-bg); }
+.mdx-res-tag.is-info { color: var(--mdx-fg-soft); border-color: var(--mdx-line-strong); background: var(--mdx-info-bg); }
+
+/* 待核实的验收结论：不给通过色，用边框再强调一次 */
+.mdx-res-row--review[data-review-confirmed="false"] .mdx-res-tag.is-warn {
+  border-width: 1px;
+  border-style: solid;
+  border-color: var(--mdx-warn);
+}
+
+.mdx-res-alert {
+  padding: 2px 0;
+  border-top: 1px dotted var(--mdx-line);
+  color: var(--mdx-muted);
+  font-size: 11.5px;
+}
+
+/* ---------- 阶段条 ---------- */
+
+.mdx-res-stages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mdx-res-stage {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 5px;
+  border: 1px solid var(--mdx-line);
+  border-radius: 999px;
+  font-size: 11.5px;
+}
+
+.mdx-res-stage[data-state="failed"] { border-color: var(--mdx-err); }
+.mdx-res-stage[data-state="running"] { border-color: var(--mdx-line-strong); }
+
+.mdx-res-stage-label {
+  color: var(--mdx-fg);
+  overflow-wrap: anywhere;
+}
+
+.mdx-res-stage-detail {
+  color: var(--mdx-muted);
+  overflow-wrap: anywhere;
+}
+
+.mdx-res-stage .mdx-res-tag {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+/* ---------- 信息行 ---------- */
+
+.mdx-res-row {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 2px 8px;
+  align-items: baseline;
+  padding-top: 3px;
+  border-top: 1px dotted var(--mdx-line);
+  min-width: 0;
+}
+
+.mdx-res-k {
+  color: var(--mdx-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.mdx-res-v {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 6px;
+  min-width: 0;
+}
+
+.mdx-res-msg {
+  color: var(--mdx-fg);
+  overflow-wrap: anywhere;
+}
+
+.mdx-res-note {
+  color: var(--mdx-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.mdx-res-code,
+.mdx-res-file {
+  max-width: 100%;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--mdx-bg-sub);
+  color: var(--mdx-fg-soft);
+  font-family: var(--mdx-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.mdx-res-row--fail .mdx-res-msg { color: var(--mdx-err); }
+.mdx-res-row--review .mdx-res-v { font-weight: 500; }
+
+/* ---------- 文件列表 ---------- */
+
+.mdx-res-files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* ---------- 扩展信息（原生 details，无按钮/网络操作） ---------- */
+
+.mdx-res-more {
+  padding-top: 3px;
+  border-top: 1px dotted var(--mdx-line);
+  min-width: 0;
+}
+
+.mdx-res-more > summary {
+  color: var(--mdx-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.mdx-res-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mdx-res-more > summary::before {
+  content: "\25B8 ";
+  color: var(--mdx-muted);
+}
+
+.mdx-res-more[open] > summary::before {
+  content: "\25BE ";
+}
+
+.mdx-res-subhead {
+  margin: 5px 0 2px;
+  color: var(--mdx-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.mdx-res-list {
+  margin: 0;
+  padding: 0 0 0 1.1em;
+  list-style: disc;
+}
+
+.mdx-res-list > li {
+  margin: 1px 0;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 窄侧栏自适应 ---------- */
+
+@container mdx-res (max-width: 30em) {
+  .mdx-res-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+
+  .mdx-res-stage-label {
+    max-width: 100%;
+  }
+}
+
+@container mdx-res (max-width: 16em) {
+  .mdx-res-box {
+    padding: 6px 7px;
+    gap: 5px;
+  }
+
+  .mdx-res-head {
+    gap: 3px 5px;
+  }
+}
+
+/* 不支持 container query 的宿主：按视口宽度做同样的降级 */
+@media (max-width: 30em) {
+  .mdx-res-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mdx-res * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

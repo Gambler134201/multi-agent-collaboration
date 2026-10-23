@@ -497,6 +497,17 @@ def build_workbench_html(panel_dir: Path | None = None) -> str:
             prefix = bridge_tag if name.endswith('.js') else ''
             index = index.replace(marker, prefix + start + (_escape_script(body) if name.endswith('.js') else body) + end)
     # Host bridge must precede the map, and map must precede app initialization.
+    for marker, name, start, end in (
+            ('<link rel="stylesheet" href="/execution-result.css">', 'execution-result.css', '<style>\n', '\n</style>'),
+            ('<script src="/execution-result.js"></script>', 'execution-result.js', '<script>\n', '\n</script>')):
+        if marker in index:
+            if index.count(marker) != 1:
+                raise PanelError('执行结果界面资源标记不唯一')
+            try:
+                body = (folder / name).read_text(encoding='utf-8')
+            except OSError:
+                raise PanelError('执行结果界面资源缺失') from None
+            index = index.replace(marker, start + (_escape_script(body) if name.endswith('.js') else body) + end)
     index = index.replace(script, ('' if map_present else bridge_tag) + '<script>\n' + _escape_script(app) + '\n</script>')
     return index.replace(link, "<style>\n" + style + "\n</style>")
 

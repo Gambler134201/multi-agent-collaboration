@@ -62,6 +62,8 @@ REASON_LABELS = {
     'output_truncated': '输出被截断（单次请求输出额度不足），按资源/容量故障处理',
     'permission_denied': '权限/沙箱拒绝，不计模型质量',
     'windows_task_save': 'Windows 任务或记录保存失败，不计模型质量',
+    'record_write_error': '控制器记录写入失败，不计模型质量',
+    'session_close_error': '任务会话关闭未确认，不计模型质量',
     'user_budget_limit': '用户金额上限，不计模型质量',
     'user_call_limit': '用户请求次数上限，不计模型质量',
     'token_estimate_gate': '本地按保守/近似 token 估计提前拦截，不计模型质量',
@@ -136,7 +138,7 @@ _SYSTEM_RULES = (
     )),
 )
 
-SYSTEM_REASONS = frozenset(reason for reason, _ in _SYSTEM_RULES) | {'explicit_system'}
+SYSTEM_REASONS = frozenset(reason for reason, _ in _SYSTEM_RULES) | {'explicit_system', 'record_write_error', 'session_close_error'}
 QUALITY_REASONS = frozenset({'verified_quality_gap'})
 
 _CANCELLED_REASONS = frozenset({'cancelled'})
@@ -270,10 +272,26 @@ def classify(record):
                         [_evidence('task_status', 'status', record.get('status'))], verified=True)
 
     # 3) the task's own structured error / termination text (never reviewer prose)
-    reason, hit = _match_system(error_text)
+    import execution_result
+    result_view = execution_result.project(record)
+    structured = not result_view['legacy']
+    stage_failure = result_view['failure'] or {}
+    stable_rules = {
+        ('TOOL_PERMISSION_DENIED', 'adapter_tool'): 'permission_denied',
+        ('RECORD_WRITE_FAILED', 'persistence'): 'record_write_error',
+        ('REVIEW_RECORD_FAILED', 'persistence'): 'record_write_error',
+        ('SESSION_CLOSE_UNCONFIRMED', 'adapter'): 'session_close_error',
+        ('SESSION_CLOSE_UNCONFIRMED', 'child_process'): 'session_close_error',
+    }
+    stable_reason = stable_rules.get((stage_failure.get('code'), stage_failure.get('source')))
+    reason, hit = (None, None) if structured else _match_system(error_text)
     completed_review = (executor_status == 'completed'
                         and review_state in ('accepted', 'returned')
                         and not record.get('review_unreadable'))
+    if stable_reason and not completed_review:
+        return _finding(record, task_id, OUTCOME_SYSTEM, stable_reason, 'controller_stage', 'high',
+                        [_evidence('controller_stage', 'execution_evidence.issues', stage_failure.get('code'))],
+                        verified=True, note='控制器/原生工具的固定规则编号；不是错误文案推断')
     if reason and not completed_review:
         outcome = OUTCOME_CANCELLED if reason in _CANCELLED_REASONS else OUTCOME_SYSTEM
         return _finding(record, task_id, outcome, reason, 'executor_field', 'medium',
@@ -285,6 +303,8 @@ def classify(record):
     #     sets ``review_unreadable`` after removing any embedded snapshot, so an
     #     old embedded ``accepted`` can never become a verified success here.
     unreadable_review = _text(record.get('review_unreadable')).strip()
+    if review_state in ACCEPTED_REVIEW_STATES and review.get('acceptance_valid') is False:
+        unreadable_review = unreadable_review or '验收记录证据不完整'
     if unreadable_review:
         return _finding(record, task_id, OUTCOME_UNKNOWN, 'review_unreadable',
                         'independent_review', 'high',
@@ -328,7 +348,7 @@ def classify(record):
 
     # 5) task / executor status without an independent verdict
     summary = _text(record.get('summary') or record.get('log_summary') or record.get('log_tail'))
-    if status in ('failed', 'error') and not error_text and summary:
+    if not structured and status in ('failed', 'error') and not error_text and summary:
         reason, hit = _match_system(summary)
         if reason:
             outcome = OUTCOME_CANCELLED if reason in _CANCELLED_REASONS else OUTCOME_SYSTEM
@@ -347,7 +367,7 @@ def classify(record):
 
     # 6) free text only as a last resort, and only for a finished failure
     summary = _text(record.get('summary') or record.get('log_summary') or record.get('log_tail'))
-    if status in ('failed', 'error') and summary:
+    if not structured and status in ('failed', 'error') and summary:
         reason, hit = _match_system(summary)
         if reason:
             outcome = OUTCOME_CANCELLED if reason in _CANCELLED_REASONS else OUTCOME_SYSTEM

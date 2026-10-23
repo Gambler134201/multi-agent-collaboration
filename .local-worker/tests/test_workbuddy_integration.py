@@ -24,6 +24,7 @@ import workbuddy_tools as tools
 import workbuddy_native_tools as native_tools
 import workbuddy_worker as worker
 import workflow_settings
+import execution_result
 from test_stage_workflow import Base
 
 
@@ -297,6 +298,12 @@ class IntegrationTests(Base):
         self.assertNotIn('认证', row['error'])
         self.assertEqual(self.prompts, 1)
         self.assertIn('不是验收条件', self.last_prompt)
+        view = execution_result.project(row, delegation_policy.panel_summary(delegation_policy.load(run)))
+        self.assertEqual(view['failure']['stage'], 'temporary_cleanup')
+        self.assertEqual(view['failure']['code'], 'TOOL_PERMISSION_DENIED')
+        self.assertEqual(view['failure']['rule_id'], 'unverified_recursive_cleanup')
+        self.assertEqual(view['artifacts']['files'], ['a.py'])
+        self.assertFalse(view['review']['accepted'])
         self.assertNotIn(delegation_policy.load(run)['state'], {'accepted', 'final_accepted'})
 
     def test_cancel_closes_only_owned_client_before_terminal_status(self):
@@ -315,6 +322,10 @@ class IntegrationTests(Base):
         row = registry.read_task(run)
         self.assertEqual(row['status'], 'failed')
         self.assertEqual(row['workbuddy']['cleanup'], 'unknown')
+        view = execution_result.project(row)
+        self.assertEqual(view['failure']['stage'], 'session_close')
+        self.assertEqual(view['artifacts']['state'], 'changed')
+        self.assertEqual(view['execution']['status'], 'failed')
 
     def test_changed_account_binding_refuses_before_native_session_creation(self):
         task, run = self.dispatch()
@@ -323,6 +334,7 @@ class IntegrationTests(Base):
         worker.run_task(run, task, registry.get_model(task['model_id']), client_factory=factory)
         factory.assert_not_called()
         self.assertIn('配置已变', registry.read_task(run)['error'])
+        self.assertEqual(execution_result.project(registry.read_task(run))['failure']['stage'], 'prepare')
 
     def test_declared_test_command_without_real_native_result_fails_not_assumed_success(self):
         with patch.object(panel.EXECUTOR, 'submit'):
@@ -333,6 +345,10 @@ class IntegrationTests(Base):
         self.assertEqual(row['status'],'failed')
         self.assertFalse(row['test_result']['verified'])
         self.assertIsNone(row['test_result']['exit_code'])
+        view = execution_result.project(row)
+        self.assertEqual(view['failure']['stage'], 'verify')
+        self.assertEqual(view['verification']['state'], 'unknown')
+        self.assertEqual(view['failure']['code'], 'TEST_UNCONFIRMED')
 
     def test_old_task_keeps_file_only_tools_and_does_not_receive_native_profile(self):
         task,run=self.dispatch()

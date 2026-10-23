@@ -42,6 +42,7 @@ MAX_CRITERIA = 20
 
 import delegation_policy as policy
 import model_registry as registry
+import execution_result
 import project_storage
 
 CONSEQUENTIAL_KEYS = ('architecture', 'security', 'authorization', 'project_isolation')
@@ -354,6 +355,8 @@ def delivery_packet(task_id, project=None, task=None):
         'task_id': task_id,
         'identity': identity,
         'execution': execution,
+        'execution_result': execution_result.project(
+            record, {'state': acceptance.get('state'), 'acceptance_valid': acceptance.get('trusted') is True}),
         'acceptance': acceptance,
         'criteria': criteria,
         'failed_criteria': failed,

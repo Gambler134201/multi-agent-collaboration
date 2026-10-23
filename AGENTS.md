@@ -10,6 +10,10 @@ acceptance intact. Exclude `.model-desk`, runtime homes and generated records
 from source searches. Tests use isolated temporary records and mock providers.
 Do not publish runtime configuration, secrets, logs, sessions or account data.
 
+## Regression scope
+
+Default to incremental regression: select meaningful checks for the changed subsystem and its direct callers. Run the full suite only when cross-cutting execution, record compatibility, permissions, installation or unresolved coverage makes targeted checks insufficient; state the reason first. After a localized follow-up fix, repeat only the affected checks unless new evidence requires broader coverage. Acceptance-plan output is advisory and does not itself require a full run.
+
 ## Git workflow
 
 Read `docs/GIT_WORKFLOW.md`. Develop on short-lived branches in isolated worktrees, inspect staged paths and diffs, and run meaningful offline checks before committing or proposing a merge. Preserve user modifications and the published portable installation. The local `baseline/*` recovery history must not be pushed or merged into public branches; migrate only reviewed changes onto branches based on `main`. Do not auto-stash, hard-reset, destructively clean or force-push. Worktree isolation does not isolate ports, accounts or databases; do not copy runtime keys/records or start real model work as a regression test. Git housekeeping does not authorize service deployment or public publishing.

@@ -767,9 +767,12 @@ def panel_summary(record):
     rework = record.get('rework') or {}
     executor = record.get('executor') or {}
     test = executor.get('test') or {}
+    acceptance_valid = record.get('state') in ACCEPTED_STATES and not acceptance_problems(record)
     return {'task_id': record.get('task_id'),
             'state': record.get('state'),
-            'label': STATE_LABELS.get(record.get('state'), record.get('state') or ''),
+            'acceptance_valid': acceptance_valid,
+            'label': '验收记录待核实（证据不完整）' if record.get('state') in ACCEPTED_STATES and not acceptance_valid else
+                     STATE_LABELS.get(record.get('state'), record.get('state') or ''),
             'owner': record.get('brain_owner'),
             'rework_count': record.get('rework_count', 0),
             'max_auto_rework': MAX_AUTO_REWORK,

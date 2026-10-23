@@ -30,6 +30,7 @@ import endpoint_access
 import runtime_paths
 import subagent_runtime
 import task_timing
+import execution_result
 
 HERE = Path(__file__).resolve().parent
 RUNTIME = HERE / 'agent-runtime'
@@ -45,6 +46,10 @@ NODE = runtime_paths.node_executable() or runtime_paths.UNSET
 # validated result.  This is not a task deadline: ``task_timing`` owns that, and
 # timeout=0 stays unlimited.
 EXIT_GRACE_SECONDS = 30
+
+
+class ResultRecordError(OSError):
+    """A known local evidence-write operation, separate from model execution."""
 
 
 def availability():
@@ -429,11 +434,23 @@ def _prepare_dsh(run, state, model, relay):
 def _run_task(run, state, model, relay):
     engine = 'pi' if state.get('engine') == 'pi' else 'dsh'
     label = 'Pi' if engine == 'pi' else 'DSH'
-    if engine == 'pi':
-        import pi_worker
-        prepared = pi_worker.prepare(run, state, model, relay)
-    else:
-        prepared = _prepare_dsh(run, state, model, relay)
+    tracker = execution_result.Tracker(engine)
+    tracker.mark('prepare', 'running')
+    try:
+        if engine == 'pi':
+            import pi_worker
+            prepared = pi_worker.prepare(run, state, model, relay)
+        else:
+            prepared = _prepare_dsh(run, state, model, relay)
+    except Exception:
+        # The outer controller preserves the original error text/status. Do not
+        # copy possibly unredacted preparation exceptions into a second field.
+        tracker.fail('prepare', 'PREPARATION_FAILED', '执行端准备失败；原始原因见任务错误')
+        registry.patch_task(run, execution_evidence=tracker.snapshot())
+        raise
+    tracker.mark('prepare', 'completed')
+    tracker.mark('execute', 'running')
+    registry.patch_task(run, execution_evidence=tracker.snapshot())
     project, before = prepared['project'], prepared['before']
     preset, allowed_subagent, process = prepared['preset'], prepared['allowed_subagent'], prepared['process']
     key = model.get('api_key', '')
@@ -450,13 +467,15 @@ def _run_task(run, state, model, relay):
     subagent_outputs = []
     result = None
     error = ''
+    test = None
+    verify_source = 'protection_verification'
     streams = 2
     last_write = 0
     deadline = task_timing.deadline(state.get('timeout',0),grace=30)
     # Distinguishes a real executor failure from a local record/IO failure that
     # happens *after* the executor already returned its outcome.  The latter must
     # never be relabelled as an executor failure.
-    outcome = {'executor_finished': False, 'intended_status': None, 'status_persisted': False}
+    outcome = {'executor_finished': False, 'intended_status': None}
     try:
         with (run / ('pi.log' if engine == 'pi' else 'dsh.log')).open('w', encoding='utf-8') as log:
             while streams:
@@ -556,7 +575,9 @@ def _run_task(run, state, model, relay):
             raise RuntimeError(error or (result or {}).get('error', {}).get('message') or label + ' 未返回完成结果，请查看执行日志')
         if not cancelled and result.get('stopReason') not in {'end_turn', 'stop', None}:
             raise RuntimeError(label + ' 提前结束：' + str(result.get('stopReason')))
+        tracker.mark('execute', 'cancelled' if cancelled else 'completed')
         if not cancelled:
+            tracker.mark('verify', 'running', '核对执行保护证据', 'protection_verification')
             recorded = registry.read_task(run)
             # Verify successful delivery before accepting it; preserve the real
             # error above for failed/cancelled runs without claiming protection.
@@ -568,17 +589,30 @@ def _run_task(run, state, model, relay):
                 registry.patch_task(run, preset_verified=True, preset_proof=proof)
                 record_proof = record_protection.verify_proof(run, project, recorded.get('dsh_session_id'))
             registry.patch_task(run, record_protection=True, record_proof=record_proof)
+        tracker.mark('artifacts', 'running')
         changed = [name for name, previous in before.items() if digest(project / name) != previous]
         file_hashes = {name: digest(project / name) for name in changed}
-        test = None
+        tracker.mark('artifacts', 'completed', '仅核对任务声明文件的内容哈希')
         if not cancelled and state.get('test_command'):
+            verify_source = 'controller_test'
+            tracker.mark('verify', 'running', '运行指定测试命令', 'controller_test')
             registry.patch_task(run, phase='运行验收测试')
             remaining = task_timing.remaining(deadline)
             tested = subprocess.run(['powershell.exe', '-NoProfile', '-Command', state['test_command']], cwd=project,
                                     capture_output=True, encoding='utf-8', errors='replace', timeout=remaining,
                                     creationflags=subprocess.CREATE_NO_WINDOW)
-            test = {'exit_code': tested.returncode, 'output': redact(tested.stdout + tested.stderr)[-6000:]}
-            (run / 'test.log').write_text(test['output'], encoding='utf-8')
+            test = {'exit_code': tested.returncode, 'output': redact(tested.stdout + tested.stderr)[-6000:],
+                    'source': 'controller_test'}
+            if tested.returncode:
+                tracker.fail('verify', 'TEST_FAILED', '指定测试命令返回非零退出码', source='controller_test', category='test')
+            else:
+                tracker.mark('verify', 'completed', '指定测试命令退出码为 0；不是独立验收', 'controller_test')
+            try:
+                (run / 'test.log').write_text(test['output'], encoding='utf-8')
+            except OSError:
+                raise ResultRecordError('指定测试已结束，但测试日志写入失败') from None
+        elif not cancelled:
+            tracker.mark('verify', 'not_requested', '未指定测试命令；执行保护证据已另行核对')
         cancelled = cancelled or (run / 'cancelled.flag').exists()
         status = 'cancelled' if cancelled else 'failed' if test and test['exit_code'] else 'completed'
         # The ACP run has returned a validated outcome from here on.  Everything
@@ -586,6 +620,7 @@ def _run_task(run, state, model, relay):
         # reported as an executor failure.
         outcome['executor_finished'] = True
         outcome['intended_status'] = status
+        tracker.mark('record', 'running')
         summary = answer[-3500:] or label + ' 未返回正文，请检查工具记录和文件改动。'
         if test:
             summary += '\n\n验收测试：' + ('通过' if test['exit_code'] == 0 else '失败') + '\n' + test['output'][-2000:]
@@ -597,21 +632,33 @@ def _run_task(run, state, model, relay):
             # bounded grace and is killed by the cleanup below.
             output['exit_grace_exhausted'] = True
         registry.write_json(run / 'result.json', output)
-        registry.patch_task(run, status=status, phase='已停止执行' if cancelled else '执行完成' if status == 'completed' else '验收测试失败',
-                            ended_at=registry.now(), answer=answer, summary=summary, changed_files=changed,
+        tracker.mark('record', 'completed')
+        # Publish the terminal task/review only after task-owned process cleanup.
+        # A watcher must not accept a transient "completed" before close fails.
+        registry.patch_task(run, status='running', phase='执行已结束，正在关闭会话',
+                            answer=answer, summary=summary, changed_files=changed,
                             file_hashes=file_hashes,
                             tool_calls=list(tools.values())[-100:], test_result=test, exit_code=0 if status == 'completed' else 1,
                             exit_grace_exhausted=bool(exit_grace_exhausted),
-                            exit_grace_seconds=EXIT_GRACE_SECONDS)
-        outcome['status_persisted'] = True
-        if not cancelled:
-            record_review(run, bool(result) and result.get('status') == 'completed', test, changed)
+                            exit_grace_seconds=EXIT_GRACE_SECONDS, execution_evidence=tracker.snapshot())
         print(json.dumps(output, ensure_ascii=False))
         return 0 if status == 'completed' else 1
     except Exception as exc:
-        changed = [name for name, old in before.items() if digest(project / name) != old]
-        file_hashes = {name: digest(project / name) for name in changed}
         error_text = redact(exc)
+        if outcome['executor_finished'] or isinstance(exc, ResultRecordError):
+            tracker.fail('record', 'RECORD_WRITE_FAILED', error_text, source='persistence', category='recording')
+        else:
+            failed_stage = tracker.current if tracker.current in ('execute', 'verify', 'artifacts') else 'execute'
+            failure_code = {'execute': 'EXECUTOR_ERROR', 'artifacts': 'ARTIFACT_SCAN_FAILED',
+                            'verify': 'TEST_EXECUTION_ERROR' if verify_source == 'controller_test' else 'VERIFICATION_ERROR'}[failed_stage]
+            tracker.fail(failed_stage, failure_code, error_text,
+                         source=verify_source if failed_stage == 'verify' else 'controller')
+        try:
+            changed = [name for name, old in before.items() if digest(project / name) != old]
+            file_hashes = {name: digest(project / name) for name in changed}
+        except OSError:
+            changed, file_hashes = [], {}
+            tracker.fail('artifacts', 'ARTIFACT_SCAN_FAILED', '交付文件状态无法核实；不声称没有改动')
         if outcome['executor_finished']:
             # The executor already returned its real outcome; the failure is a
             # local record/IO problem (for example a transient sharing violation
@@ -619,13 +666,11 @@ def _run_task(run, state, model, relay):
             # the IO error beside it instead of misreporting completed work as an
             # executor failure.
             fields = {'io_error': error_text, 'io_error_at': registry.now(),
+                      'execution_evidence': tracker.snapshot(),
                       'changed_files': changed, 'file_hashes': file_hashes,
                       'summary': '执行已结束，但本地记录写入遇到瞬时错误；执行结论以已落盘结果为准，'
                                  '不把本地IO问题当作执行器失败。'}
-            if not outcome['status_persisted']:
-                fields['status'] = outcome['intended_status']
-                fields['ended_at'] = registry.now()
-                fields['exit_code'] = 0 if outcome['intended_status'] == 'completed' else 1
+            # Finally publishes the actual terminal status after session close.
             try:
                 registry.patch_task(run, **fields)
             except Exception:  # never overwrite a finished execution with a false failure
@@ -633,25 +678,69 @@ def _run_task(run, state, model, relay):
             print(json.dumps({'task_id': state['id'], 'status': outcome['intended_status'],
                               'io_error': error_text}, ensure_ascii=False))
             return 0 if outcome['intended_status'] == 'completed' else 1
-        registry.patch_task(run, status='failed', phase=('Pi 执行失败' if engine == 'pi' else 'DSH 执行失败'), ended_at=registry.now(),
+        outcome['intended_status'] = 'failed'
+        registry.patch_task(run, status='running', phase='执行失败，正在关闭会话',
                             error=error_text, answer=answer, changed_files=changed, file_hashes=file_hashes,
                             summary='执行未完成；已保留的文件改动需要验收。' if changed else '执行未完成。',
-                            tool_calls=list(tools.values())[-100:])
-        if not (run / 'cancelled.flag').exists():
-            record_review(run, False, None, changed)
+                            tool_calls=list(tools.values())[-100:], test_result=test,
+                            execution_evidence=tracker.snapshot())
         print(json.dumps({'task_id': state['id'], 'error': error_text}, ensure_ascii=False))
         return 1
     finally:
-        if process.poll() is None:
-            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True)
-            process.wait(timeout=10)
-        process.stdout.close()
-        process.stderr.close()
+        tracker.mark('session_close', 'running')
+        close_failed = False
+        try:
+            if process.poll() is None:
+                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True)
+                process.wait(timeout=10)
+            process.stdout.close()
+            process.stderr.close()
+            tracker.mark('session_close', 'completed', '任务子进程已退出，输出流已关闭', 'child_process')
+        except Exception:
+            close_failed = True
+            tracker.fail('session_close', 'SESSION_CLOSE_UNCONFIRMED', '任务子进程收尾未确认；不自动重发',
+                         source='child_process', category='cleanup')
+        try:
+            fields = {'execution_evidence': tracker.snapshot()}
+            if outcome['intended_status'] is not None:
+                terminal = 'failed' if close_failed and outcome['intended_status'] == 'completed' else outcome['intended_status']
+                fields.update(status=terminal, phase='会话关闭未确认' if close_failed else
+                              '执行完成' if terminal == 'completed' else '已停止执行' if terminal == 'cancelled' else
+                              '验收测试失败' if test and test.get('exit_code') else label + ' 执行失败',
+                              ended_at=registry.now(), exit_code=0 if terminal == 'completed' else 1)
+                if close_failed and outcome['intended_status'] == 'completed':
+                    fields['error'] = '执行已结束，但任务子进程收尾未确认；不自动重发'
+            if outcome['intended_status'] is not None and outcome['intended_status'] != 'cancelled' and not (run / 'cancelled.flag').exists():
+                try:
+                    record_review(run, outcome['executor_finished'] and not close_failed and bool(result) and result.get('status') == 'completed', test, changed)
+                except Exception:
+                    tracker.fail('record', 'REVIEW_RECORD_FAILED', '执行报告未能写入验收记录；不可声称验收通过',
+                                 source='persistence', category='recording')
+                    fields['review_error'] = '执行报告写入失败'
+            fields['execution_evidence'] = tracker.snapshot()
+            registry.patch_task(run, **fields)
+        except OSError as exc:
+            # Retry only this local terminal-record write, never execution. A
+            # transient sharing violation must not strand completed work in
+            # "running" after its child has already closed.
+            error_text = redact(exc)
+            tracker.fail('record', 'RECORD_WRITE_FAILED', error_text,
+                         source='persistence', category='recording')
+            fields.update(io_error=error_text, io_error_at=registry.now(),
+                          execution_evidence=tracker.snapshot())
+            try:
+                registry.patch_task(run, **fields)
+            except OSError:
+                pass  # Preserve result.json for inspection; do not rerun work.
+            print(json.dumps({'task_id': state['id'], 'status': fields.get('status'),
+                              'io_error': error_text}, ensure_ascii=False))
         if allowed_subagent:
             try:
                 record_subagent_ledger(run)
             except Exception:  # never let observation break the recorded outcome
                 pass
+        if close_failed:
+            return 1
 
 
 def run_task(run, state, model):

@@ -293,6 +293,14 @@ class ProxyTests(unittest.TestCase):
 
 
 class UiBundleTests(unittest.TestCase):
+    def test_result_assets_are_inlined_before_app_without_external_resources(self):
+        html = desk.build_workbench_html()
+        self.assertIn('ModelDeskExecutionResult', html)
+        self.assertIn('.mdx-res', html)
+        self.assertNotIn('src="/execution-result.js"', html)
+        self.assertNotIn('href="/execution-result.css"', html)
+        self.assertLess(html.index('ModelDeskExecutionResult'), html.index('function renderDetail()'))
+
     def test_map_assets_are_inlined_in_bridge_map_app_order(self):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)

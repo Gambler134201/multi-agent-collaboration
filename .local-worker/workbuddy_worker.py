@@ -217,6 +217,7 @@ def digest(path):
 
 
 def run_task(run, state, model, *, client_factory=None):
+    import execution_result
     import delegation_policy
     import execution_endpoints
     import record_protection
@@ -231,6 +232,8 @@ def run_task(run, state, model, *, client_factory=None):
     answer, result, error, status = '', {}, '', 'failed'
     test_result = None
     started = time.monotonic()
+    tracker = execution_result.Tracker('workbuddy')
+    tracker.mark('prepare', 'running')
     cancel = lambda: (run / 'cancelled.flag').exists()
     try:
         if (state.get('engine') != 'workbuddy' or model.get('provider') != 'workbuddy' or
@@ -332,13 +335,15 @@ def run_task(run, state, model, *, client_factory=None):
         connected = client.connect()
         native['permission_mode'] = connected.get('permission_mode')
         registry.patch_task(run, workbuddy_session_id=connected['session_id'], workbuddy=dict(native), phase='WorkBuddy 正在执行')
+        tracker.mark('prepare', 'completed')
 
         def on_prompt():
             if cancel():
                 raise wb.Cancelled('任务已取消')
             native['prompt_attempted'] = True
+            tracker.mark('execute', 'running')
             registry.patch_task(run, workbuddy=dict(native), native_usage_unknown=True,
-                                workbench_prompt_submissions=1)
+                                workbench_prompt_submissions=1, execution_evidence=tracker.snapshot())
 
         client.on_prompt = on_prompt
         total = state.get('timeout') or 0
@@ -348,10 +353,18 @@ def run_task(run, state, model, *, client_factory=None):
         result = client.chat(model['model'], prompt, workflow_settings.snapshot(), timeout=remaining)
         answer = result.get('answer') or ''
         status = result.get('status') if result.get('status') in {'completed', 'failed'} else 'failed'
+        if status == 'completed':
+            tracker.mark('execute', 'completed', source='adapter')
+        else:
+            category = str((result.get('execution_error') or {}).get('category') or 'unknown')
+            tracker.fail('execute', 'NATIVE_EXECUTION_FAILED', '原生执行未完成：' + category,
+                         source='adapter', category=category)
         if status == 'completed' and state['kind'] == 'chat' and not answer.strip():
             status = 'failed'
             error = 'WorkBuddy 没有返回咨询正文，请主脑检查；未重试'
+            tracker.fail('execute', 'EMPTY_RESPONSE', error, source='adapter')
         if native_mode:
+            tracker.mark('verify', 'running', '核对原生工具保护和指定测试证据', 'protection_verification')
             proof = native_tools.verify(native_job, connected['session_id'])
             result['native_tool_proof'] = proof
             self_tests = [e for e in proof['events'] if e.get('event') in ('PostToolUse', 'PostToolUseFailure')
@@ -362,6 +375,9 @@ def run_task(run, state, model, *, client_factory=None):
                 if denial:
                     detail += '；规则 ' + denial['rule'] + '：' + denial['detail']
                 status, error = 'failed', '原生工具被拒绝（' + detail + '）；本轮已停止，不更换工具重试'
+                denial_stage = 'temporary_cleanup' if denial and denial['rule'] == 'unverified_recursive_cleanup' else 'execute'
+                tracker.fail(denial_stage, 'TOOL_PERMISSION_DENIED', error, source='adapter_tool',
+                             category='permission_denied', rule_id=denial['rule'] if denial else '')
             if state.get('test_command'):
                 expected = hashlib.sha256(state['test_command'].encode('utf-8')).hexdigest()
                 matched = [e for e in self_tests if e.get('command_hash') == expected]
@@ -370,17 +386,33 @@ def run_task(run, state, model, *, client_factory=None):
                     'command_sha256': expected, 'exit_code': test.get('exit_code'), 'output': None,
                     'call_id': test.get('call_id'), 'verified': bool(test.get('ok') and test.get('exit_code') == 0)}
                 registry.patch_task(run, test_result=test_result)
+                if test_result['verified']:
+                    tracker.mark('verify', 'completed', '指定原生命令匹配且退出码为 0；不是独立验收', 'adapter_tool')
+                else:
+                    tracker.fail('verify', 'TEST_FAILED' if type(test.get('exit_code')) is int and test['exit_code'] != 0 else 'TEST_UNCONFIRMED',
+                                 '指定测试失败或缺少可信结束证据', source='adapter_tool', category='test')
                 if status == 'completed' and (not test.get('ok') or test.get('exit_code') != 0):
                     status, error = 'failed', '没有核实指定测试命令成功结束；请主脑检查原生工具证据'
+            else:
+                tracker.mark('verify', 'not_requested', '未指定测试命令；不将执行器自述记为测试通过')
+        elif state.get('test_command'):
+            tracker.mark('verify', 'not_run', '此历史工具配置不能核实指定命令')
+        else:
+            tracker.mark('verify', 'not_requested')
         if status != 'completed':
             error = error or 'WorkBuddy 未正常完成：' + str((result.get('execution_error') or {}).get('category') or result.get('stop_reason') or 'unknown')
     except wb.Cancelled:
         status, error = 'cancelled', '已请求取消本任务的原生会话'
+        tracker.mark(tracker.current, 'cancelled', error)
     except Exception as exc:
         status = 'failed'
         error = str(exc) if isinstance(exc, (ValueError, wb.ProtocolError)) else 'WorkBuddy 执行异常（%s）；未重试' % type(exc).__name__
         native['outcome_unknown'] = isinstance(exc, wb.OutcomeUnknown)
+        tracker.fail(tracker.current, 'OUTCOME_UNKNOWN' if native['outcome_unknown'] else
+                     'PREPARATION_FAILED' if tracker.current == 'prepare' else 'VERIFICATION_ERROR' if tracker.current == 'verify' else 'EXECUTOR_ERROR',
+                     error, source='adapter', category='unknown')
     finally:
+        tracker.mark('session_close', 'running')
         try:
             if client is not None:
                 client.close()
@@ -388,8 +420,12 @@ def run_task(run, state, model, *, client_factory=None):
             elif lease:
                 cleanup_lease(lease, info, config['profile'])
                 native['cleanup'] = 'closed'
+            tracker.mark('session_close', 'completed' if native['cleanup'] == 'closed' else 'not_applicable',
+                         '本任务原生会话已关闭' if native['cleanup'] == 'closed' else '未创建本任务会话', 'adapter')
         except Exception:
             native['cleanup'] = 'unknown'
+            tracker.fail('session_close', 'SESSION_CLOSE_UNCONFIRMED', '原生会话关闭未确认；不能自动重发',
+                         source='adapter', category='cleanup')
             error = (error + '；原生会话清理未确认，不能自动重发').strip('；')
             if status == 'completed':
                 status = 'failed'
@@ -397,20 +433,32 @@ def run_task(run, state, model, *, client_factory=None):
             try:
                 result['native_tool_proof'] = native_tools.verify(native_job, client.session_id)
             except (OSError, ValueError, KeyError):
+                tracker.fail('verify', 'PROTECTION_EVIDENCE_UNCONFIRMED', '原生工具保护证据无法核实',
+                             source='protection_verification')
                 if status == 'completed':
                     status, error = 'failed', '原生工具保护证据无法核实，请主脑检查'
         if 'project' in locals():
+            tracker.mark('artifacts', 'running')
             try:
                 for name, old_hash in before.items():
                     current = digest(project / name)
                     if current != old_hash:
                         changed.append(name); hashes[name] = current
+                tracker.mark('artifacts', 'completed', '仅核对任务声明文件的内容哈希')
             except OSError:
-                status, error = 'failed', '交付文件状态无法核实，请主脑检查'
+                status = 'failed'
+                error = error or '交付文件状态无法核实，请主脑检查'
+                tracker.fail('artifacts', 'ARTIFACT_SCAN_FAILED', '交付文件状态无法核实', source='controller')
         if cancel():
             status = 'cancelled'
-        if answer:
-            (run / 'answer.txt').write_text(answer, encoding='utf-8')
+        tracker.mark('record', 'running')
+        try:
+            if answer:
+                (run / 'answer.txt').write_text(answer, encoding='utf-8')
+            tracker.mark('record', 'completed')
+        except OSError:
+            tracker.fail('record', 'RECORD_WRITE_FAILED', '答复记录写入失败；保留原始执行状态',
+                         source='persistence', category='recording')
         registry.patch_task(run, status=status, phase='执行完成' if status == 'completed' else 'WorkBuddy 执行失败',
             ended_at=registry.now(), workbuddy=dict(native), answer=answer, error=error or None,
             changed_files=changed, file_hashes=hashes, usage=result.get('usage'),
@@ -419,11 +467,14 @@ def run_task(run, state, model, *, client_factory=None):
             executor_self_tests=locals().get('self_tests', []),
             record_protection=bool(result.get('native_tool_proof') or result.get('file_tool_proof')), native_credits_used=None,
             billing_source='workbuddy-native-account', cost_cny=None, cost_settled_cny=None,
-            summary='原生执行结束，等待主脑独立验收；积分与人民币费用未返回', exit_code=0 if status == 'completed' else 1)
+            summary='原生执行结束，等待主脑独立验收；积分与人民币费用未返回', exit_code=0 if status == 'completed' else 1,
+            execution_evidence=tracker.snapshot())
         try:
             delegation_policy.record_executor(run, {'completed': status == 'completed', 'test': test_result, 'changed_files': changed})
         except Exception as exc:
-            registry.patch_task(run, review_error=type(exc).__name__)
+            tracker.fail('record', 'REVIEW_RECORD_FAILED', '执行报告未能写入验收记录；不可声称验收通过',
+                         source='persistence', category='recording')
+            registry.patch_task(run, review_error=type(exc).__name__, execution_evidence=tracker.snapshot())
     return 0 if status == 'completed' else 1
 
 

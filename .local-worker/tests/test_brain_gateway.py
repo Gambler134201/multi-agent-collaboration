@@ -15,6 +15,7 @@ import model_registry as registry
 import panel_server as panel
 import project_storage
 import brain_requests
+import execution_result
 
 PROJECT = None
 
@@ -85,6 +86,33 @@ class BrokerTests(unittest.TestCase):
                  'evidence': [{'source': 'reviewer_file', 'detail': 'inspected a.py'}]}]
 
     # ------------------------------------------------------------------ tests
+
+    def test_both_hosts_and_panel_share_failed_result_without_mutating_history(self):
+        for host in ('codex', 'dsh'):
+            cap = self.capability(host=host)
+            task_id = self.dispatch(cap, 'result-contract-' + host)['task']['task_id']
+            run = registry.task_dir(task_id, str(self.project))
+            tracker = execution_result.Tracker('dsh')
+            tracker.mark('execute', 'completed')
+            tracker.fail('session_close', 'SESSION_CLOSE_UNCONFIRMED', 'fixture close unknown', source='adapter')
+            registry.patch_task(run, engine='dsh', status='failed', error='fixture close unknown',
+                                changed_files=['a.py'], test_result={'exit_code': 0, 'source': 'controller_test'},
+                                execution_evidence=tracker.snapshot())
+            policy.record_executor(run, {'completed': False, 'changed_files': ['a.py']})
+            before = (run / 'task.json').read_bytes(), (run / 'review.json').read_bytes()
+            status = brain_gateway.handle('status', {'task_id': task_id}, cap)
+            delivery = brain_gateway.handle('delivery', {'task_id': task_id}, cap)
+            row = next(r for r in panel.public_tasks() if r['id'] == task_id)
+            self.assertEqual(status['execution_result'], delivery['execution_result'])
+            self.assertEqual(row['execution_result'], status['execution_result'])
+            result = status['execution_result']
+            self.assertEqual(result['failure']['stage'], 'session_close')
+            self.assertEqual(result['artifacts']['files'], ['a.py'])
+            self.assertEqual(result['verification']['state'], 'passed')
+            self.assertFalse(result['review']['accepted'])
+            self.assertEqual(before, ((run / 'task.json').read_bytes(), (run / 'review.json').read_bytes()))
+            with self.assertRaises(brain_gateway.BrokerError):
+                brain_gateway.handle('status', {'task_id': task_id}, self.capability(project=self.other_project))
 
     def test_request_lookup_recovers_unknown_task_read_only_for_codex_and_dsh(self):
         for host in ('codex', 'dsh'):

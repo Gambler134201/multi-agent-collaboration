@@ -37,7 +37,7 @@ class DesktopTests(unittest.TestCase):
         (self.root / '打开模型工作台.ps1').write_bytes(b'# fixture native opener\n')
         (self.root / '启动模型面板.ps1').write_bytes(b'# fixture native starter\n')
         for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py',
-                     'brain_requests.py', 'failure_classification.py', 'project_map.py', 'context_manager.py', 'workflow_settings.py', 'host_balance.py',
+                     'brain_requests.py', 'failure_classification.py', 'execution_result.py', 'project_map.py', 'context_manager.py', 'workflow_settings.py', 'host_balance.py',
                      'completion_wait.py','desktop_notify.py','completion_host.py','dsh_notify.py','panel_service.py','powershell_runtime.py'):
             (self.root / '.local-worker' / name).write_bytes(b'# temporary fixture\n')
         self.home = self.base / 'dsh-home'

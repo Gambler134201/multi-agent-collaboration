@@ -655,7 +655,7 @@ class ExitGraceTests(Sandbox):
         dsh_worker.HERE = self.saved_here
         super().tearDown()
 
-    def _run(self, name, process):
+    def _run(self, name, process, engine='dsh', test_command=''):
         project = registry.HERE / ('project-' + name)
         project.mkdir(exist_ok=True)
         run = registry.RUNS / name
@@ -663,20 +663,32 @@ class ExitGraceTests(Sandbox):
         (run / 'prompt.txt').write_text('只读任务：退出宽限', encoding='utf-8')
         model = registry.get_model('home')
         state = {'id': name, 'kind': 'chat', 'project': str(project), 'files': [],
-                 'timeout': 0, 'model_id': model['id']}
+                 'timeout': 0, 'model_id': model['id'], 'engine': engine, 'test_command': test_command}
         registry.patch_task(run, id=name, kind='chat', status='running', model_calls=0,
-                            route={'budget_cny': 0})
+                            route={'budget_cny': 0}, engine=engine)
         relay = SimpleNamespace(url='http://127.0.0.1:9/v1', token='relay-token')
         preset = {'id': 'standard', 'revision': 'r', 'source': 's', 'overrides': [],
                   'policy_overrides': [], 'declaration': {'id': 'agent-preset', 'config': {'plugins': []}}}
         killed = []
+        import pi_worker
+        prepare = dsh_worker._prepare_dsh
+        def pi_prepare(*args):
+            prepared = prepare(*args)
+            registry.patch_task(run, engine='pi')
+            return prepared
+        def subprocess_result(*args, **kwargs):
+            if args[0][0] == 'powershell.exe':
+                return SimpleNamespace(returncode=3, stdout='fixture test failed', stderr='')
+            killed.append(args)
+            return SimpleNamespace(returncode=0)
         with patch.object(dsh_worker, 'availability', return_value={'ready': True}), \
+             patch.object(pi_worker, 'prepare', side_effect=pi_prepare), \
+             patch.object(pi_worker, 'verify', return_value={'offline_fixture': True}), \
              patch.object(dsh_worker.preset_runtime, 'load', return_value=preset), \
              patch.object(dsh_worker.preset_runtime, 'verify', return_value={}), \
              patch.object(dsh_worker.record_protection, 'verify_proof', return_value={'matched': 'parent', 'offline_fixture': True}), \
              patch.object(dsh_worker.subprocess, 'Popen', return_value=process), \
-             patch.object(dsh_worker.subprocess, 'run',
-                          side_effect=lambda *a, **k: killed.append(a)), \
+             patch.object(dsh_worker.subprocess, 'run', side_effect=subprocess_result), \
              patch('sys.stdout', new=io.StringIO()):
             code = dsh_worker._run_task(run, state, model, relay)
         return code, registry.read_task(run), killed
@@ -706,6 +718,37 @@ class ExitGraceTests(Sandbox):
         self.assertEqual(final['status'], 'failed')
         self.assertFalse(final.get('exit_grace_exhausted', False))
         self.assertIn('error', final)
+
+
+    def test_pi_and_dsh_keep_test_failure_distinct_from_execution_and_close(self):
+        import execution_result
+        for engine in ('pi', 'dsh'):
+            events = '\n'.join(json.dumps(item) for item in [
+                {'type': 'session', 'session_id': 'fixture'},
+                {'type': 'result', 'result': {'status': 'completed', 'stopReason': 'end_turn'}}]) + '\n'
+            code, task, _ = self._run('test-failure-' + engine, FakeAcpProcess(events), engine, 'fixture test')
+            view = execution_result.project(task)
+            self.assertEqual(code, 1)
+            self.assertEqual(task['status'], 'failed')
+            self.assertEqual(view['failure']['stage'], 'verify')
+            self.assertEqual(view['failure']['code'], 'TEST_FAILED')
+            self.assertEqual(view['verification']['exit_code'], 3)
+            self.assertEqual(view['cleanup']['session'], 'completed')
+            self.assertEqual(next(s for s in view['stages'] if s['id'] == 'execute')['state'], 'completed')
+
+    def test_process_close_failure_does_not_publish_completed_early(self):
+        import execution_result
+        events = json.dumps({'type': 'result', 'result': {'status': 'completed'}}) + '\n'
+        process = FakeAcpProcess(events)
+        def broken_close():
+            task = registry.read_task(registry.RUNS / 'close-failure')
+            self.assertEqual(task['status'], 'running')
+            raise OSError('fixture close failed')
+        process.stdout.close = broken_close
+        code, task, _ = self._run('close-failure', process)
+        self.assertEqual(code, 1)
+        self.assertEqual(task['status'], 'failed')
+        self.assertEqual(execution_result.project(task)['failure']['stage'], 'session_close')
 
 
 # ============================================================= c5 restart recovery
