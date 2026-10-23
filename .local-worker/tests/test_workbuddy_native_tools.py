@@ -109,6 +109,39 @@ class NativeToolsTests(unittest.TestCase):
         _, result = self.hook('PreToolUse', 'Bash', {'command': command})
         self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
 
+    def test_literal_cd_cleanup_and_safe_cwd_do_not_pause_native_tools(self):
+        self.new_access_job('literal-cd-cleanup')
+        for command in ['cd "' + str(self.root) + '" && rm -f scratch-check.cjs',
+                        'Set-Location -LiteralPath "' + str(self.root) + '"; Remove-Item -LiteralPath cache.png',
+                        'echo copy .']:
+            _, result = self.hook('PreToolUse', 'Bash', {'command': command})
+            self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+        proof = native.verify(self.job, self.sid)
+        self.assertFalse(proof['writes_paused'])
+        self.assertTrue(proof['events'][0]['analysis_context']['leading_location'])
+        self.assertNotIn(str(self.root), json.dumps(proof['events']))
+
+    def test_cwd_alias_cannot_hide_record_ancestor(self):
+        self.new_access_job('cwd-ancestor')
+        _, result = self.hook('PreToolUse', 'Bash', {'command': 'rm -rf "' + self.root.name + '"', 'cwd': str(self.root.parent)})
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+        proof = native.verify(self.job, self.sid)
+        self.assertEqual(native.denial_summary(proof)['rule'], 'record_ancestor')
+        self.assertEqual(proof['events'][0]['analysis_context']['cwd_source'], 'cwd')
+
+    def test_cd_target_cannot_enter_native_profile_even_with_failed_branch(self):
+        profile = self.root.parent / (self.root.name + '-native-profile')
+        self.new_access_job('cd-private-profile', protected_roots=[profile])
+        _, result = self.hook('PreToolUse', 'Bash', {'command': 'cd "' + str(profile) + '" && cat storage.json'})
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(native.denial_summary(native.verify(self.job, self.sid))['rule'], 'native_profile')
+
+    def test_dynamic_cd_has_accurate_location_rule(self):
+        self.new_access_job('dynamic-cd-rule')
+        _, result = self.hook('PreToolUse', 'Bash', {'command': 'cd "$TARGET" && rm -f scratch.png'})
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(native.denial_summary(native.verify(self.job, self.sid))['rule'], 'unverified_location')
+
     def test_variable_wildcard_recursive_cleanup_has_accurate_noncredential_rule(self):
         self.new_access_job('cleanup-variable-rule')
         command = 'rm -f "$TEMP"/fixture-*.png && rm -rf "$TEMP"/browser-profile-* 2>/dev/null; ls "$TEMP" | grep -c fixture || true'

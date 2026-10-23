@@ -101,6 +101,19 @@ def _asar_read(archive, relative):
 
 def _standard_sources(archive):
     """Raw bytes of the shipped Standard declaration and web overlay."""
+    archive = Path(archive)
+    if not archive.exists():
+        root = archive.with_name('app').resolve(strict=True)
+        def read(relative):
+            target = (root / relative).resolve(strict=True)
+            if not target.is_relative_to(root):
+                raise ValueError('已安装 DSH 的展开预设路径越界')
+            with target.open('rb') as stream:
+                value = stream.read(4 * 1024 * 1024 + 1)
+            if len(value) > 4 * 1024 * 1024:
+                raise ValueError('已安装 DSH 的预设过大')
+            return value
+        return read(STANDARD_ENTRY), read(WEB_ENTRY)
     return _asar_read(archive, STANDARD_ENTRY), _asar_read(archive, WEB_ENTRY)
 
 
@@ -139,7 +152,10 @@ def content_revision(preset, executable=None):
         preset = str(preset or 'standard')
         archive = Path(executable or EXECUTABLE).parent / 'resources' / 'app.asar'
         if not archive.is_file():
-            return None
+            # Expanded installations have no single archive stat to cache.
+            # Re-read their actual bytes so identity changes remain observable.
+            standard, web = _standard_sources(archive)
+            return _revision(NATIVE.read_bytes() if preset == 'native' else standard, web) if preset in {'native', 'standard'} else None
         stat = archive.stat()
         native_stat = NATIVE.stat() if NATIVE.is_file() else None
         memo_key = (preset, str(archive), stat.st_mtime_ns, stat.st_size,
@@ -184,7 +200,7 @@ def load(model, executable, subagent=False, child_config=None):
         source = str(NATIVE)
     else:
         preset_bytes = standard_bytes
-        source = str(archive) + '/' + STANDARD_ENTRY
+        source = str(archive if archive.exists() else archive.with_name('app')) + '/' + STANDARD_ENTRY
     text = preset_bytes.decode('utf-8')
     web_text = web_bytes.decode('utf-8')
     declaration = definition(text, preset)

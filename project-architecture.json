@@ -2,7 +2,7 @@
   "schema": 1,
   "title": "多 Agent 协作：从需求到独立验收",
   "summary": "主脑明确目标与验收，执行 Agent 完成工作，工作台保留项目记录；地图帮助理解代码和职责。图中是源码整理的职责关系，不是实测运行时调用链。",
-  "snapshot_hash": "c9204f1edccfedab7c3418981ec559d6a764dc8636d757841bf458a0451f1d2f",
+  "snapshot_hash": "1abbee676279e64a3e3267a6e2cbea416defcf25336449c045adbd955054808b",
   "nodes": [
     {
       "id": "entry",

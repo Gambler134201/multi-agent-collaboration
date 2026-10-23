@@ -53,9 +53,11 @@ const READONLY_VERBS = new Set([
   'true',
 ]);
 
-/** Verbs that destroy or replace data. */
+/** Verbs that destroy or replace data. A filename suffix such as `.md`
+ * is not the `md` command; keep executable paths and real command verbs covered.
+ */
 const DESTRUCTIVE_RE = new RegExp(
-  '(\\b(remove-item|remove|rmdir|rd|rm|del|erase|clear-content|set-content|add-content'
+  '(\\b(?<!\\.)(remove-item|remove|rmdir|rd|rm|del|erase|clear-content|set-content|add-content'
   + '|out-file|new-item|mkdir|md|move-item|move|mv|ren|rename-item|rename|copy-item'
   + '|copy|cp|xcopy|robocopy|chmod|chown|attrib|icacls|takeown|rmtree|unlink|truncate'
   + '|shutil|dd|format|diskpart|fsutil)(?![\\w-])'
@@ -215,7 +217,7 @@ function inspectTarget(target, config, destructive) {
 }
 
 function cwdFor(args, config) {
-  const declared = args && typeof args.workdir === 'string' ? args.workdir.trim() : '';
+  const declared = args && typeof (args.workdir || args.cwd) === 'string' ? (args.workdir || args.cwd).trim() : '';
   const base = config && config.root ? String(config.root) : process.cwd();
   if (declared) return resolveAgainst(base, declared);
   return normalizePath(base);
@@ -332,6 +334,41 @@ function commandGroups(text) {
   return parts;
 }
 
+/** Only a leading literal location change is understood. This deliberately
+ * does not interpret scripts, substitutions, providers or general shell code.
+ * Semicolon/OR chains must also be checked at the old cwd: cd may fail.
+ */
+function leadingLocation(command, base) {
+  const text = String(command);
+  if (!/^\s*(?:cd|chdir|set-location|sl)(?:\s|$)/i.test(text)) return null;
+  const parts = commandGroups(text);
+  if (!parts || parts.length < 2) return null;
+  const first = parts[0].trim();
+  const invalid = () => ({ error: true });
+  if (/[`$%^<>|&(){}*?\[\]~\r\n]/.test(first)) return invalid();
+  const words = first.match(/"[^"\r\n]*"|'[^'\r\n]*'|[^\s"']+/g) || [];
+  // Reject concatenated/escaped/unbalanced quoting instead of guessing.
+  if (words.join(' ').replace(/\s+/g,' ') !== first.replace(/\s+/g,' ')) return invalid();
+  const verb = words.shift()?.toLowerCase();
+  if (verb === 'cd' || verb === 'chdir') {
+    if (/^(?:--|\/d)$/i.test(words[0] || '')) words.shift();
+  } else if (/^-(?:literalpath|path)$/i.test(words[0] || '')) words.shift();
+  if (words.length !== 1) return invalid();
+  const target = stripQuotes(words[0]);
+  if (!target || target.startsWith('-') || (isWindows() && (/^[A-Za-z]:$/.test(target) || /^\//.test(target)))
+      || (target.includes(':') && !/^[A-Za-z]:[\\/]/.test(target))) return invalid();
+  const tail = text.slice(parts[0].length);
+  const separator = /^(\&\&|\|\||;)/.exec(tail)?.[0];
+  if (!separator) return invalid();
+  const remainder = tail.slice(separator.length).trim();
+  if (!remainder) return invalid();
+  const resolved = resolveAgainst(base, target);
+  // Shells can retain a logical PWD while filesystem operations use physical
+  // cwd. Check both when a junction/symlink changes the directory identity.
+  const targets = [...new Set([resolved, normalizePath(realpathDeep(resolved))])];
+  return { target: resolved, targets, remainder, onSuccessOnly: separator === '&&' };
+}
+
 function listingMutationPipeline(text) {
   const broad = value => /\|/.test(value) && /\b(get-childitem|gci|dir|ls|find)\b/i.test(value);
   const parts=commandGroups(text);
@@ -341,6 +378,8 @@ function listingMutationPipeline(text) {
 
 function destructiveAncestor(command, base, tokens, config) {
   const text = String(command);
+  // Words such as "copy" in an echo/formatting payload are not operations.
+  if (isProvablyReadOnly(text)) return undefined;
   const parts = simpleCommands(text);
   if (parts) {
     for (const part of parts) {
@@ -402,10 +441,24 @@ function wildcardOverlaps(target, roots) {
   return false;
 }
 
-function decideTerminal(args, config) {
+function decideTerminal(args, config, budget = { remaining: 32 }) {
   const command = args && typeof args.command === 'string' ? args.command : '';
   if (!command.trim()) return undefined;
+  if (--budget.remaining < 0) return '复合命令过于复杂，无法核实工作目录；请报告主脑。';
+  if (args.workdir && args.cwd && resolveAgainst(config.root, args.workdir) !== resolveAgainst(config.root, args.cwd)) {
+    return '工作目录参数 cwd 与 workdir 冲突；请报告主脑。';
+  }
   const base = cwdFor(args, config);
+  const location = leadingLocation(command, base);
+  if (location?.error) return '未能核实字面工作目录切换，已拒绝复合命令；请报告主脑。';
+  if (location) {
+    const bases = location.onSuccessOnly ? location.targets : [...new Set([base, ...location.targets])];
+    for (const workdir of bases) {
+      const reason = decideTerminal({ command: location.remainder, workdir }, config, budget);
+      if (reason) return reason;
+    }
+    return undefined;
+  }
   const roots = protectedRoots(config);
   const tokens = extractTokens(command);
   const targets = tokens.map((token) => resolveAgainst(base, token)).filter(Boolean);
@@ -492,6 +545,7 @@ module.exports = {
   isProvablyReadOnly,
   isGuardedTool,
   commandGroups,
+  leadingLocation,
   createGuard,
   decide,
 };

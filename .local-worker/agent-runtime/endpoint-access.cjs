@@ -22,6 +22,16 @@ function createGuard(config){
       if(typeof args[key]==='string')targets.push(path.resolve(base,args[key]));
     }
     if((policy.TERMINAL_TOOLS.has(name)||name==='powershell')&&typeof args.command==='string'){
+      const pending=[{command:args.command,base}],seen=new Set();
+      for(let i=0;pending.length&&i<32;i++){
+        const item=pending.pop(),key=item.base+'\0'+item.command;
+        if(seen.has(key))continue;seen.add(key);
+        const change=policy.leadingLocation(item.command,item.base);
+        if(!change||change.error)continue;
+        for(const location of change.targets){targets.push(location);pending.push({command:change.remainder,base:location});}
+        if(!change.onSuccessOnly)pending.push({command:change.remainder,base:item.base});
+      }
+      if(pending.length){stopped=true;return '复合命令过于复杂，无法核实项目范围；请报告主脑';}
       // Inspect literal filesystem targets; URLs and shell switches aren't paths.
       const tokens=args.command.match(/"[^"]*"|'[^']*'|[^\s;|&<>]+/g)||[];
       for(let token of tokens){

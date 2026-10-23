@@ -41,6 +41,7 @@ function denialRule(reason){
   if(reason==='递归清理目标包含未核实的变量或通配符，请保留临时文件并报告主脑')return 'unverified_recursive_cleanup';
   if(reason==='目录检索范围包含原生配置；请选择更具体的文件')return 'profile_search';
   if(reason==='搜索不包含记录或认证目录')return 'protected_search';
+  if(/工作目录|复合命令过于复杂/.test(reason))return 'unverified_location';
   if(reason==='本任务未授权此原生工具'||reason==='只读任务没有终端权限')return 'tool_not_allowed';
   return 'unclassified';
 }
@@ -95,6 +96,21 @@ function decide(job,input){
     if(/\.model-desk(?![-\w.])|(?:^|[\\/\s"'])\.env(?:[.\s"']|$)|(?:auth|credential)[-_]?(?:token|store|file)/i.test(args.command))return '终端不能访问工作台记录或认证数据';
     if(unverifiedCleanup(args.command))return '递归清理目标包含未核实的变量或通配符，请保留临时文件并报告主脑';
     if(args.cwd||args.workdir){const r=target(job,args.cwd||args.workdir,false,true);if(r)return r;}
+    // The native adapter has stricter read boundaries than DSH/Pi. Validate
+    // literal cd targets too, before shared record-write analysis consumes them.
+    const pending=[{command:args.command,base:args.workdir||args.cwd||job.project}],seen=new Set();
+    for(let i=0;pending.length&&i<32;i++){
+      const item=pending.pop(),key=item.base+'\0'+item.command;
+      if(seen.has(key))continue;seen.add(key);
+      const change=policy.leadingLocation(item.command,item.base);
+      if(!change||change.error)continue;
+      for(const base of change.targets){
+        const r=target(job,base,false,true);if(r)return r;
+        pending.push({command:change.remainder,base});
+      }
+      if(!change.onSuccessOnly)pending.push({command:change.remainder,base:item.base});
+    }
+    if(pending.length)return '复合命令过于复杂，无法核实工作目录；请报告主脑。';
     return policy.decide(name==='PowerShell'?'pwsh':'bash',args,{root:job.project})||null;
   }
   if(web.has(name)){
@@ -125,7 +141,7 @@ function main(file,input){
   const row={event:input.hook_event_name,session_id:input.session_id,nonce:job.nonce,call_id:input.tool_use_id||input.call_id||null,tool:input.tool_name,
     input_hash:hash(JSON.stringify(stable(input.tool_input||{}))),allowed:!reason,reason_code:reason?denialCode(reason):null,
     denial_rule:denialRule(reason),
-    command_hash:commandHash,exit_code:Number.isInteger(raw?.exitCode)?raw.exitCode:null,
+    command_hash:commandHash,analysis_context:shells.has(input.tool_name)?{cwd_source:input.tool_input?.workdir?'workdir':input.tool_input?.cwd?'cwd':'project',leading_location:!!policy.leadingLocation(input.tool_input?.command||'',job.project)}:null,exit_code:Number.isInteger(raw?.exitCode)?raw.exitCode:null,
     ok:input.hook_event_name==='PostToolUse'&&!(raw?.is_error||raw?.isError||raw?.interrupted||raw?.sandboxDenied||response?.error),at:new Date().toISOString()};
   fs.appendFileSync(path.join(run,'workbuddy-native-events.jsonl'),JSON.stringify(row)+'\n');
   if(reason){fs.writeFileSync(flag,'denied');return {hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'deny',permissionDecisionReason:reason}};}

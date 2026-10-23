@@ -276,6 +276,55 @@ test('the declared workdir shifts relative-path resolution', () => {
   allow('pwsh', { command: 'Get-Content ..\\.model-desk\\records.db', workdir: sub });
 });
 
+test('literal directory prefixes do not turn cd into a deletion target', () => {
+  const quoted=JSON.stringify(root);
+  for(const command of [
+    `cd ${quoted} && rm -f scratch-check.cjs`,
+    `cd ${quoted}; rm -f scratch-check.cjs`,
+    `Set-Location -LiteralPath ${quoted}; Remove-Item -LiteralPath src/cache -Recurse`,
+    'cd ./src && rm -f check.js',
+    'cd ./src && cd .. && rm -f check.js',
+    'echo copy .',
+    'echo "remove ."; rm -f src/check.js',
+  ])allow('bash',{command},command);
+});
+
+test('directory branches and cwd aliases cannot redirect mutation into records', () => {
+  for(const command of [
+    'cd ./src && rm -rf ..',
+    'cd ./src; rm -rf .', // cd failure may leave us in the project root.
+    'cd ./src || rm -rf .',
+    'cd .. && rm -rf '+path.basename(root),
+    'Set-Location -Path ./src; Remove-Item -Recurse ..',
+    'cd ./alias-records && rm -f records.db',
+  ])deny('bash',{command},command);
+  deny('bash',{command:'rm -rf '+path.basename(root),cwd:temp},'native cwd alias must be honoured');
+  deny('bash',{command:'rm -f ../.model-desk/records.db',cwd:path.join(root,'src')});
+  assert.match(policy.decide('bash',{command:'rm -f check.js',cwd:temp,workdir:root},config),/冲突/);
+  assert.match(policy.decide('bash',{command:'cd "$TARGET" && rm -f check.js'},config),/核实.*工作目录/);
+  assert.match(policy.decide('bash',{command:Array(40).fill('cd .').join(' && ')+' && rm -f x'},config),/复杂/);
+});
+
+test('a markdown suffix is not a mkdir alias', () => {
+  allow('bash', {command: 'python tools/check.py . docs/README.md'});
+  allow('bash', {command: `cd ${JSON.stringify(root)} && python tools/check.py . docs/README.md`});
+  deny('bash', {command: 'md .model-desk'});
+  deny('pwsh', {command: 'mkdir .model-desk/cache'});
+});
+
+test('physical cwd through a junction cannot hide an ancestor of aliased records', () => {
+  const project=path.join(temp,'cwd-alias-project'),physical=path.join(temp,'cwd-physical');
+  fs.mkdirSync(path.join(project,'sub'),{recursive:true});
+  fs.mkdirSync(path.join(physical,'.model-desk'),{recursive:true});
+  fs.mkdirSync(path.join(physical,'src'),{recursive:true});
+  try{
+    fs.symlinkSync(path.join(physical,'.model-desk'),path.join(project,'.model-desk'),'junction');
+    fs.symlinkSync(path.join(physical,'src'),path.join(project,'sub','source-alias'),'junction');
+  }catch(error){console.log('     (junction unavailable: '+error.code+')');return;}
+  assert.ok(policy.decide('bash',{command:'cd ./sub/source-alias && rm -rf ..'},{root:project}));
+  assert.strictEqual(policy.decide('bash',{command:'cd ./sub/source-alias && rm -f temporary.txt'},{root:project}),undefined);
+});
+
 test('relative read-only classification never claims OS isolation', () => {
   assert.strictEqual(policy.isProvablyReadOnly('Get-Content .model-desk\\records.db'), true);
   assert.strictEqual(policy.isProvablyReadOnly('Get-Content .model-desk\\records.db > out.txt'), false);

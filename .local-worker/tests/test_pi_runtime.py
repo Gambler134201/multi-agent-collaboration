@@ -158,7 +158,7 @@ class PiRuntimeTests(unittest.TestCase):
         cache.mkdir()
         (cache / 'discard.txt').write_text('cache', encoding='utf-8')
         self.steps = [('powershell', {'command': 'Get-ChildItem . | Format-List'}),
-                      ('powershell', {'command': 'Remove-Item -LiteralPath cache -Recurse -Force; Get-ChildItem . | Select-Object Name'}),
+                      ('powershell', {'command': 'Set-Location -LiteralPath "' + str(self.project) + '"; Remove-Item -LiteralPath cache -Recurse -Force; Get-ChildItem . | Select-Object Name'}),
                       ('write', {'path': 'source.txt', 'content': 'still writable'})]
         self.run_pi()
         self.assertFalse(cache.exists())

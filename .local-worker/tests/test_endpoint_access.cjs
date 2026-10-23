@@ -14,6 +14,8 @@ try{
     assert.match(createGuard({root,access_mode:'project'})(name,{command:'cat ../outside.txt'}),/项目外/);
     assert.match(createGuard({root,access_mode:'project'})(name,{cwd:box,command:'pwd'}),/项目外/);
     assert.equal(createGuard({root,access_mode:'project'})(name,{command:'python -m unittest'}),undefined);
+    assert.match(createGuard({root,access_mode:'project'})(name,{command:'cd .. && echo fixture'}),/项目外/);
+    assert.equal(createGuard({root,access_mode:'full'})(name,{command:'cd .. && echo fixture'}),undefined);
   }
   for(const mode of ['full','project']){
     assert.match(createGuard({root,access_mode:mode})('write',{file_path:'.model-desk/sentinel'}),/工作台/);

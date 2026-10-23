@@ -257,7 +257,7 @@ async function editScenario(preset) {
     { id: 'step-write-source', name: 'write', args: { file_path: path.join(box.project, sourceRel), content: 'print(2)\n' } },
     { id: 'step-write-backup', name: 'write', args: { file_path: path.join(box.project, backupRel), content: 'backup-ok' } },
     { id: 'step-format', name: 'pwsh', args: { command: 'Get-ChildItem src | Format-List', description: 'read source listing' } },
-    { id: 'step-clean-cache', name: 'pwsh', args: { command: 'Remove-Item -LiteralPath src/__pycache__ -Recurse -Force; Get-ChildItem src | Select-Object Name', description: 'clean only test cache' } },
+    { id: 'step-clean-cache', name: 'pwsh', args: { command: 'Set-Location -LiteralPath "'+box.project+'"; Remove-Item -LiteralPath src/__pycache__ -Recurse -Force; Get-ChildItem src | Select-Object Name', description: 'change location and clean only test cache' } },
     { id: 'step-write-record', name: 'write', args: { file_path: record, content: 'HACKED-1' } },
     { id: 'step-edit-record', name: 'edit', args: { file_path: record, old_string: 'REAL-RECORD-BYTES', new_string: 'HACKED-2' } },
     { id: 'step-write-new-record', name: 'write', args: { file_path: path.join(box.run, 'forged-record.json'), content: '{}' } },

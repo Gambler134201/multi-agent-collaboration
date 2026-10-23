@@ -45,6 +45,7 @@ DENIAL_RULES = {
     'unverified_recursive_cleanup': '递归清理使用了未核实的变量或通配符；请保留临时文件并报告主脑',
     'profile_search': '检索目录覆盖原生配置',
     'protected_search': '搜索表达式涉及受保护目录',
+    'unverified_location': '工作目录切换无法静态核实、参数冲突或复合命令超出分析上限',
     'tool_not_allowed': '本任务未授权此工具',
     'prior_denial': '此前调用已被拒绝，本轮工具已暂停',
     'unclassified': '未细分的保护规则',

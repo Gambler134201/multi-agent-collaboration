@@ -1,7 +1,7 @@
 {
   "project": "多agent协作",
   "license": "MIT",
-  "release_date": "2026-10-23",
+  "release_date": "2026-10-24",
   "scope": "Git-tracked source files; excludes this manifest itself and ignored runtime data.",
   "files": [
     {
@@ -16,8 +16,8 @@
     },
     {
       "path": ".local-worker/agent-runtime/endpoint-access.cjs",
-      "sha256": "1226b0645e901e2c6bdcdf517900c523e12e609c58a076b71a0a7ecec54e7fca",
-      "bytes": 2034
+      "sha256": "035be876aad69688a31eaede3635c70e09ea21643d061505ac2206e74bd5ef5d",
+      "bytes": 2715
     },
     {
       "path": ".local-worker/agent-runtime/export-presets.cjs",
@@ -51,8 +51,8 @@
     },
     {
       "path": ".local-worker/agent-runtime/record-policy.cjs",
-      "sha256": "12f619c3ed5ef4ec64d9dad6368db90cd63a0f41fdad421861f6c10f9116dc84",
-      "bytes": 19848
+      "sha256": "ae6ef2d6ad5cecbe3b7c5d5da5a8b7ccab625b1dc52f4d5842fb5fc7c036bf5b",
+      "bytes": 22924
     },
     {
       "path": ".local-worker/agent-runtime/record-protection.cjs",
@@ -86,8 +86,8 @@
     },
     {
       "path": ".local-worker/agent-runtime/workbuddy-native-guard.cjs",
-      "sha256": "793c529e1aa4cea4695649cad6d0ecf2cf936e486d0948364abdbcd6af5ce036",
-      "bytes": 12944
+      "sha256": "3cc329522cb4c21aa1071f2f7a4d4ce663630c2a3831d04b65082b79989145e0",
+      "bytes": 14137
     },
     {
       "path": ".local-worker/aider.yml",
@@ -346,8 +346,8 @@
     },
     {
       "path": ".local-worker/preset_runtime.py",
-      "sha256": "1d82cf3c757491ef173a622b7dc1c597fc4ee21a9d655d4c690aaaa5c9d6b2b2",
-      "bytes": 12563
+      "sha256": "dbde578742f8e1205e39bc06e8f14d3c403f8e7c5db0fce04d44d6e1139f406a",
+      "bytes": 13560
     },
     {
       "path": ".local-worker/project_architecture.py",
@@ -396,8 +396,8 @@
     },
     {
       "path": ".local-worker/runtime_paths.py",
-      "sha256": "1f4c534cf7f9cb0224f2965468162dee5d13a5638b29b8ecf0eaac97dfa94089",
-      "bytes": 4783
+      "sha256": "e0fbd4eba62ca66fb028371945ee4f887c0dde7e1a8942d17f6e92e5bcacb99c",
+      "bytes": 5089
     },
     {
       "path": ".local-worker/stage_store.py",
@@ -630,6 +630,11 @@
       "bytes": 15422
     },
     {
+      "path": ".local-worker/tests/test_dsh_expanded_layout.py",
+      "sha256": "f0350b2a90e949139b7402c33eda50e7ce63fce9508a901392c11306ee0974e0",
+      "bytes": 2491
+    },
+    {
       "path": ".local-worker/tests/test_dsh_wakeup.cjs",
       "sha256": "3cfcc33e7d9d52e4537c53b09fecc5a606e351699818d1422f31b56259529aef",
       "bytes": 10788
@@ -641,8 +646,8 @@
     },
     {
       "path": ".local-worker/tests/test_endpoint_access.cjs",
-      "sha256": "f3d95cb92b1dfb3e2b8674b4606094a73fe7b57581848c3ca111c684c4b50a71",
-      "bytes": 1823
+      "sha256": "0e9ba149e9624082ff6016403c5eac0385ea176a0078d43cf62687a396bd28eb",
+      "bytes": 2044
     },
     {
       "path": ".local-worker/tests/test_endpoint_access.py",
@@ -751,8 +756,8 @@
     },
     {
       "path": ".local-worker/tests/test_pi_runtime.py",
-      "sha256": "340c11496b0d0475f7d43d1a76b8079bce1a37497dadb1783d449a0a51a7dfbb",
-      "bytes": 11221
+      "sha256": "9d1c2d0b47d41c7c1f05fa1ac3de5f924578df5aa32a39415b43ba0fa9b7a18f",
+      "bytes": 11276
     },
     {
       "path": ".local-worker/tests/test_plugin_project_binding.mjs",
@@ -821,8 +826,8 @@
     },
     {
       "path": ".local-worker/tests/test_record_protection.cjs",
-      "sha256": "1dfd13d06782626809d0e14703cb57d9a370ac6b3a5fd3e977952263f544cee5",
-      "bytes": 17995
+      "sha256": "d4e20fcc0140d0707b20fab241e2ebb405418a4cb7a4427046a955cf7dda455d",
+      "bytes": 20668
     },
     {
       "path": ".local-worker/tests/test_record_protection.py",
@@ -831,8 +836,8 @@
     },
     {
       "path": ".local-worker/tests/test_record_protection_runtime.cjs",
-      "sha256": "7edfe04a76d8dbf3c15913daedc6733fabb33694377ca5698213248cd2fcbfa6",
-      "bytes": 25519
+      "sha256": "7969ecf53e151f05c6e4e09aa95e04c6117ab5a7e688e7890730fc76eef51307",
+      "bytes": 25584
     },
     {
       "path": ".local-worker/tests/test_recovery_mcp_route.py",
@@ -901,8 +906,8 @@
     },
     {
       "path": ".local-worker/tests/test_workbuddy_native_tools.py",
-      "sha256": "1eebedf36b22c692df27d662565bb62f0ec1022578b8a1e11aefe1c722a134af",
-      "bytes": 26346
+      "sha256": "224c27a4b788e7268107f119e7abb61b4446d9bdeee43eeab13f709b15f38354",
+      "bytes": 28631
     },
     {
       "path": ".local-worker/tests/test_workbuddy_tools.py",
@@ -956,8 +961,8 @@
     },
     {
       "path": ".local-worker/workbuddy_native_tools.py",
-      "sha256": "8e023fcc8e172a5753bdc9521ed1cc34652d036c32be2545fafa6ef0f601abb1",
-      "bytes": 10433
+      "sha256": "2c5a832a6c3aa5d3eeb114fa3f81ff2d50043eb82589611666072d9b92348c8d",
+      "bytes": 10548
     },
     {
       "path": ".local-worker/workbuddy_tools.py",
@@ -1066,8 +1071,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "5f3f7b730e0a6cc0d628275337801a94222ac5d483a3f568fac0a95289b0d857",
-      "bytes": 11575
+      "sha256": "8afa20f434d789bf9cb04a72f4c80f1b7b75b49a3bd5ad93cdcec9a2605bef7e",
+      "bytes": 11956
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1128,6 +1133,11 @@
       "path": "docs/REQUEST_RELIABILITY.md",
       "sha256": "6bf02df1bcccc13eb12ffb83ad64c7aa43a91408be2fbb72fa8c581f81a65aa4",
       "bytes": 4816
+    },
+    {
+      "path": "docs/SHELL_GUARD.md",
+      "sha256": "ca9a885392d86ec47f371489c978534dfca123481d00a0da8cab3a6719b02e35",
+      "bytes": 2489
     },
     {
       "path": "docs/SOURCE_RECONCILIATION.md",
@@ -1191,7 +1201,7 @@
     },
     {
       "path": "project-architecture.json",
-      "sha256": "9c928c256a509ffe66d1159a4d56db931c8933b94d8d72b6c5b7e413347a493c",
+      "sha256": "766e39ed2ad7e1bba2c15c4660ffbdb5a6a25cb0334a7c5cee67f19737870ba3",
       "bytes": 5333
     },
     {

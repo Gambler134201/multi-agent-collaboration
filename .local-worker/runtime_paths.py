@@ -70,7 +70,12 @@ def dsh_executable():
 def dsh_cli(executable=None):
     """The ACP entrypoint inside the installed DSH package, or ``None``."""
     exe = Path(executable) if executable else dsh_executable()
-    return exe.parent / DSH_CLI if exe else None
+    if not exe:
+        return None
+    packaged = exe.parent / DSH_CLI
+    expanded = exe.parent / 'resources/app' / Path(DSH_CLI).relative_to('resources/app.asar')
+    # An existing archive remains authoritative; do not mask a corrupt package.
+    return expanded if not (exe.parent / 'resources/app.asar').exists() and expanded.is_file() else packaged
 
 
 def node_executable():
