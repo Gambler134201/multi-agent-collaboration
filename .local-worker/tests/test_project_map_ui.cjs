@@ -88,6 +88,54 @@ test('generic module arrows come only from observed static links',()=>{
   assert.equal(diagram.kind,'inferred');assert.equal(diagram.links.length,1);
   assert.equal(diagram.links[0].label,'源码静态引用');
 });
+test('project-authored explanation takes priority over the built-in walkthrough',()=>{
+  const hash='a'.repeat(64);
+  const payload={schema:1,project:'E:/a',index:{hash},nodes:[
+    {id:'.local-worker/panel_server.py',path:'.local-worker/panel_server.py',sha256:'b'.repeat(64)},
+    {id:'.local-worker/brain_gateway.py',path:'.local-worker/brain_gateway.py'},
+    {id:'.local-worker/dispatch_task.py',path:'.local-worker/dispatch_task.py'},
+    {id:'.local-worker/execution_engines.py',path:'.local-worker/execution_engines.py'},
+    {id:'.local-worker/review_task.py',path:'.local-worker/review_task.py'}
+  ],edges:[],architecture:{state:'matched',source:'project-architecture.json',provenance:'project_authored',title:'订单项目',summary:'说明',snapshot_hash:hash,nodes:[
+    {id:'result',title:'业务模块',role:'职责',description:'说明',output:'产出',state:'matched',evidence:[{path:'.local-worker/panel_server.py',sha256:'b'.repeat(64),state:'unchanged'}]},
+    {id:'other',title:'关联模块',role:'',description:'另一模块',output:'',state:'unknown',evidence:[{path:'missing.py',sha256:'c'.repeat(64),state:'unindexed'}]}
+  ],edges:[{source:'result',target:'other',label:'业务关系',confidence:'documented'},{source:'result',target:'other',label:'推断关系',confidence:'inferred'}]}};
+  const explanation=ui.projectExplanation(payload);
+  assert.equal(explanation.available,true);assert.equal(explanation.diagram.kind,'project');
+  assert.deepEqual(explanation.diagram.steps.map(step=>step.name),['业务模块','关联模块']);
+  assert.ok(explanation.diagram.steps.every(step=>step.id.startsWith('pa-')));
+  assert.equal(explanation.diagram.links[0].confidence,'documented');assert.equal(explanation.diagram.links[1].confidence,'inferred');
+  assert.equal(explanation.diagram.steps[0].evidence[0].nodeId,'.local-worker/panel_server.py');
+  assert.equal(explanation.diagram.steps[1].evidence[0].nodeId,null);
+  assert.equal(ui.projectExplanation({...payload,architecture:{state:'missing'}}).available,false);
+  assert.equal(ui.projectExplanation({...payload,architecture:{state:'invalid',message:'安全提示'}}).message,'安全提示');
+});
+test('explanation states stay accurate and never promise business verification',()=>{
+  const base={nodes:[{id:'a.py',path:'a.py'}],architecture:{state:'matched',title:'项目',summary:'摘要',snapshot_hash:'',nodes:[{id:'x',title:'模块',description:'说明',state:'matched',evidence:[{path:'a.py',sha256:'d'.repeat(64),state:'unchanged'}]}],edges:[]}};
+  assert.equal(ui.projectExplanation(base).state,'matched');
+  const stale=ui.projectExplanation({...base,architecture:{...base.architecture,state:'stale'}});
+  assert.equal(stale.state,'stale');assert.equal(stale.needsUpdate,true);
+  const unknown=ui.projectExplanation({...base,architecture:{...base.architecture,state:'unknown',nodes:[{...base.architecture.nodes[0],state:'unknown',evidence:[{path:'gone.py',sha256:'d'.repeat(64),state:'unindexed'}]}]}});
+  assert.equal(unknown.state,'unknown');assert.equal(unknown.diagram.steps[0].evidence[0].state,'unindexed');
+  const mismatch=ui.projectExplanation({...base,index:{hash:'e'.repeat(64)},architecture:{...base.architecture,snapshot_hash:'f'.repeat(64)}});
+  assert.equal(mismatch.state,'stale');
+  const invalid=ui.projectExplanation({...base,architecture:{state:'invalid',message:'格式无效'}});
+  assert.equal(invalid.state,'invalid');assert.equal(invalid.available,false);
+});
+test('generation prompt is bounded, points at the convention, and is explicitly non-executing',()=>{
+  const nodes=Array.from({length:40},(_,index)=>({path:'src/f'+index+'.py'}));
+  const prompt=ui.architecturePrompt({index:{hash:'a'.repeat(64)},nodes,architecture:{state:'missing'}});
+  assert.match(prompt,/docs\/PROJECT_ARCHITECTURE\.md/);
+  assert.match(prompt,/"schema":1/);
+  assert.match(prompt,/"confidence":"inferred"/);
+  assert.ok(prompt.includes('- src/f0.py'));
+  assert.equal(prompt.split('\n').filter(line=>line.startsWith('- src/')).length,30);
+  assert.ok(!prompt.includes('src/f38.py')&&!prompt.includes('src/f39.py'));
+  assert.match(prompt,/另有 10 个未列出/);
+  assert.match(prompt,/不会因为打开地图或点击按钮而自动调用模型/);
+  assert.match(prompt,/SHA-256/);
+  assert.ok(!prompt.includes('def run('));
+});
 test('dialog is created once, renders escaped files, and clears on project change',async()=>{
   const saved=global.document;
   class Element {

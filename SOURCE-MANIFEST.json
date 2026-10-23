@@ -311,13 +311,13 @@
     },
     {
       "path": ".local-worker/panel/project-map.css",
-      "sha256": "98a56f107f0ae835dc4166478db21a4c4f8505076a16451d505c40243e3c3df3",
-      "bytes": 11560
+      "sha256": "bb2be8f25a3a4b5acaa23e38cc77aedfe2f787eec3388da48cd9e66d039b5b4c",
+      "bytes": 15452
     },
     {
       "path": ".local-worker/panel/project-map.js",
-      "sha256": "86a643294307fd84e9d52e3acfa9bc69e8ba43ce219838739e47223a7cf1e763",
-      "bytes": 25050
+      "sha256": "8437e680a67bf47c9c99292041baecb867e1bb4927a9eb73429aa0795bb37f3f",
+      "bytes": 39620
     },
     {
       "path": ".local-worker/panel/style.css",
@@ -350,9 +350,14 @@
       "bytes": 12563
     },
     {
+      "path": ".local-worker/project_architecture.py",
+      "sha256": "2e3a91027055fd3db9441a40400179254791c18fda3124a7a4263d390154e882",
+      "bytes": 5309
+    },
+    {
       "path": ".local-worker/project_map.py",
-      "sha256": "ff34fcc955252c46887e9f49976711e362b6ed7f36618873b8067437b33fe5a8",
-      "bytes": 16214
+      "sha256": "4c173b2b20af09baff5c5236a1970d2d1d83d1fd917a50f880660d494a8839d7",
+      "bytes": 16494
     },
     {
       "path": ".local-worker/project_scope.py",
@@ -770,24 +775,29 @@
       "bytes": 2750
     },
     {
+      "path": ".local-worker/tests/test_project_architecture.py",
+      "sha256": "be22ca36e32b14d79a91a8808b86a4bb96b8a20c69805bd97e7ae797cc2022ff",
+      "bytes": 6359
+    },
+    {
       "path": ".local-worker/tests/test_project_map.py",
       "sha256": "ada59f87c72b52372fdcee959fe25fcbc0bf80ecba8b790e2914caafac4da536",
       "bytes": 7840
     },
     {
       "path": ".local-worker/tests/test_project_map_diagram.cjs",
-      "sha256": "519c0e1906325b1ce27e66431213005e4ac77878c656852edfd5f839cbf91ad8",
-      "bytes": 5146
+      "sha256": "df926e168d030c7492ad23592e74ec0d78c2e352dff4ac930eda9f3644131139",
+      "bytes": 17648
     },
     {
       "path": ".local-worker/tests/test_project_map_interfaces.py",
-      "sha256": "c999102cc87ee9f36bad59476a5567de7676e1f5d64fff297b91b2a121c46bec",
-      "bytes": 6076
+      "sha256": "1dbc5565e27d1d0939f0e68dfd44d608a8b5cae11f16f60b188a2b5e74aa81d9",
+      "bytes": 7851
     },
     {
       "path": ".local-worker/tests/test_project_map_ui.cjs",
-      "sha256": "3ee10c572150d96658a3d1132ba3dd3f5c5f180fcbeaffaf67046829c2230828",
-      "bytes": 8449
+      "sha256": "6373ff5269eec91a3ca56734c84e529c5139aa8d346c8e72c48f1a77b70bc2cd",
+      "bytes": 12776
     },
     {
       "path": ".local-worker/tests/test_project_scope.py",
@@ -1056,8 +1066,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "7ff18fe5ef55646b319a188c08ed0c667e91549159df6055e82fd8bc6a417f38",
-      "bytes": 11095
+      "sha256": "5f3f7b730e0a6cc0d628275337801a94222ac5d483a3f568fac0a95289b0d857",
+      "bytes": 11575
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1105,9 +1115,14 @@
       "bytes": 16140
     },
     {
+      "path": "docs/PROJECT_ARCHITECTURE.md",
+      "sha256": "a519f4a38b403af0bf4dd6db9a72a7313abc544b19a7e34ca135edd399800dc0",
+      "bytes": 4519
+    },
+    {
       "path": "docs/PROJECT_MAP.md",
-      "sha256": "ccda6b02545ceb04fe308bf4197631a7b7a45f74e5d8584a1cac4c0ba5a6bfd4",
-      "bytes": 7696
+      "sha256": "5002c8dc187f471ee728ae9aa8a9dfcb44e7ca1a45ecd9ec176496b447622f46",
+      "bytes": 8241
     },
     {
       "path": "docs/REQUEST_RELIABILITY.md",
@@ -1173,6 +1188,11 @@
       "path": "local-worker.ps1",
       "sha256": "f035ee8828cb1c9a63fe1941c16e8fc29e08e090e6287ec4d3576067a1723287",
       "bytes": 2467
+    },
+    {
+      "path": "project-architecture.json",
+      "sha256": "9c928c256a509ffe66d1159a4d56db931c8933b94d8d72b6c5b7e413347a493c",
+      "bytes": 5333
     },
     {
       "path": "requirements.txt",

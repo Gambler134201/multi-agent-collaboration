@@ -1,0 +1,156 @@
+{
+  "schema": 1,
+  "title": "多 Agent 协作：从需求到独立验收",
+  "summary": "主脑明确目标与验收，执行 Agent 完成工作，工作台保留项目记录；地图帮助理解代码和职责。图中是源码整理的职责关系，不是实测运行时调用链。",
+  "snapshot_hash": "c9204f1edccfedab7c3418981ec559d6a764dc8636d757841bf458a0451f1d2f",
+  "nodes": [
+    {
+      "id": "entry",
+      "title": "需求与项目入口",
+      "role": "用户 / 主脑",
+      "description": "用户从工作台或主脑提出需求。主脑负责澄清、拆分和验收标准，接口保留受信项目与会话绑定。",
+      "output": "有目标与边界的需求",
+      "evidence": [
+        {
+          "path": ".local-worker/brain_gateway.py",
+          "sha256": "88e2925d25083f296e096b5d93205697e0f0e7806c44e58e2e5f5e236e27996c"
+        },
+        {
+          "path": ".local-worker/brain_context.py",
+          "sha256": "e9d1a2c08bcfc03fa1dfa599947421643a5ec10ff084c1c9cc05f8bb76d9e796"
+        }
+      ]
+    },
+    {
+      "id": "routing",
+      "title": "候选与派发",
+      "role": "协作控制器",
+      "description": "按开关、执行端统一预设、模型范围及预算选择候选，创建有记录的执行任务。",
+      "output": "带执行端、模型及文件范围的任务",
+      "evidence": [
+        {
+          "path": ".local-worker/model_router.py",
+          "sha256": "d7a60ad9f19efbd12909851cd8b3323bb57482f12ae04b274ef45e1982232da5"
+        },
+        {
+          "path": ".local-worker/dispatch_task.py",
+          "sha256": "98ced63f0e6d67d767870f2ff91d69ac3d4ce338c6ad226eaaf065ba56ff99d0"
+        }
+      ]
+    },
+    {
+      "id": "execution",
+      "title": "执行与工具",
+      "role": "Pi / DSH / WorkBuddy",
+      "description": "不同执行端适配器运行任务，工具能力和限制按各执行端记录；执行结束与验收通过分别处理。",
+      "output": "文件、答复、工具与自测证据",
+      "evidence": [
+        {
+          "path": ".local-worker/execution_engines.py",
+          "sha256": "0d49f3b2e6fd68036ee83e2a09c0aeaf9adb0695e3c30bda03a859088ed3d8be"
+        },
+        {
+          "path": ".local-worker/workbuddy_worker.py",
+          "sha256": "e656e3a82daf6e27dd8fbdcd6850ab32bfec06cfde42861e255c7dcea4ab27aa"
+        }
+      ]
+    },
+    {
+      "id": "review",
+      "title": "独立验收",
+      "role": "主脑",
+      "description": "主脑检查真实交付并记录独立证据。发现问题可退回整改；必要时接手，同时保留执行器原始失败。",
+      "output": "通过、退回或需处理的结论",
+      "evidence": [
+        {
+          "path": ".local-worker/review_task.py",
+          "sha256": "b814c81628d8ba0c2d1d6e804163bf391698f112ee1903206dbe22ad35610d08"
+        }
+      ]
+    },
+    {
+      "id": "workbench",
+      "title": "项目工作台",
+      "role": "进度与记录",
+      "description": "工作台按当前项目显示任务、交付和验收；模型、执行端设置和账户预算为全局共享。",
+      "output": "可追踪的执行与验收状态",
+      "evidence": [
+        {
+          "path": ".local-worker/panel_server.py",
+          "sha256": "6257c37fb1f2c5625ae46618afa89b80db1857004d394f0f65ee2ef063c306f2"
+        },
+        {
+          "path": ".local-worker/execution_result.py",
+          "sha256": "648c564c2c62b855d1a28828434cf32315279f58dfea4ba1ab7d5fe4c49783bc"
+        }
+      ]
+    },
+    {
+      "id": "map",
+      "title": "架构讲解与代码地图",
+      "role": "只读理解项目",
+      "description": "地图扫描受限代码快照，读取项目维护者或 Agent 整理的讲解，核对代码依据变化；不会执行项目代码或自动调用模型。",
+      "output": "交互图、中文职责与代码依据",
+      "evidence": [
+        {
+          "path": ".local-worker/project_map.py",
+          "sha256": "4c173b2b20af09baff5c5236a1970d2d1d83d1fd917a50f880660d494a8839d7"
+        },
+        {
+          "path": ".local-worker/project_architecture.py",
+          "sha256": "2e3a91027055fd3db9441a40400179254791c18fda3124a7a4263d390154e882"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "entry",
+      "target": "routing",
+      "label": "目标与约束",
+      "confidence": "documented"
+    },
+    {
+      "source": "routing",
+      "target": "execution",
+      "label": "派发任务",
+      "confidence": "documented"
+    },
+    {
+      "source": "execution",
+      "target": "review",
+      "label": "提交交付与自测",
+      "confidence": "documented"
+    },
+    {
+      "source": "review",
+      "target": "execution",
+      "label": "发现缺陷时退回整改",
+      "confidence": "documented"
+    },
+    {
+      "source": "routing",
+      "target": "workbench",
+      "label": "派发状态",
+      "confidence": "documented"
+    },
+    {
+      "source": "execution",
+      "target": "workbench",
+      "label": "执行状态与交付",
+      "confidence": "documented"
+    },
+    {
+      "source": "review",
+      "target": "workbench",
+      "label": "验收结论",
+      "confidence": "documented"
+    },
+    {
+      "source": "workbench",
+      "target": "map",
+      "label": "用户主动打开项目地图",
+      "confidence": "documented"
+    }
+  ]
+}

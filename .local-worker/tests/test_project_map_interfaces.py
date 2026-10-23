@@ -117,6 +117,32 @@ class MapInterfaceTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_shared_explanation_is_scoped_across_http_codex_and_dsh(self):
+        index = project_map.query(str(self.a))
+        doc = {'schema': 1, 'title': '项目甲', 'summary': '甲项目的入口。',
+               'snapshot_hash': index['index']['hash'],
+               'nodes': [{'id': 'entry', 'title': '输入入口', 'description': '接收输入。',
+                          'evidence': [{'path': 'a.py', 'sha256': index['nodes'][0]['sha256']}]}], 'edges': []}
+        (self.a / 'project-architecture.json').write_text(json.dumps(doc), encoding='utf-8')
+        status, result = self.post({'mode': 'project', 'project': str(self.a)}, {})
+        self.assertEqual(status, 200)
+        self.assertEqual(result['architecture']['state'], 'matched')
+        self.assertEqual(codex.read_project_map({'mode': 'project', 'project': str(self.a)}, {})['architecture']['title'], '项目甲')
+        for host in ('codex', 'dsh'):
+            context = brain_context.build_context(str(self.a), host, 'arch-owner-' + host,
+                role='brain', session_binding='user_bound', operator_session='arch-session')
+            cap = brain_gateway.register_connection(context.declaration())['capability']
+            try:
+                self.assertEqual(brain_gateway.handle('project_map', {}, cap)['architecture']['state'], 'matched')
+            finally:
+                with brain_gateway._LOCK:
+                    brain_gateway._CAPABILITIES.pop(cap, None)
+        status, other = self.post({'mode': 'project', 'project': str(self.b)}, {})
+        self.assertEqual(status, 200)
+        self.assertEqual(other['architecture']['state'], 'missing')
+        self.assertFalse((self.a / '.model-desk').exists())
+        self.assertFalse((self.b / '.model-desk').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

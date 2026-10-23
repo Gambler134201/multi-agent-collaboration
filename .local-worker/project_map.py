@@ -298,6 +298,10 @@ def query(project, *, file=None, query='', refresh=False, limit=MAX_FILES):
             while len(_CACHE) > 4:
                 _CACHE.popitem(last=False)
     selected = result['nodes']
+    # Explanation is re-read independently from the code cache on every query.
+    # Metadata-only edits must not leave a stale cached explanation in place.
+    import project_architecture
+    result['architecture'] = project_architecture.read(root, selected, fingerprint, _safe)
     if file:
         if not any(node['path'] == file for node in selected):
             raise ValueError('文件不在当前受限代码索引中；未读取范围外文件')
