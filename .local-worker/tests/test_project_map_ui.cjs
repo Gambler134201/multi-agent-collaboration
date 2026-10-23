@@ -63,6 +63,31 @@ test('markup values are escaped, module uses no network/storage or code executio
   assert.doesNotMatch(code,/\bfetch\s*\(|localStorage|sessionStorage|eval\s*\(|new Function|setInterval/);
   assert.doesNotMatch(code,/file:\/\/|javascript:/);
 });
+test('runtime base directory does not classify all code as execution tools',()=>{
+  const paths=['.local-worker/panel_server.py','.local-worker/review_task.py','.local-worker/execution_engines.py'];
+  const result=ui.overview({nodes:paths.map(path=>({id:path,path})),edges:[]});
+  assert.deepEqual(result.groups.map(group=>group.name),['协作与任务','执行与工具','数据与服务']);
+});
+test('project walkthrough requires root implementation, includes rework and ongoing records',()=>{
+  const paths=['panel_server.py','brain_gateway.py','dispatch_task.py','execution_engines.py','review_task.py'];
+  const make=prefix=>({nodes:paths.map(name=>({id:prefix+name,path:prefix+name})),edges:[]});
+  for(const prefix of ['release/.local-worker/','src/']){
+    const payload=make(prefix);assert.equal(ui.architecture(payload,ui.overview(payload)).kind,'inferred');
+  }
+  const payload=make('.local-worker/'),diagram=ui.architecture(payload,ui.overview(payload));
+  assert.equal(diagram.kind,'explained');assert.equal(diagram.steps.length,5);
+  assert.ok(diagram.links.some(link=>link.source==='review'&&link.target==='execute'&&link.kind==='rework'));
+  assert.deepEqual(diagram.links.filter(link=>link.target==='result').map(link=>link.source),['plan','execute','review']);
+  assert.ok(diagram.steps.every(step=>step.files.every(file=>payload.nodes.includes(file))));
+});
+test('generic module arrows come only from observed static links',()=>{
+  const payload={nodes:[{id:'ui/app.js',path:'ui/app.js'},{id:'api/server.py',path:'api/server.py'}],edges:[]};
+  assert.equal(ui.architecture(payload,ui.overview(payload)).links.length,0);
+  payload.edges=[{source:'ui/app.js',target:'api/server.py'}];
+  const diagram=ui.architecture(payload,ui.overview(payload));
+  assert.equal(diagram.kind,'inferred');assert.equal(diagram.links.length,1);
+  assert.equal(diagram.links[0].label,'源码静态引用');
+});
 test('dialog is created once, renders escaped files, and clears on project change',async()=>{
   const saved=global.document;
   class Element {
@@ -86,7 +111,9 @@ test('dialog is created once, renders escaped files, and clears on project chang
     await instance.open();await instance.open();assert.equal(calls,1);assert.equal(body.children.length,1);
     const dialog=body.children[0];assert.equal(dialog.open,true);
     assert.match(dialog.innerHTML,/读懂这个项目/);
-    assert.match(dialog.querySelector('#pm-overview').innerHTML,/代码大致分为这些部分/);
+    assert.match(dialog.querySelector('#pm-overview').innerHTML,/可交互项目架构图/);
+    assert.match(dialog.querySelector('#pm-overview').innerHTML,/项目模块关系/);
+    assert.ok(!dialog.querySelector('#pm-overview').innerHTML.includes('<img'));
     assert.equal(dialog.querySelector('#pm-code').hidden,true);
     const list=dialog.querySelector('#pm-list').innerHTML;
     assert.ok(list.includes('&lt;img'));assert.ok(!list.includes('<img'));

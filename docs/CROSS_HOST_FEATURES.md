@@ -6,6 +6,8 @@ Pi、DSH、WorkBuddy 的控制器阶段证据共用 `execution_result.py`；工�
 
 ## 项目地图
 
+交互架构图在共享地图 JS/CSS 中实现，Codex MCP Apps 内联同一份资源，DSH 浏览器入口由同一后台提供；入口和主脑插件无新增协议。讲解图、通用项目静态模块图及代码细节遵循相同证据边界。离线多宽度浏览器检查与原生嵌入页确认分开记录；已打开的旧页面需要刷新或关闭重开以载入新资源。
+
 公共 `project_map.py` 提供受限只读索引，工作台按请求所选项目调用；Codex 默认 MCP 的 `query_project_map` 与通用 brain MCP/DSH 的 `brain_project_map` 共用核心。Codex 入口可离线查询、不启动后台；DSH 使用原有固定项目/会话绑定。DSH 0.2.13 已在本机安装并核对工具白名单和规则，旧连接加载及原生界面待分别确认。两种工作台共用地图 JS/CSS，Codex MCP Apps 内联相同资源。未加入任何执行端的自动上下文消费，不据此宣称 Pi/DSH/WorkBuddy 执行器都会自动读取地图。详见[首版能力与限制](PROJECT_MAP.md)。
 
 ## 请求回执可靠性与原请求查询

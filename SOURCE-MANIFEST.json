@@ -311,13 +311,13 @@
     },
     {
       "path": ".local-worker/panel/project-map.css",
-      "sha256": "fa668da0793415c08f912f2c8aad709c2b8bf4600f9f26c43e429ca481014d3a",
-      "bytes": 7429
+      "sha256": "98a56f107f0ae835dc4166478db21a4c4f8505076a16451d505c40243e3c3df3",
+      "bytes": 11560
     },
     {
       "path": ".local-worker/panel/project-map.js",
-      "sha256": "cae237d562765df45a8d2d2e0a29b45f4cc379b4baa3b18ead78613eb2d0768e",
-      "bytes": 16801
+      "sha256": "86a643294307fd84e9d52e3acfa9bc69e8ba43ce219838739e47223a7cf1e763",
+      "bytes": 25050
     },
     {
       "path": ".local-worker/panel/style.css",
@@ -775,14 +775,19 @@
       "bytes": 7840
     },
     {
+      "path": ".local-worker/tests/test_project_map_diagram.cjs",
+      "sha256": "519c0e1906325b1ce27e66431213005e4ac77878c656852edfd5f839cbf91ad8",
+      "bytes": 5146
+    },
+    {
       "path": ".local-worker/tests/test_project_map_interfaces.py",
       "sha256": "c999102cc87ee9f36bad59476a5567de7676e1f5d64fff297b91b2a121c46bec",
       "bytes": 6076
     },
     {
       "path": ".local-worker/tests/test_project_map_ui.cjs",
-      "sha256": "d6d389da317cfc2170d8a2e61c92fbf5c5a4fa7edb5a00e084c0e6fb1c4be206",
-      "bytes": 6379
+      "sha256": "3ee10c572150d96658a3d1132ba3dd3f5c5f180fcbeaffaf67046829c2230828",
+      "bytes": 8449
     },
     {
       "path": ".local-worker/tests/test_project_scope.py",
@@ -1051,8 +1056,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "66dba84accc3dad6c42947c34b692e9e2e6e2f090be0c1e660e537b8b58b231a",
-      "bytes": 10703
+      "sha256": "7ff18fe5ef55646b319a188c08ed0c667e91549159df6055e82fd8bc6a417f38",
+      "bytes": 11095
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1101,8 +1106,8 @@
     },
     {
       "path": "docs/PROJECT_MAP.md",
-      "sha256": "1b2048dda612fe8df321fd0ac3bae3f35afb40e6e9faac591ccc9b3e45d6c597",
-      "bytes": 6334
+      "sha256": "ccda6b02545ceb04fe308bf4197631a7b7a45f74e5d8584a1cac4c0ba5a6bfd4",
+      "bytes": 7696
     },
     {
       "path": "docs/REQUEST_RELIABILITY.md",
