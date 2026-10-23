@@ -3,10 +3,12 @@
 Exposes the local Model Desk workbench to any local Codex project through the
 official MCP Apps contract (stdio transport, official Python mcp SDK):
 
-* ``open_model_desk`` - the only model-visible entry. It starts the existing
+* ``open_model_desk`` - the model-visible workbench entry. It starts the existing
   loopback panel on explicit request and renders the workbench UI.
 * ``panel_request`` - a UI-only proxy for a small whitelist of panel API calls.
   The internal panel session token never leaves this process.
+* ``query_project_map`` - a model-visible, offline read-only code navigation
+  query. It never starts the panel and uses an explicit/host-bound project.
 * ``ui://model-desk/workbench-v1`` - the workbench UI, bundled from the panel's
   existing index.html / style.css / app.js plus the MCP host bridge.
 
@@ -54,6 +56,7 @@ UI_MIME = "text/html;profile=mcp-app"
 
 TOOL_OPEN = "open_model_desk"
 TOOL_PANEL = "panel_request"
+TOOL_MAP = "query_project_map"
 
 MAX_BODY_BYTES = 200_000
 HTTP_TIMEOUT = 15
@@ -91,7 +94,7 @@ _GET_PICK = re.compile(r'^/api/projects/pick/[0-9a-f]{32}$')
 _POST_EXACT = frozenset({"/api/workflow", "/api/codex-usage/refresh", "/api/route-preview",
                          "/api/models", "/api/discover", "/api/tasks", "/api/goals", "/api/stages", "/api/projects/pick",
                          "/api/task-records/preview", "/api/task-records/delete", "/api/projects/remember",
-                         "/api/db/compact"})
+                         "/api/db/compact", "/api/project-map"})
 _POST_MODEL = re.compile(rf"^/api/models/{_SAFE_SEGMENT}/(save|delete|test|default|balance|thinking)$")
 _POST_ENDPOINT = re.compile(r'^/api/execution-endpoints/(pi|dsh|workbuddy)$')
 _POST_CANCEL = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}/cancel$")
@@ -477,8 +480,25 @@ def build_workbench_html(panel_dir: Path | None = None) -> str:
     script = '<script src="/app.js"></script>'
     if index.count(link) != 1 or index.count(script) != 1:
         raise PanelError("工作台页面结构已变化，无法安全打包界面。")
-    inline = "<script>\n" + _escape_script(bridge) + "\n</script>\n<script>\n" + _escape_script(app) + "\n</script>"
-    return index.replace(link, "<style>\n" + style + "\n</style>").replace(script, inline)
+    map_link = '<link rel="stylesheet" href="/project-map.css">'
+    map_script = '<script src="/project-map.js"></script>'
+    bridge_tag = '<script>\n' + _escape_script(bridge) + '\n</script>\n'
+    map_present = map_script in index
+    for marker, name, start, end in (
+            (map_link, 'project-map.css', '<style>\n', '\n</style>'),
+            (map_script, 'project-map.js', '<script>\n', '\n</script>')):
+        if marker in index:
+            if index.count(marker) != 1:
+                raise PanelError('项目地图资源标记不唯一')
+            try:
+                body = (folder / name).read_text(encoding='utf-8')
+            except OSError:
+                raise PanelError('项目地图界面资源缺失') from None
+            prefix = bridge_tag if name.endswith('.js') else ''
+            index = index.replace(marker, prefix + start + (_escape_script(body) if name.endswith('.js') else body) + end)
+    # Host bridge must precede the map, and map must precede app initialization.
+    index = index.replace(script, ('' if map_present else bridge_tag) + '<script>\n' + _escape_script(app) + '\n</script>')
+    return index.replace(link, "<style>\n" + style + "\n</style>")
 
 
 def read_workbench(panel_dir: Path | None = None) -> list[ReadResourceContents]:
@@ -525,6 +545,20 @@ def tool_definitions() -> list[types.Tool]:
                                               idempotentHint=False, openWorldHint=False),
             _meta=_PANEL_META,
         ),
+        types.Tool(
+            name=TOOL_MAP, title='查询项目代码地图',
+            description=('只读查询明确项目的文件、符号、静态 Python 导入和相关测试；'
+                         '不启动工作台、不执行代码或模型。项目不明时拒绝，不使用其他标签的项目。'),
+            inputSchema={'type':'object', 'properties': {
+                'project': {'type':'string', 'description':'明确的本机项目绝对目录；省略时只解析当前聊天目录或唯一 MCP root'},
+                'file': {'type':'string', 'description':'项目内相对代码文件，查看本文件及直接邻居'},
+                'query': {'type':'string', 'maxLength':160},
+                'refresh': {'type':'boolean'},
+                'limit': {'type':'integer', 'minimum':1, 'maximum':300},
+            }, 'additionalProperties':False},
+            annotations=types.ToolAnnotations(title='查询项目代码地图', readOnlyHint=True,
+                destructiveHint=False, idempotentHint=True, openWorldHint=False),
+        ),
     ]
 
 
@@ -535,6 +569,14 @@ def resource_definitions() -> list[types.Resource]:
 
 
 # -------------------------------------------------------------------- MCP server
+
+def read_project_map(view, arguments):
+    view = project_scope.parse_view(view)
+    if view['mode'] != 'project':
+        raise ValueError('项目地图需要明确的当前项目目录；不会使用全局或其他标签的项目')
+    import project_map
+    return project_map.query(view['project'], **{key: value for key, value in arguments.items() if key != 'project'})
+
 
 def build_server() -> Server:
     server = Server("model-desk")
@@ -556,6 +598,19 @@ def build_server() -> Server:
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict):
         arguments = arguments or {}
+        if name == TOOL_MAP:
+            try:
+                if not isinstance(arguments, dict) or set(arguments) - {'project','file','query','refresh','limit'}:
+                    raise ValueError('项目地图参数不正确')
+                view = await opening_view(server, arguments)
+                result = await anyio.to_thread.run_sync(lambda: read_project_map(view, arguments))
+                return types.CallToolResult(content=[
+                    types.TextContent(type='text', text='已返回项目代码地图；静态导航不代表测试通过。'),
+                    types.TextContent(type='text', text=json.dumps(result, ensure_ascii=False))],
+                    structuredContent=result)
+            except (PanelError, ValueError, OSError) as error:
+                message = str(error) if isinstance(error, (PanelError, ValueError)) else '项目地图暂不可读'
+                return types.CallToolResult(content=[types.TextContent(type='text', text=message)], isError=True)
         if name == TOOL_OPEN:
             try:
                 view=await opening_view(server,arguments)

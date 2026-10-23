@@ -37,7 +37,7 @@ class DesktopTests(unittest.TestCase):
         (self.root / '打开模型工作台.ps1').write_bytes(b'# fixture native opener\n')
         (self.root / '启动模型面板.ps1').write_bytes(b'# fixture native starter\n')
         for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py',
-                     'brain_requests.py', 'failure_classification.py', 'workflow_settings.py', 'host_balance.py',
+                     'brain_requests.py', 'failure_classification.py', 'project_map.py', 'context_manager.py', 'workflow_settings.py', 'host_balance.py',
                      'completion_wait.py','desktop_notify.py','completion_host.py','dsh_notify.py','panel_service.py','powershell_runtime.py'):
             (self.root / '.local-worker' / name).write_bytes(b'# temporary fixture\n')
         self.home = self.base / 'dsh-home'
@@ -108,7 +108,7 @@ class DesktopTests(unittest.TestCase):
         with tarfile.open(self.folder / 'plugin.tgz') as archive:
             manifest = json.loads(archive.extractfile('package/package.json').read())
             client = archive.extractfile('package/client.mjs').read()
-        self.assertEqual(manifest['version'], '0.2.12')
+        self.assertEqual(manifest['version'], '0.2.13')
         self.assertEqual(set(manifest['files']), set(setup.FILES) - {'package.json'})
         self.assertEqual(manifest['exports']['./client'], './client.mjs')
         self.assertEqual(manifest['exports']['./account'], './account.cjs')

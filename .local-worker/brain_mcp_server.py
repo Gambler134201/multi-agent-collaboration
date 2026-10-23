@@ -38,6 +38,7 @@ TOOL_PREVIEW = 'brain_route_preview'
 TOOL_DISPATCH = 'brain_dispatch'
 TOOL_STATUS = 'brain_status'
 TOOL_REQUEST_STATUS = 'brain_request_status'
+TOOL_PROJECT_MAP = 'brain_project_map'
 TOOL_DELIVERY = 'brain_delivery'
 TOOL_REVIEW = 'brain_review'
 TOOL_REWORK = 'brain_rework'
@@ -45,7 +46,7 @@ TOOL_WAKE_PROBE = 'brain_wakeup_probe'
 TOOL_WAIT = 'brain_wait'
 
 TOOLS = (TOOL_CONNECT, TOOL_PREFLIGHT, TOOL_DESCRIBE, TOOL_CANDIDATES, TOOL_PREVIEW, TOOL_DISPATCH,
-         TOOL_STATUS, TOOL_REQUEST_STATUS, TOOL_DELIVERY, TOOL_REVIEW, TOOL_REWORK)
+         TOOL_STATUS, TOOL_REQUEST_STATUS, TOOL_PROJECT_MAP, TOOL_DELIVERY, TOOL_REVIEW, TOOL_REWORK)
 
 _CONTEXT = None
 _TRANSPORT = None
@@ -175,6 +176,19 @@ def tool_definitions():
             }, required=('request_id', 'prompt', 'acceptance')),
             annotations=types.ToolAnnotations(title='快速派发执行任务', destructiveHint=False,
                                               idempotentHint=True, openWorldHint=False),
+        ),
+        types.Tool(
+            name=TOOL_PROJECT_MAP, title='查询当前项目代码地图',
+            description=('只读扫描当前可信项目的受限代码索引，按文件/符号搜索并查看静态导入及相关测试。'
+                         '不执行代码、不调用模型、不读取任务或认证记录；静态关系不是完整调用链。'),
+            inputSchema=_object({
+                'file': {'type': 'string', 'description': '当前项目内相对代码路径；查看本文件及直接邻居'},
+                'query': {'type': 'string', 'maxLength': 160},
+                'refresh': {'type': 'boolean'},
+                'limit': {'type': 'integer', 'minimum': 1, 'maximum': 300},
+            }),
+            annotations=types.ToolAnnotations(title='查询当前项目代码地图', readOnlyHint=True,
+                destructiveHint=False, idempotentHint=True, openWorldHint=False),
         ),
         types.Tool(
             name=TOOL_REQUEST_STATUS, title='按原请求编号找回结果',
@@ -531,6 +545,9 @@ def _run(name, arguments):
     if name == TOOL_REQUEST_STATUS:
         _strict(arguments, ('request_id',), 'request_status')
         return _ok(_call('request_status', arguments), '已只读核对原请求；未修写或重新派发。')
+    if name == TOOL_PROJECT_MAP:
+        _strict(arguments, ('file', 'query', 'refresh', 'limit'), 'project_map')
+        return _ok(_call('project_map', arguments), '已返回当前项目代码地图；静态导航不代表测试通过。')
     if name == TOOL_DELIVERY:
         _strict(arguments, ('task_id',), 'delivery')
         return _ok(_call('delivery', arguments), '已返回任务交付与验收状态。')

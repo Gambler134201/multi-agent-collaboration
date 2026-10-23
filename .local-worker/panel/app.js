@@ -207,6 +207,8 @@ if(isDshHost){
   if(note)note.textContent='模型、DSH 登录账户余额与每日预算总账全局共享';
 }
 let viewEpoch=0;
+const projectMapUI=window.ModelDeskProjectMap?.create({api,getView:()=>({...projectView}),toast});
+if($('project-map-open'))$('project-map-open').onclick=()=>projectMapUI?projectMapUI.open():toast('项目地图资源尚未加载，请刷新工作台。',true);
 let recentProjects=[];
 let knownProjects=[];
 const bookmarkedProjects=new Set();
@@ -355,6 +357,8 @@ function projectEmptyState(){
 function viewHeader(view=projectView){return btoa(unescape(encodeURIComponent(JSON.stringify(view)))).replace(/\+/g,'-').replace(/\//g,'_');}
 function renderProjectView(){
   const bound=projectView.mode==='project'&&!!projectView.project;
+  const mapButton=$('project-map-open');
+  if(mapButton){mapButton.disabled=!bound;mapButton.title=bound?'查看当前项目的代码、符号和静态导入关系':'请先选择一个明确项目';}
   const name=$('project-view-name'),row=$('project-path-row'),path=$('project-view-path'),sw=$('project-view-switch'),status=$('project-view-status');
   if(bound){
     name.textContent=projectBaseName(projectView.project)||projectView.project;
@@ -378,6 +382,7 @@ function renderProjectView(){
 }
 function changeProjectView(view){
   if(JSON.stringify(view)===JSON.stringify(projectView))return;
+  projectMapUI?.onProjectChange();
   projectView=view;viewEpoch++;projectPathPinned=false;closeProjectMenu();resetProjectStorage();savePanelBinding();selectedTask=null;detailPrompt='';promptTask=null;continuingTask=null;
   pendingAction=null;stageGoal=null;detailTab='result';taskFilter='all';treeOpen.clear();observabilityLoading.clear();goalsExpanded=false;
   // Project switch invalidates this dialog: no stale preview token, no stale selection, no stale confirmation.

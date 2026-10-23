@@ -36,7 +36,7 @@ ROLES = ('brain', 'executor')
 SESSION_BINDINGS = ('host_verified', 'user_bound', 'unknown')
 IDENTITY_STATES = ('verified', 'declared', 'unknown')
 
-READ_OPERATIONS = frozenset({'describe', 'candidates', 'route_preview', 'status', 'delivery', 'request_status'})
+READ_OPERATIONS = frozenset({'describe', 'candidates', 'route_preview', 'status', 'delivery', 'request_status', 'project_map'})
 MUTATING_OPERATIONS = frozenset({'dispatch', 'review', 'rework'})
 OPERATIONS = READ_OPERATIONS | MUTATING_OPERATIONS
 

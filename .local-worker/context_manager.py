@@ -343,7 +343,7 @@ def extract_symbols(path, text):
                 'reason': 'regex_best_effort', 'symbols': _regex_symbols(text, _JS_PATTERNS)}
     if language == 'powershell':
         return {'language': language, 'extraction': 'regex', 'degraded': False,
-                'reason': 'regex_best_effort', 'symbols': _regex_symbols(text, (_PS_PATTERN,))}
+                'reason': 'regex_best_effort', 'symbols': _regex_symbols(text, (('function', _PS_PATTERN),))}
     if language == 'markdown':
         return {'language': language, 'extraction': 'regex', 'degraded': False,
                 'reason': 'headings_only', 'symbols': _markdown_symbols(text)}

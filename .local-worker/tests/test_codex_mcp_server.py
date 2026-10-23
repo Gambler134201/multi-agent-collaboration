@@ -36,7 +36,7 @@ class MetadataTests(unittest.TestCase):
 
     def test_tool_definitions_and_entrypoints(self):
         tools = {tool.name: self.dump(tool) for tool in desk.tool_definitions()}
-        self.assertEqual(set(tools), {desk.TOOL_OPEN, desk.TOOL_PANEL})
+        self.assertEqual(set(tools), {desk.TOOL_OPEN, desk.TOOL_PANEL, desk.TOOL_MAP})
         opened = tools[desk.TOOL_OPEN]
         meta = opened["_meta"]
         self.assertEqual(meta["ui"]["resourceUri"], desk.RESOURCE_URI)
@@ -293,6 +293,19 @@ class ProxyTests(unittest.TestCase):
 
 
 class UiBundleTests(unittest.TestCase):
+    def test_map_assets_are_inlined_in_bridge_map_app_order(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            (base / 'index.html').write_text('<link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/project-map.css"><script src="/project-map.js"></script><script src="/app.js"></script>')
+            for name, text in [('style.css','body{}'),('project-map.css','.pm-dialog{}'),
+                               ('codex-bridge.js','BRIDGE_SENTINEL;'),('project-map.js','MAP_SENTINEL;'),('app.js','APP_SENTINEL;')]:
+                (base / name).write_text(text)
+            html = desk.build_workbench_html(base)
+            self.assertNotIn('<script src=', html)
+            self.assertNotIn('<link rel="stylesheet"', html)
+            self.assertLess(html.index('BRIDGE_SENTINEL'), html.index('MAP_SENTINEL'))
+            self.assertLess(html.index('MAP_SENTINEL'), html.index('APP_SENTINEL'))
+
     def test_bundle_inlines_assets_from_a_temp_fixture(self):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)
@@ -346,7 +359,7 @@ class ServerHandlerTests(unittest.TestCase):
 
     def test_list_tools_over_the_registered_handler(self):
         result = self.call(mcp_types.ListToolsRequest, mcp_types.ListToolsRequest(method="tools/list"))
-        self.assertEqual([tool.name for tool in result.root.tools], [desk.TOOL_OPEN, desk.TOOL_PANEL])
+        self.assertEqual([tool.name for tool in result.root.tools], [desk.TOOL_OPEN, desk.TOOL_PANEL, desk.TOOL_MAP])
 
     def test_read_resource_over_the_registered_handler(self):
         request = mcp_types.ReadResourceRequest(

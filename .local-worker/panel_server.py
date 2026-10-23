@@ -2310,11 +2310,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"task": None, "transient": True,
                                            "error": "任务记录暂时不可读，请重试"}, 503)
                 return self.send_json({"task": public_task_cost(row), "prompt": prompt.read_text(encoding="utf-8") if prompt.exists() else ""})
-            assets = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+            assets = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
+                      '/project-map.js': 'project-map.js', '/project-map.css': 'project-map.css'}
             if path not in assets:
                 return self.send_json({"error": "页面不存在"}, 404)
             raw = (WEB / assets[path]).read_bytes()
-            mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css"}[path]
+            mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css",
+                    '/project-map.js': 'text/javascript', '/project-map.css': 'text/css'}[path]
             self.send_response(200)
             self.send_header("Content-Type", mime + "; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))
@@ -2340,6 +2342,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("请求大小不正确")
             body = json.loads(self.rfile.read(length))
             project_views.check_request(path,self.project_view,body)
+            if path == '/api/project-map':
+                import project_map
+                project = project_views.explicit_project(self.project_view)
+                if not project:
+                    raise ValueError('项目地图需要先选择一个明确项目，不支持全部项目视图')
+                if not isinstance(body, dict) or set(body) - {'file', 'query', 'refresh', 'limit'}:
+                    raise ValueError('项目地图参数不正确，不能覆盖项目身份')
+                return self.send_json(project_map.query(project, **body))
             if path == '/api/host-account/snapshot':
                 # The optional DSH main-brain plugin pushes one display-only
                 # public snapshot here through the existing panel session token.

@@ -32,11 +32,12 @@ OP_PREVIEW = 'route_preview'
 OP_DISPATCH = 'dispatch'
 OP_STATUS = 'status'
 OP_REQUEST_STATUS = 'request_status'
+OP_PROJECT_MAP = 'project_map'
 OP_DELIVERY = 'delivery'
 OP_REVIEW = 'review'
 OP_REWORK = 'rework'
 OPERATIONS = (OP_DESCRIBE, OP_CANDIDATES, OP_PREVIEW, OP_DISPATCH,
-               OP_STATUS, OP_DELIVERY, OP_REVIEW, OP_REWORK, OP_REQUEST_STATUS)
+               OP_STATUS, OP_DELIVERY, OP_REVIEW, OP_REWORK, OP_REQUEST_STATUS, OP_PROJECT_MAP)
 
 _LOCK = threading.RLock()
 _CAPABILITIES = {}
@@ -120,6 +121,7 @@ def handle(operation, payload, capability):
         OP_DISPATCH: _dispatch,
         OP_STATUS: _status,
         OP_REQUEST_STATUS: _request_status,
+        OP_PROJECT_MAP: _project_map,
         OP_DELIVERY: _delivery,
         OP_REVIEW: _review,
         OP_REWORK: _rework,
@@ -277,6 +279,14 @@ def _find_task_receipts(context, request_id):
 def _find_task_receipt(context, request_id):
     matches = _find_task_receipts(context, request_id)
     return matches[0] if len(matches) == 1 else None
+
+
+def _project_map(context, payload):
+    _keys(payload, ('file', 'query', 'refresh', 'limit'))
+    if context.role != 'brain':
+        raise BrokerError('执行器不能使用主脑项目地图入口')
+    import project_map
+    return project_map.query(context.project, **payload)
 
 
 def _request_status(context, payload):

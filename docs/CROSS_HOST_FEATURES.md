@@ -1,5 +1,9 @@
 # 跨主脑功能更新约定
 
+## 项目地图
+
+公共 `project_map.py` 提供受限只读索引，工作台按请求所选项目调用；Codex 默认 MCP 的 `query_project_map` 与通用 brain MCP/DSH 的 `brain_project_map` 共用核心。Codex 入口可离线查询、不启动后台；DSH 使用原有固定项目/会话绑定。DSH 0.2.13 已在本机安装并核对工具白名单和规则，旧连接加载及原生界面待分别确认。两种工作台共用地图 JS/CSS，Codex MCP Apps 内联相同资源。未加入任何执行端的自动上下文消费，不据此宣称 Pi/DSH/WorkBuddy 执行器都会自动读取地图。详见[首版能力与限制](PROJECT_MAP.md)。
+
 ## 请求回执可靠性与原请求查询
 
 宿主中立的 brain 请求通道共用 `brain_requests` 的异常结果确认和 `brain_request_status` 只读查询；Codex/DSH 身份均覆盖 stdio/HTTP 临时记录检查。DSH 0.2.12 增加工具白名单和规则提示，已在本机安装并核对八文件哈希。Codex 默认工作台 MCP/CLI 并未自动转成 broker 派发；没有 broker request_id 的旧 CLI 任务继续按 task_id 查询。源码回归、安装后协议检查与原生复验分别记录；用户转述的 DSH 新会话已确认工具加载和 not_found 只读返回，真实任务回执丢失找回仍仅离线模拟通过。详见 [请求可靠性](REQUEST_RELIABILITY.md)。

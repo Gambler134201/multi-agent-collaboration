@@ -24,7 +24,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 DEFAULT_BASE_URL = 'http://127.0.0.1:8765'
 CAPABILITY_HEADER = 'X-Brain-Capability'
 LOOPBACK_HOSTS = {'127.0.0.1', 'localhost', '::1'}
-READ_OPERATIONS = frozenset({'describe', 'candidates', 'route_preview', 'status', 'delivery', 'request_status'})
+READ_OPERATIONS = frozenset({'describe', 'candidates', 'route_preview', 'status', 'delivery', 'request_status', 'project_map'})
 MUTATING_OPERATIONS = frozenset({'dispatch', 'review', 'rework'})
 MAX_BODY_BYTES = 5_000_000
 MAX_RESPONSE_BYTES = 5_000_000
@@ -134,6 +134,10 @@ def _valid_result(operation, data):
                 and not data.get('outcome'))
     if data.get('error'):
         return False
+    if operation == 'project_map':
+        return (data.get('schema') == 1 and isinstance(data.get('project'), str)
+                and isinstance(data.get('nodes'), list) and isinstance(data.get('edges'), list)
+                and data.get('read_only') is True)
     if operation == 'request_status':
         return (isinstance(data.get('request_id'), str) and bool(data['request_id'])
                 and data.get('request_state') in {'completed', 'rejected', 'reserved',

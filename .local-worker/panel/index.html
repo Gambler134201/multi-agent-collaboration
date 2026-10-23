@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>模型工作台 · Codex</title><link rel="stylesheet" href="/style.css">
+  <title>模型工作台 · Codex</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/project-map.css">
 </head>
 <body>
 <div class="app">
@@ -14,6 +14,7 @@
     <span class="project-current-label">当前项目</span>
     <button type="button" class="project-name" id="project-view-name" title="尚未选择项目" aria-expanded="false" aria-controls="project-path-row">尚未选择项目</button>
     <button type="button" class="button secondary" id="project-view-switch" aria-haspopup="menu" aria-expanded="false" aria-controls="project-view-menu">选择项目</button>
+    <button type="button" class="button secondary" id="project-map-open" title="查看当前项目的代码文件、符号和静态关系">项目地图</button>
     <button type="button" class="button secondary" id="new-goal" title="在当前绑定项目下新建目标；未选择项目时会先提示选择项目">＋ 新建目标</button>
     <p class="project-path" id="project-path-row" hidden><code id="project-view-path"></code></p>
     <span id="project-view-status" class="sr-only" role="status">尚未选择项目</span>
@@ -191,5 +192,5 @@
   </div>
 </dialog>
 <div id="toast" role="status" class="toast" hidden></div>
-<script src="/app.js"></script>
+<script src="/project-map.js"></script><script src="/app.js"></script>
 </body></html>

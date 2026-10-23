@@ -327,7 +327,7 @@ class StdioProtocolTests(unittest.TestCase):
             self.assertEqual(initialized['result']['serverInfo']['name'], 'model-desk-brain')
             tools = {tool['name']: tool for tool in client.list_tools()}
             self.assertEqual(set(tools), set(brain.TOOLS))
-            self.assertEqual(len(tools), 11)
+            self.assertEqual(len(tools), 12)
             self.assertTrue(tools['brain_request_status']['annotations']['readOnlyHint'])
             for name, tool in tools.items():
                 self.assertFalse(tool['inputSchema'].get('additionalProperties', True),
@@ -557,6 +557,9 @@ class EndToEndLoopTests(unittest.TestCase):
         self.assertEqual(self.submitted, [task_id])
 
         request = visible_payload(self.client.call('brain_request_status', {'request_id':'loop-dispatch'}))
+        mapped = visible_payload(self.client.call('brain_project_map', {}))
+        self.assertEqual(mapped['project'], str(self.project))
+        self.assertTrue(mapped['read_only'])
         self.assertEqual(request['request_state'], 'completed')
         self.assertEqual(request['task']['task_id'], task_id)
         self.assertEqual(self.submitted, [task_id])
