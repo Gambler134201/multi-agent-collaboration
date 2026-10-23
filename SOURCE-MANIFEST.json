@@ -991,8 +991,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "44a3348ec0c5805c4f0e0c541f3d81d2204bd2e2b18175ff1305998404eb82e9",
-      "bytes": 9346
+      "sha256": "9da3f28d3dac06a557b53e39fb7c5efbfd8fcd274f900fbe9b9ed518e95dcec8",
+      "bytes": 9437
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1036,8 +1036,8 @@
     },
     {
       "path": "docs/REQUEST_RELIABILITY.md",
-      "sha256": "96a680f4f7886a236d7c41040517ba9853a8bcf1f2b0d750c5860c7c45090625",
-      "bytes": 4179
+      "sha256": "6bf02df1bcccc13eb12ffb83ad64c7aa43a91408be2fbb72fa8c581f81a65aa4",
+      "bytes": 4816
     },
     {
       "path": "docs/SOURCE_RECONCILIATION.md",
@@ -1111,13 +1111,13 @@
     },
     {
       "path": "后续待更新功能/README.md",
-      "sha256": "c86b64b331a6d06c34f28658147ed290dc0f9ad5dc1afa5b13df9448707732f1",
-      "bytes": 3062
+      "sha256": "a7a261fd49c1c5684c302b251acb1dfbc6043a9d470d21c9999860e6e152ad5d",
+      "bytes": 3092
     },
     {
       "path": "后续待更新功能/协作核心可靠性与并行能力更新路线-20261023.md",
-      "sha256": "b9d16a5055e129d85f80d3fc6fcd6693f5d0316c6ad30de9dffb58f59ccc65b0",
-      "bytes": 15261
+      "sha256": "74053f91f60b4c0b4f3efd0a5d44a4e08bfa150e62a2404513840b7b8b4601d2",
+      "bytes": 15330
     },
     {
       "path": "后续待更新功能/多主脑Agent与模型适配-可行性与更新计划.md",

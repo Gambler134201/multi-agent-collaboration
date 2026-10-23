@@ -2,7 +2,7 @@
 
 ## 请求回执可靠性与原请求查询
 
-宿主中立的 brain 请求通道共用 `brain_requests` 的异常结果确认和 `brain_request_status` 只读查询；Codex/DSH 身份均覆盖 stdio/HTTP 临时记录检查。DSH 0.2.12 增加工具白名单和规则提示，已在本机安装并核对八文件哈希。Codex 默认工作台 MCP/CLI 并未自动转成 broker 派发；没有 broker request_id 的旧 CLI 任务继续按 task_id 查询。源码回归、安装后协议检查与原生人工验收分别记录，桌面端新连接加载尚待复核。详见 [请求可靠性](REQUEST_RELIABILITY.md)。
+宿主中立的 brain 请求通道共用 `brain_requests` 的异常结果确认和 `brain_request_status` 只读查询；Codex/DSH 身份均覆盖 stdio/HTTP 临时记录检查。DSH 0.2.12 增加工具白名单和规则提示，已在本机安装并核对八文件哈希。Codex 默认工作台 MCP/CLI 并未自动转成 broker 派发；没有 broker request_id 的旧 CLI 任务继续按 task_id 查询。源码回归、安装后协议检查与原生复验分别记录；用户转述的 DSH 新会话已确认工具加载和 not_found 只读返回，真实任务回执丢失找回仍仅离线模拟通过。详见 [请求可靠性](REQUEST_RELIABILITY.md)。
 
 ## 收尾清理与保护诊断
 
