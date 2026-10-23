@@ -131,8 +131,8 @@
     },
     {
       "path": ".local-worker/codex_mcp_server.py",
-      "sha256": "a1a9f3e22c6c2c3ab8e78330ef37d9ba1d0689f88fadd35807fc87f35cb145cf",
-      "bytes": 30471
+      "sha256": "c912e056c89dcdf4dc30c1a27a2cddaeb7d3883fb834f600d3d55518b41fdce3",
+      "bytes": 29451
     },
     {
       "path": ".local-worker/codex_usage.py",
@@ -541,8 +541,8 @@
     },
     {
       "path": ".local-worker/tests/test_codex_mcp_server.py",
-      "sha256": "97bdc036720a8a6b898ed744d1afd9ce9f97115c1393ea06036912a330a4018b",
-      "bytes": 23689
+      "sha256": "58ef4c5eb1740aa5366efe733e5da18e22d3245d7b12a42240bbf96d444c791f",
+      "bytes": 24774
     },
     {
       "path": ".local-worker/tests/test_codex_usage.py",

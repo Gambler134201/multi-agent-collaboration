@@ -314,6 +314,23 @@ class UiBundleTests(unittest.TestCase):
             self.assertLess(html.index('BRIDGE_SENTINEL'), html.index('MAP_SENTINEL'))
             self.assertLess(html.index('MAP_SENTINEL'), html.index('APP_SENTINEL'))
 
+    def test_new_page_asset_is_inlined_without_new_server_code(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            (base / 'index.html').write_text('<link rel="stylesheet" href="/style.css">'
+                '<link rel="stylesheet" href="/later.css">'
+                '<script src="/later.js"></script><script src="/app.js"></script>', encoding='utf-8')
+            for name, content in {'style.css':'body{}', 'later.css':'.later{}',
+                                  'codex-bridge.js':'BRIDGE_SENTINEL;',
+                                  'later.js':'LATER_SENTINEL;', 'app.js':'APP_SENTINEL;'}.items():
+                (base/name).write_text(content, encoding='utf-8')
+            html = desk.build_workbench_html(base)
+        self.assertNotIn('src="/later.js"', html)
+        self.assertNotIn('href="/later.css"', html)
+        self.assertIn('.later{}', html)
+        self.assertLess(html.index('BRIDGE_SENTINEL'), html.index('LATER_SENTINEL'))
+        self.assertLess(html.index('LATER_SENTINEL'), html.index('APP_SENTINEL'))
+
     def test_bundle_inlines_assets_from_a_temp_fixture(self):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)

@@ -467,49 +467,37 @@ def _escape_script(source: str) -> str:
 
 
 def build_workbench_html(panel_dir: Path | None = None) -> str:
-    """Inline the panel's existing assets into one MCP Apps document."""
+    """Inline every local page asset on each resource read.
+
+    The long-lived MCP process need not know asset names added after it was
+    started. A newly opened app still gets the current checked-in page bundle.
+    """
     folder = Path(panel_dir) if panel_dir is not None else PANEL_DIR
     index = (folder / "index.html").read_text(encoding="utf-8")
-    style = (folder / "style.css").read_text(encoding="utf-8")
-    app = (folder / "app.js").read_text(encoding="utf-8")
     bridge_file = folder / BRIDGE_SCRIPT
     if not bridge_file.is_file():
         raise PanelError("工作台界面桥接脚本缺失，请检查 .local-worker/panel/codex-bridge.js。")
     bridge = bridge_file.read_text(encoding="utf-8")
-    link = '<link rel="stylesheet" href="/style.css">'
-    script = '<script src="/app.js"></script>'
-    if index.count(link) != 1 or index.count(script) != 1:
+    link = re.compile(r'<link rel="stylesheet" href="/([a-z0-9-]+\.css)">')
+    script = re.compile(r'<script src="/([a-z0-9-]+\.js)"></script>')
+    styles = link.findall(index)
+    scripts = script.findall(index)
+    if styles.count('style.css') != 1 or scripts.count('app.js') != 1 or len(styles) != len(set(styles)) or len(scripts) != len(set(scripts)):
         raise PanelError("工作台页面结构已变化，无法安全打包界面。")
-    map_link = '<link rel="stylesheet" href="/project-map.css">'
-    map_script = '<script src="/project-map.js"></script>'
     bridge_tag = '<script>\n' + _escape_script(bridge) + '\n</script>\n'
-    map_present = map_script in index
-    for marker, name, start, end in (
-            (map_link, 'project-map.css', '<style>\n', '\n</style>'),
-            (map_script, 'project-map.js', '<script>\n', '\n</script>')):
-        if marker in index:
-            if index.count(marker) != 1:
-                raise PanelError('项目地图资源标记不唯一')
-            try:
-                body = (folder / name).read_text(encoding='utf-8')
-            except OSError:
-                raise PanelError('项目地图界面资源缺失') from None
-            prefix = bridge_tag if name.endswith('.js') else ''
-            index = index.replace(marker, prefix + start + (_escape_script(body) if name.endswith('.js') else body) + end)
-    # Host bridge must precede the map, and map must precede app initialization.
-    for marker, name, start, end in (
-            ('<link rel="stylesheet" href="/execution-result.css">', 'execution-result.css', '<style>\n', '\n</style>'),
-            ('<script src="/execution-result.js"></script>', 'execution-result.js', '<script>\n', '\n</script>')):
-        if marker in index:
-            if index.count(marker) != 1:
-                raise PanelError('执行结果界面资源标记不唯一')
-            try:
-                body = (folder / name).read_text(encoding='utf-8')
-            except OSError:
-                raise PanelError('执行结果界面资源缺失') from None
-            index = index.replace(marker, start + (_escape_script(body) if name.endswith('.js') else body) + end)
-    index = index.replace(script, ('' if map_present else bridge_tag) + '<script>\n' + _escape_script(app) + '\n</script>')
-    return index.replace(link, "<style>\n" + style + "\n</style>")
+    def body(name: str) -> str:
+        try:
+            return (folder / name).read_text(encoding='utf-8')
+        except OSError:
+            raise PanelError('工作台界面资源缺失：' + name) from None
+    index = link.sub(lambda match: '<style>\n' + body(match.group(1)) + '\n</style>', index)
+    first_script = True
+    def inline_script(match):
+        nonlocal first_script
+        prefix = bridge_tag if first_script else ''
+        first_script = False
+        return prefix + '<script>\n' + _escape_script(body(match.group(1))) + '\n</script>'
+    return script.sub(inline_script, index)
 
 
 def read_workbench(panel_dir: Path | None = None) -> list[ReadResourceContents]:
