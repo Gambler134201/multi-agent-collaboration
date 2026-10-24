@@ -321,6 +321,22 @@ html[data-font-scale="xlarge"]{--ui-scale:1.3;zoom:1.3}
 .endpoint-wallet strong{font-size:14px;font-weight:600}
 .endpoint-wallet small,.endpoint-wallet-source{color:var(--muted);font-size:10px}
 .endpoint-wallet small{display:block;margin-top:3px}
+.zcode-wallet{display:flex;flex-direction:column;gap:7px}
+.zcode-wallet .zcode-wallet-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.zcode-wallet .zcode-wallet-heading>div{min-width:0}
+.zcode-wallet .zcode-wallet-heading span{display:block;font-size:11px;font-weight:600;color:var(--ink-soft)}
+.zcode-wallet .zcode-wallet-heading small{margin-top:2px}
+.zcode-wallet .zcode-wallet-heading .text-button{flex-shrink:0;padding:0;font-size:10px}
+.zcode-quotas{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:8px 12px;min-width:0}
+.zcode-quota{min-width:0;display:flex;flex-direction:column;gap:5px}
+.zcode-quota-meta{display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0;font-size:10px}
+.zcode-quota-meta span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.zcode-quota-meta strong{flex-shrink:0;font-size:10px;font-weight:600;color:var(--ink-soft);white-space:nowrap}
+.zcode-quota progress{appearance:none;-webkit-appearance:none;display:block;width:100%;height:4px;border:0;border-radius:999px;background:var(--line-strong);overflow:hidden}
+.zcode-quota progress::-webkit-progress-bar{background:var(--line-strong);border-radius:999px}
+.zcode-quota progress::-webkit-progress-value{background:var(--green);border-radius:999px}
+.zcode-quota progress::-moz-progress-bar{background:var(--green);border-radius:999px}
+.zcode-wallet-empty{font-size:10px;color:var(--muted)}
 .endpoint-billing .billing-panel{border:0;padding:0;background:none}
 .endpoint-billing .billing-summary-footer{margin-top:5px}
 .endpoint-billing .billing-summary-balance .balance-amount strong{font-size:16px}

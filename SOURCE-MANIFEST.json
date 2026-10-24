@@ -291,8 +291,8 @@
     },
     {
       "path": ".local-worker/panel/app.js",
-      "sha256": "afe66dbc24c35af89c1748e5d39102b0b9f7054b4edf20bb9811405ef86b84c2",
-      "bytes": 177548
+      "sha256": "8d0dac1ff7ccdaef2a6d96943e3d6fc26927a9c544234be25930ba9c80abfbef",
+      "bytes": 179475
     },
     {
       "path": ".local-worker/panel/codex-bridge.js",
@@ -326,8 +326,8 @@
     },
     {
       "path": ".local-worker/panel/style.css",
-      "sha256": "c8db100143ca96d0ca16c28f0361ad8c0ccda74c0575218e3321904d3afc2cd2",
-      "bytes": 55000
+      "sha256": "5c1d86f51bfd092be7b8d5b1a37a49858af19f28e64909f222b5c5ecd0dfeb18",
+      "bytes": 56501
     },
     {
       "path": ".local-worker/panel_server.py",
@@ -955,6 +955,11 @@
       "bytes": 13026
     },
     {
+      "path": ".local-worker/tests/test_zcode_wallet_ui.cjs",
+      "sha256": "892b0f30a93e6748111ab976497d98707a684bda7c2969349583a9c7903d05c5",
+      "bytes": 3313
+    },
+    {
       "path": ".local-worker/thinking_config.py",
       "sha256": "790cef2778d99c1cfaba2a071b80389d89c54b71494908da7555d35b07924710",
       "bytes": 19987
@@ -1071,8 +1076,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "261790601beb861424580d6203893e51f7a613d2586594aff98391ea3d12151e",
-      "bytes": 5995
+      "sha256": "d9f2dee9ca136d62d098327d223c0a8b0dfbcb28321416fd1894e7d7754f8db3",
+      "bytes": 7093
     },
     {
       "path": "LICENSE",

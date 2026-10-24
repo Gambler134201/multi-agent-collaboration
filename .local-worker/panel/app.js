@@ -17,11 +17,40 @@ function renderNativeAccess(endpoint){
   return `<label>${escapeText(endpoint.name)} 访问权限<select data-native-access data-access-endpoint="${endpoint.id}" ${endpointSaving?'disabled':''}>${known?'':'<option value="" selected>权限未知，请选择</option>'}<option value="project" ${access==='project'?'selected':''}>项目范围</option><option value="full" ${access==='full'?'selected':''}>完全访问</option></select></label><p class="field-hint">${endpoint.id==='workbuddy'?'完全访问允许项目外普通文件读写，使用原生完全访问权限。工作台记录、认证及原生配置目录仍受保护；不开放子代理或后台任务。':endpoint.id==='pi'?'项目范围通过工具参数校验限制显式路径；Pi 没有操作系统沙箱，任意脚本的动态路径无法保证拦截。完全访问允许项目外普通文件读写。工作台记录保护始终保留。':'项目范围使用 DSH workspace-write 策略并校验工具显式路径；完全访问使用 danger-full-access。工作台记录保护始终保留。'}只读聊天始终只读。仅影响新任务，旧任务/整改保持原权限；自动文件统计仍只覆盖列明的业务文件。</p>`;
 }
 
+function zcodeQuotaPresentation(limit){
+  const number=n=>typeof n==='number'&&Number.isFinite(n)?n:null;
+  const remaining=number(limit?.remaining),used=number(limit?.used);
+  let total=number(limit?.total);
+  if(!(total>0)&&remaining!==null&&remaining>=0&&used!==null&&used>=0)total=remaining+used;
+  const percent=remaining!==null&&total>0?Math.max(0,Math.min(100,remaining/total*100)):null;
+  const displayPercent=percent===null?'额度未知':Math.round(percent)+'%';
+  let expiry='';
+  if(typeof limit?.expires_at==='number'&&Number.isFinite(limit.expires_at)){
+    const date=new Date(limit.expires_at);
+    if(!Number.isNaN(date.getTime())){
+      try{expiry=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'long',day:'numeric'}).format(date);}catch{expiry='';}
+    }
+  }
+  const formatter=new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2});
+  const balance=remaining===null?'剩余量未提供':`剩余 ${formatter.format(remaining)} ${limit?.unit||'额度'}`;
+  const capacity=total===null?'总量未提供':`总量 ${formatter.format(total)} ${limit?.unit||'额度'}`;
+  const expiryTitle=expiry?`；${new Date(limit.expires_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} 到期`:'';
+  return {label:String(limit?.label||'账户额度'),percent,displayPercent,expiry,title:balance+'；'+capacity+expiryTitle};
+}
+function zcodeWalletPresentation(endpoint){
+  const provider=endpoint?.model?.native_selection?.providerId,usage=endpoint?.runtime?.usage?.[provider],limits=Array.isArray(usage?.limits)?usage.limits:[];
+  return {
+    rows:limits.slice(0,4).map(zcodeQuotaPresentation),
+    updatedAt:Number.isFinite(usage?.fetched_at)?usage.fetched_at:null,
+    stale:Number.isFinite(usage?.fetched_at)&&Date.now()/1000-usage.fetched_at>180,
+    unavailableReason:typeof usage?.unavailable_reason==='string'?usage.unavailable_reason:'',
+  };
+}
 function renderZcodeWallet(endpoint){
-  const provider=endpoint.model?.native_selection?.providerId,usage=endpoint.runtime?.usage?.[provider],limits=usage?.limits||[],age=usage?Date.now()/1000-usage.fetched_at:null;
-  const rows=limits.filter(l=>!l.models?.length||l.models.some(m=>m.toLowerCase()===(endpoint.model?.native_selection?.modelId||'').toLowerCase()));
-  const number=n=>Number.isFinite(n)?new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(n):'未知';
-  return `<div class="endpoint-wallet"><div><span>ZCode 原生额度</span><strong>${rows.length?number(rows[0].remaining)+' '+escapeText(rows[0].unit):'未同步'}</strong></div><small>${usage?(age>180?'缓存已过期 · ':'')+clock(usage.fetched_at*1000)+' 更新':'登录账户套餐 · 不按人民币余额计量'}</small>${rows.slice(0,2).map(l=>`<small>${escapeText(l.label)}${l.expires_at?' · '+new Date(l.expires_at).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})+' 到期':''}</small>`).join('')}<button type="button" class="text-button" data-zcode-usage ${endpointSaving?'disabled':''}>刷新额度</button></div>`;
+  const shown=zcodeWalletPresentation(endpoint);
+  return `<div class="endpoint-wallet zcode-wallet"><div class="zcode-wallet-heading"><div><span>ZCode 原生额度</span><small>${shown.updatedAt!==null?(shown.stale?'缓存已过期 · ':'')+clock(shown.updatedAt*1000)+' 更新':'登录账户套餐 · 不按人民币余额计量'}</small></div><button type="button" class="text-button" data-zcode-usage ${endpointSaving?'disabled':''}>刷新额度</button></div>
+    ${shown.rows.length?`<div class="zcode-quotas">${shown.rows.map(row=>`<div class="zcode-quota"><div class="zcode-quota-meta"><span title="${escapeText(row.label)}">${escapeText(row.label)}</span><strong>${escapeText(row.displayPercent)}${row.expiry?' · '+escapeText(row.expiry):''}</strong></div>${row.percent===null?'':`<progress value="${row.percent.toFixed(2)}" max="100" title="${escapeText(row.title)}" aria-label="${escapeText(row.label)}剩余 ${escapeText(row.displayPercent)}">${escapeText(row.displayPercent)}</progress>`}</div>`).join('')}</div>`:`<span class="zcode-wallet-empty">${escapeText(shown.unavailableReason||'额度尚未同步')}</span>`}
+  </div>`;
 }
 
 function renderZcodeSettings(endpoint,model){
