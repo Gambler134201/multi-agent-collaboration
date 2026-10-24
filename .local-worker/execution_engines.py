@@ -14,7 +14,7 @@ LABELS = {'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy',
 # another adapter's configuration. The legacy DSH storage key stays compatible
 # with existing task/session/evidence identities.
 CONFIGURATION = {
-    'zcode': {'description': 'ZCode 原生登录账户；指定模型与思考强度，受控文件/终端工具。无子代理和旧会话复用。', 'model_fields': []},
+    'zcode': {'description': 'ZCode 原生登录账户；指定模型与思考强度，文件/搜索/读图/公开网页/终端工具，支持带交接的新会话续接。无子代理和原会话直接复用。', 'model_fields': []},
     'dsh': {'description': '按模型选择 DeepSeek Harness 的运行预设；更改后用于新的 DSH 会话。已有会话需要保持原配置。',
             'model_fields': [{'key': 'agent_preset', 'label': '运行预设', 'type': 'select',
                               'default': 'standard', 'provider_defaults': {'local': 'native'},
@@ -107,12 +107,15 @@ def validate_model(engine, model):
 
 
 def has_session(task):
+    if task.get('engine')=='zcode':
+        return bool(task.get('zcode_session_id') and task.get('status')=='completed' and task.get('zcode',{}).get('cleanup')=='closed' and not task.get('zcode',{}).get('outcome_unknown'))
     if task.get('engine') == 'pi':
         return bool(task.get('pi_session_id') and task.get('pi_session_file'))
     return task.get('engine') == 'dsh' and bool(task.get('dsh_session_id') and task.get('dsh_session_key'))
 
 
 def session_fields(task):
+    if task.get('engine')=='zcode':return {} # Explicit continuation gets a fresh native session and controller handoff.
     names = ('pi_session_id', 'pi_session_file') if task.get('engine') == 'pi' else ('dsh_session_key', 'dsh_session_id', 'relay_port')
     return {name: task[name] for name in (*names, 'connection_fingerprint') if task.get(name) is not None}
 

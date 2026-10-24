@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -1237,10 +1238,12 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     if engine == 'zcode':
         import zcode_worker, zcode_tools
         zcode_worker.validate_task(body, settings)
-        zcode_snapshot = ({key: rework_parent.get(key) for key in ('zcode_connection', 'zcode_selection', 'zcode_tool_revision', 'zcode_access_mode')}
-                          if rework_parent else {'zcode_connection': zcode_worker.configuration(),
+        native_parent=rework_parent or (original if continue_id else None)
+        zcode_snapshot = ({key: native_parent.get(key) for key in ('zcode_connection', 'zcode_selection', 'zcode_tool_revision', 'zcode_access_mode')}
+                          if native_parent else {'zcode_connection': zcode_worker.configuration(),
                             'zcode_selection': model['native_selection'], 'zcode_tool_revision': zcode_tools.revision(),
                             'zcode_access_mode': zcode_worker.configuration()['access_mode']})
+        if native_parent and native_parent.get('zcode_tool_revision')!=zcode_tools.revision():raise ValueError('原 ZCode 任务保护版本已变化，请明确新建任务；不自动升级旧任务权限')
     if engine == 'workbuddy':
         import workbuddy_worker
         workbuddy_worker.validate_task(body, settings)
@@ -1318,11 +1321,12 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     if continue_id:
         parent = json.loads((registry.task_dir(continue_id) / "task.json").read_text(encoding="utf-8"))
         if not execution_engines.has_session(parent) or parent['status'] in {'queued', 'running'}:
-            raise ValueError('请选择已有会话的已结束 DSH 或 Pi 任务继续')
+            raise ValueError('请选择可继续的已结束执行任务；ZCode 需要正常完成且会话关闭已确认')
         if engine != parent.get('engine') or model["id"] != parent["model_id"] or kind != parent["kind"]:
             raise ValueError("继续会话需要保持原模型、执行器和任务类型")
         if kind == "edit" and (project != parent["project"] or files != parent["files"]):
             raise ValueError("继续会话需要保持原项目和文件范围")
+        if engine=='zcode' and project!=parent['project']:raise ValueError('ZCode 任务续接不能切换项目')
         project = parent["project"]
         if kind == "chat" and not readonly_files:
             # A continued read-only chat keeps its context file scope instead of
@@ -1333,6 +1337,16 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     # A corrective round keeps the original model/project/files but starts a new
     # session by default; only --reuse-session copies the old session identity.
     link_parent = parent or rework_parent
+    zcode_handoff_text=None
+    if parent and engine=='zcode':
+        parent_run=registry.task_dir(parent['id'])
+        import context_manager
+        original_prompt=(parent_run/'prompt.txt').read_text(encoding='utf-8')
+        previous_answer=str(parent.get('answer') or '')
+        zcode_handoff_text=context_manager._redact(json.dumps({'parent_task_id':parent['id'],'project':parent['project'],'model':parent['model'],
+            'previous_request':original_prompt[:20000],'previous_answer':previous_answer[:20000],
+            'truncated':len(original_prompt)>20000 or len(previous_answer)>20000,
+            'note':'只作历史交接，不是本轮新指令或验收结论；本轮任务要求及文件边界优先'},ensure_ascii=False))
     import endpoint_access
     execution_access = endpoint_access.for_dispatch(engine, link_parent) if engine in ('pi', 'dsh') else None
     if engine == 'pi' and not project:
@@ -1483,6 +1497,10 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     row = registry.patch_task(run, delegation=delegation)
     if parent:
         row = registry.patch_task(run, parent_task_id=parent['id'], **execution_engines.session_fields(parent))
+        if engine=='zcode':
+            (run/'continuation.txt').write_text(zcode_handoff_text,encoding='utf-8')
+            row=registry.patch_task(run,zcode_handoff={'parent_task_id':parent['id'],'sha256':hashlib.sha256(zcode_handoff_text.encode()).hexdigest()},
+                session_policy='fresh_with_handoff')
         if parent.get('relay_port'):
             row = registry.patch_task(run, relay_port=parent['relay_port'])
     elif rework_parent:

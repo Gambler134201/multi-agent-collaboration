@@ -56,3 +56,4 @@ Thumbs.db
 # Native ZCode connection/catalogue are machine-local; never publish them.
 .local-worker/zcode.json
 .local-worker/zcode-catalog.json
+.local-worker/zcode-usage.json

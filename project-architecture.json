@@ -2,7 +2,7 @@
   "schema": 1,
   "title": "多 Agent 协作：从需求到独立验收",
   "summary": "主脑明确目标与验收，执行 Agent 完成工作，工作台保留项目记录；地图帮助理解代码和职责。图中是源码整理的职责关系，不是实测运行时调用链。",
-  "snapshot_hash": "ca72addd4f1ceb741876dbcedb6c25eb7e96a1e47969dbbf8b1b4b0c0547e534",
+  "snapshot_hash": "44c51b1362155bd81941b591c5540bb306f8c06a9f55ae43905d23deaddff806",
   "nodes": [
     {
       "id": "entry",
@@ -47,7 +47,7 @@
       "evidence": [
         {
           "path": ".local-worker/execution_engines.py",
-          "sha256": "9fb5534f9b0c39d0666d89f7ea1d3141f4adc144c40e7b50daad793912a451d0"
+          "sha256": "3e75af3048e1450b6000e77f985938d9724130ade5f7cdcead5059dcfa668f8e"
         },
         {
           "path": ".local-worker/workbuddy_worker.py",
@@ -77,7 +77,7 @@
       "evidence": [
         {
           "path": ".local-worker/panel_server.py",
-          "sha256": "08364110353da8c64808d21acb4ea888ff397776a3147413f1c61c03e5a11f2e"
+          "sha256": "e13c738b88f92f031bbc1dde1a61c27205a3b8fbe6844d52a5ab425a959556da"
         },
         {
           "path": ".local-worker/execution_result.py",

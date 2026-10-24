@@ -24,6 +24,7 @@ class ZCodeTests(Base):
         self.config={'home':str(self.project/'installed'),'port':19765,'access_mode':'project'}
         self.enterContext(patch.object(worker,'configuration',return_value=self.config))
         self.enterContext(patch.object(worker,'installation',return_value={'version':'3.16.3','fingerprint':'fixture'}))
+        self.enterContext(patch.object(worker,'ensure_connection'))
         registry.write_json(Path(registry.HERE)/worker.CATALOG,{'models':[{'providerId':'account:zai-start-plan','modelId':'GLM-5.3-Flash',
             'reasoning':['low','high','max'],'contextWindow':1000000}],
             'preferred':{'providerId':'account:zai-start-plan','modelId':'GLM-5.3-Flash','options':{'reasoningLevel':'max'}}})

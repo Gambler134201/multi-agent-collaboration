@@ -5,6 +5,7 @@ let nativeModelDraft = null;
 let activeEndpoint = null;
 let zcodeSetupDraft = null;
 let zcodeModelDraft = null;
+let zcodeReasoningDraft = null;
 
 function endpointModelAction(model,action,label){
   return `<button type="button" class="text-button" data-model-action="${action}" data-id="${escapeText(model.id)}">${label}</button>`;
@@ -16,11 +17,20 @@ function renderNativeAccess(endpoint){
   return `<label>${escapeText(endpoint.name)} 访问权限<select data-native-access data-access-endpoint="${endpoint.id}" ${endpointSaving?'disabled':''}>${known?'':'<option value="" selected>权限未知，请选择</option>'}<option value="project" ${access==='project'?'selected':''}>项目范围</option><option value="full" ${access==='full'?'selected':''}>完全访问</option></select></label><p class="field-hint">${endpoint.id==='workbuddy'?'完全访问允许项目外普通文件读写，使用原生完全访问权限。工作台记录、认证及原生配置目录仍受保护；不开放子代理或后台任务。':endpoint.id==='pi'?'项目范围通过工具参数校验限制显式路径；Pi 没有操作系统沙箱，任意脚本的动态路径无法保证拦截。完全访问允许项目外普通文件读写。工作台记录保护始终保留。':'项目范围使用 DSH workspace-write 策略并校验工具显式路径；完全访问使用 danger-full-access。工作台记录保护始终保留。'}只读聊天始终只读。仅影响新任务，旧任务/整改保持原权限；自动文件统计仍只覆盖列明的业务文件。</p>`;
 }
 
+function renderZcodeWallet(endpoint){
+  const provider=endpoint.model?.native_selection?.providerId,usage=endpoint.runtime?.usage?.[provider],limits=usage?.limits||[],age=usage?Date.now()/1000-usage.fetched_at:null;
+  const rows=limits.filter(l=>!l.models?.length||l.models.some(m=>m.toLowerCase()===(endpoint.model?.native_selection?.modelId||'').toLowerCase()));
+  const number=n=>Number.isFinite(n)?new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(n):'未知';
+  return `<div class="endpoint-wallet"><div><span>ZCode 原生额度</span><strong>${rows.length?number(rows[0].remaining)+' '+escapeText(rows[0].unit):'未同步'}</strong></div><small>${usage?(age>180?'缓存已过期 · ':'')+clock(usage.fetched_at*1000)+' 更新':'登录账户套餐 · 不按人民币余额计量'}</small>${rows.slice(0,2).map(l=>`<small>${escapeText(l.label)}${l.expires_at?' · '+new Date(l.expires_at).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})+' 到期':''}</small>`).join('')}<button type="button" class="text-button" data-zcode-usage ${endpointSaving?'disabled':''}>刷新额度</button></div>`;
+}
+
 function renderZcodeSettings(endpoint,model){
   const config=zcodeSetupDraft||endpoint.runtime?.configuration_values||{},catalog=endpoint.runtime?.native_catalog||{},rows=catalog.models||[],selected=zcodeModelDraft||model?.model;
-  return `${renderNativeAccess(endpoint)}<p class="field-hint">使用 ZCode 桌面登录账户与原生渠道。当前思考强度：${escapeText(model?.native_selection?.options?.reasoningLevel||'原生默认')}。账户原生鉴权，工作台不读取认证文件；新任务有独立会话，子代理、会话续接未开放。</p>
-  <form data-zcode-selection><label>ZCode 原生模型<select name="native_model" data-zcode-model>${rows.map(r=>{const code=r.providerId+'/'+r.modelId;return `<option value="${escapeText(code)}" ${code===selected?'selected':''}>${escapeText(r.modelId)} · ${escapeText(r.providerId)}</option>`;}).join('')}</select></label><div class="endpoint-settings-actions"><button type="button" class="button secondary" data-zcode-refresh>读取原生模型</button><button type="submit" class="button secondary" ${rows.length?'':'disabled'}>保存模型选择</button></div></form>
-  <form data-zcode-setup><label>ZCode 安装目录<input name="home" value="${escapeText(config.home||'')}" required placeholder="包含 ZCode.exe 的目录"></label><label>本机桥接端口<input name="port" type="number" min="1024" max="65535" value="${Number(config.port)||19765}" required></label><div class="endpoint-settings-actions"><button type="submit" class="button secondary">保存连接</button><button type="button" class="button secondary" data-zcode-connect>打开 / 连接 ZCode</button></div></form><p class="field-hint">先保存连接，再通过此入口启动 ZCode。已经运行但未开启桥接的实例需等任务结束后完全退出，再连接；不自动关闭你的任务。桥接仅监听本机，限本版已核验安装使用。</p><p class="field-hint">${escapeText(endpoint.message||'')} · 额度用量未同步，以 ZCode 客户端为准，不显示为零费用。</p>`;
+  const row=rows.find(r=>r.providerId+'/'+r.modelId===selected),levels=row?.reasoning||[],saved=zcodeReasoningDraft??model?.native_selection?.options?.reasoningLevel;
+  const level=levels.includes(saved)?saved:levels.includes('max')?'max':levels.at(-1);
+  return `${renderNativeAccess(endpoint)}<p class="field-hint">使用桌面登录账户的明确渠道；每次任务使用独立会话。支持文件、搜索、读图、终端自测和带交接的任务续接。子代理和后台任务未开放。</p>
+  <form data-zcode-selection><label>ZCode 原生模型<select name="native_model" data-zcode-model>${rows.map(r=>{const code=r.providerId+'/'+r.modelId;return `<option value="${escapeText(code)}" ${code===selected?'selected':''}>${escapeText(r.modelId)} · ${escapeText(r.providerId)}</option>`;}).join('')}</select></label><label>思考强度<select name="reasoning" data-zcode-reasoning ${levels.length?'':'disabled'}>${levels.length?levels.map(l=>`<option value="${escapeText(l)}" ${level===l?'selected':''}>${escapeText(({max:'最高',high:'高',low:'低',xhigh:'超高',disabled:'关闭'})[l]||l)} / ${escapeText(l)}</option>`).join(''):'<option value="">原生默认</option>'}</select></label><div class="endpoint-settings-actions"><button type="button" class="button secondary" data-zcode-refresh>读取原生模型</button><button type="submit" class="button secondary" ${rows.length?'':'disabled'}>保存模型与思考强度</button></div></form>
+  <form data-zcode-setup><label>ZCode 安装目录<input name="home" value="${escapeText(config.home||'')}" required placeholder="包含 ZCode.exe 的目录"></label><label>本机桥接端口<input name="port" type="number" min="1024" max="65535" value="${Number(config.port)||19765}" required></label><label><input name="auto_connect" type="checkbox" ${config.auto_connect?'checked':''}>任务启动前自动打开并连接 ZCode</label><div class="endpoint-settings-actions"><button type="submit" class="button secondary">保存连接</button><button type="button" class="button secondary" data-zcode-connect>打开 / 连接 ZCode</button></div></form><p class="field-hint">自动连接只在已授权任务启动前发生。不会为了显示卡片启动应用，也不会退出正在使用的 ZCode；原实例未开启桥接时会明确提示，等待任务结束后从此入口重开。</p><p class="field-hint">连接状态：${escapeText(({connected:'已连接',closed:'未打开',running_without_bridge:'运行中，未开启桥接'})[endpoint.runtime?.connection_state]||'尚未确认')} · ${escapeText(endpoint.message||'')}</p>${renderZcodeWallet(endpoint)}<p class="field-hint">额度通过 ZCode 原生权益接口只读获取；按套餐、模型和单位展示，不混加不同单位。套餐余额不等于本任务消耗，人民币费用及底层请求次数仍未知。</p>`;
 }
 
 function renderNativeSettings(endpoint,model){
@@ -49,10 +59,11 @@ function renderEndpointCards(){
     const native=['workbuddy','zcode'].includes(endpoint.id),model=endpoint.model,group=endpoint.models||[];
     const runtime=endpoint.runtime||{},jobs=(state.tasks||[]).filter(t=>t.engine===endpoint.id&&['running','queued'].includes(t.status));
     let status=!endpoint.enabled?badge('cancelled','已禁用'):!endpoint.ready?badge('unknown','执行器未就绪'):!group.some(m=>m.enabled)?badge('unknown','未配置可用模型'):badge('online','执行器就绪');
+    if(endpoint.enabled&&endpoint.ready&&runtime.auto_connect_pending)status=badge('unknown','可自动连接');
     if(endpoint.selection_error)status=badge('failed','模型选择需修正');
     const name=native?(model?.name?.replace(/^(?:WorkBuddy|ZCode)\s*·\s*/,'')||'尚未选择原生模型'):model?.name||(group.length?'按任务选择':'尚未配置模型');
     const modelCode=model?.model||`${group.length} 个已配置模型`;
-    const wallet=native?`<div class="endpoint-wallet"><div><span>${escapeText(endpoint.name)} 原生额度</span><strong>未同步</strong></div><small>使用登录账户原生额度</small></div>`:model?.billing?`<div class="endpoint-wallet endpoint-billing"><div class="endpoint-wallet-source">${escapeText(providerNames[model.provider]||model.provider)} API 账户余额</div>${renderBilling(model)}</div>`:`<div class="endpoint-wallet"><div><span>${model?.provider==='local'?'账户余额':'账户余额'}</span><strong>${model?.provider==='local'?'不适用':model?'暂不支持查询':'按任务模型显示'}</strong></div><small>${model?.provider==='local'?'本地运行，不经云端账户扣费':model?'此服务暂无余额读取适配':'展开设置查看模型及各自余额'}</small></div>`;
+    const wallet=endpoint.id==='zcode'?renderZcodeWallet(endpoint):native?`<div class="endpoint-wallet"><div><span>${escapeText(endpoint.name)} 原生额度</span><strong>未同步</strong></div><small>使用登录账户原生额度</small></div>`:model?.billing?`<div class="endpoint-wallet endpoint-billing"><div class="endpoint-wallet-source">${escapeText(providerNames[model.provider]||model.provider)} API 账户余额</div>${renderBilling(model)}</div>`:`<div class="endpoint-wallet"><div><span>${model?.provider==='local'?'账户余额':'账户余额'}</span><strong>${model?.provider==='local'?'不适用':model?'暂不支持查询':'按任务模型显示'}</strong></div><small>${model?.provider==='local'?'本地运行，不经云端账户扣费':model?'此服务暂无余额读取适配':'展开设置查看模型及各自余额'}</small></div>`;
     return `<article class="endpoint-card ${model?.billing?'billing-model':''} ${endpoint.enabled?'':'endpoint-disabled'}" data-endpoint-id="${endpoint.id}">
       <div class="endpoint-head"><div class="endpoint-mark" aria-hidden="true">${({pi:'Pi',dsh:'DSH',workbuddy:'WB',zcode:'ZC'})[endpoint.id]}</div><div><h3>${escapeText(endpoint.name)}</h3><span class="subtle">${native?'登录账户模型 / 原生额度':'API / 本地模型'}</span></div></div>
       <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}${runtime.access_mode?' · '+(runtime.access_mode==='full'?'完全访问':'项目范围'):''}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
@@ -106,7 +117,7 @@ async function saveEndpoint(id,patch){
   endpointSaving=true;renderModels();
   // /api/workflow already exists in resident MCP proxies. Keep its envelope
   // strictly separate from workflow values so loaded Codex panels work too.
-  try{await api('/api/workflow',{endpoint_settings:{id,values:patch}});if(patch.native_setup){if(id==='zcode')zcodeSetupDraft=null;else nativeSetupDraft=null;}if(patch.native_model){if(id==='zcode')zcodeModelDraft=null;else nativeModelDraft=null;}toast(patch.refresh_native_models?'原生模型列表已更新；未调用模型生成':'执行端设置已保存，现有运行任务继续；排队任务启动前检查开关');}
+  try{await api('/api/workflow',{endpoint_settings:{id,values:patch}});if(patch.native_setup){if(id==='zcode')zcodeSetupDraft=null;else nativeSetupDraft=null;}if(patch.native_selection){zcodeModelDraft=null;zcodeReasoningDraft=null;}if(patch.native_model){if(id==='zcode')zcodeModelDraft=null;else nativeModelDraft=null;}toast(patch.refresh_native_usage?'原生额度已刷新；未调用模型生成':patch.connect_native?'原生通道已连接；未调用模型生成':patch.refresh_native_models?'原生模型列表已更新；未调用模型生成':'执行端设置已保存，现有运行任务继续；排队任务启动前检查开关');}
   catch(error){toast(error.message,true);}
   finally{endpointSaving=false;await refresh();}
 }
@@ -114,10 +125,11 @@ async function saveEndpoint(id,patch){
 function setupEndpointCards(){
   for(const target of [$('models'),$('endpoint-connections')]){
   target.addEventListener('input',event=>{const form=event.target.closest('[data-native-setup]');if(form)nativeSetupDraft={home:form.elements.home.value,profile:form.elements.profile.value};});
-  target.addEventListener('input',event=>{const form=event.target.closest('[data-zcode-setup]');if(form)zcodeSetupDraft={home:form.elements.home.value,port:form.elements.port.value};if(event.target.hasAttribute('data-zcode-model'))zcodeModelDraft=event.target.value;});
-  target.addEventListener('submit',event=>{const form=event.target;if(form.matches('[data-zcode-selection]')){event.preventDefault();saveEndpoint('zcode',{native_model:form.elements.native_model.value});return;}if(form.matches('[data-zcode-setup]')){event.preventDefault();saveEndpoint('zcode',{native_setup:{home:form.elements.home.value.trim(),port:Number(form.elements.port.value)}});return;}if(form.matches('[data-native-selection]')){event.preventDefault();saveEndpoint('workbuddy',{native_model:form.elements.native_model.value});return;}if(!form.matches('[data-native-setup]'))return;event.preventDefault();saveEndpoint('workbuddy',{native_setup:{home:form.elements.home.value.trim(),profile:form.elements.profile.value.trim()}});});
+  target.addEventListener('input',event=>{const form=event.target.closest('[data-zcode-setup]');if(form)zcodeSetupDraft={home:form.elements.home.value,port:form.elements.port.value,auto_connect:form.elements.auto_connect.checked};if(event.target.hasAttribute('data-zcode-model')){zcodeModelDraft=event.target.value;zcodeReasoningDraft=null;renderEndpointDialog();}if(event.target.hasAttribute('data-zcode-reasoning'))zcodeReasoningDraft=event.target.value;});
+  target.addEventListener('submit',event=>{const form=event.target;if(form.matches('[data-zcode-selection]')){event.preventDefault();saveEndpoint('zcode',form.elements.reasoning.value?{native_selection:{model:form.elements.native_model.value,reasoning:form.elements.reasoning.value}}:{native_model:form.elements.native_model.value});return;}if(form.matches('[data-zcode-setup]')){event.preventDefault();saveEndpoint('zcode',{native_setup:{home:form.elements.home.value.trim(),port:Number(form.elements.port.value),auto_connect:form.elements.auto_connect.checked}});return;}if(form.matches('[data-native-selection]')){event.preventDefault();saveEndpoint('workbuddy',{native_model:form.elements.native_model.value});return;}if(!form.matches('[data-native-setup]'))return;event.preventDefault();saveEndpoint('workbuddy',{native_setup:{home:form.elements.home.value.trim(),profile:form.elements.profile.value.trim()}});});
   target.addEventListener('click',event=>{
     const button=event.target.closest('button');if(!button)return;
+    if(button.hasAttribute('data-zcode-usage'))saveEndpoint('zcode',{refresh_native_usage:true});
     if(button.hasAttribute('data-zcode-refresh'))saveEndpoint('zcode',{refresh_native_models:true});
     if(button.hasAttribute('data-zcode-connect'))saveEndpoint('zcode',{connect_native:true});
     if(button.hasAttribute('data-native-refresh'))saveEndpoint('workbuddy',{refresh_native_models:true});
@@ -427,7 +439,7 @@ const modelAgentLabel=model=>{
   const agent=effectiveModelAgent(model),source=modelAgentPreference(model)===MODEL_AGENT_FOLLOW?'跟随全局默认':'模型指定';
   return `${engineNames[agent]||agent} · ${source}`;
 };
-const hasAgentSession=task=>task.engine==='pi'?!!(task.pi_session_id&&task.pi_session_file):task.engine==='dsh'&&!!task.dsh_session_id;
+const hasAgentSession=task=>task.engine==='zcode'?!!(task.zcode_session_id&&task.status==='completed'&&task.zcode?.cleanup==='closed'&&!task.zcode?.outcome_unknown):task.engine==='pi'?!!(task.pi_session_id&&task.pi_session_file):task.engine==='dsh'&&!!task.dsh_session_id;
 const presetNames={native:'原生模式',standard:'标准模式'};
 function thinkingInfo(model,task=null){
   if(task?.thinking_runtime)return {label:task.thinking_runtime.label,note:task.thinking_runtime.note||'此任务发送时记录的思考配置。'};
@@ -1075,7 +1087,7 @@ function renderDetail() {
   const phases=['已分派',task.kind==='chat'?'模型生成':'模型执行',independentlyAccepted?'独立验收通过':task.status==='failed'?'执行失败':task.status==='cancelled'?'已停止':pendingRecovery?'待恢复（未自动重发）':task.kind==='chat'?'回复完成':'结果待验收'];
   const usage=task.usage_live?.usage||task.usage;
   const thinking=thinkingInfo(state.models.find(m=>m.id===task.model_id),task);
-  setMarkup($('task-detail'),`<div class="detail-head"><div><h3>${escapeText(task.title)}</h3><p>${escapeText(task.model_name)} · ${escapeText(engineNames[task.engine]||'历史执行器')} · ${task.kind==='chat'?'咨询 / 分析':'修改项目文件'} · ${clock(task.started_at||task.created_at)}</p></div>${active?`<button class="button secondary" id="stop-task">停止任务</button>`:pendingRecovery?'<button class="button primary" id="recover-task">恢复执行（需确认）</button>':hasAgentSession(task)?'<button class="button secondary" id="continue-task">继续会话</button>':badge(taskDisplayStatus(task),independentlyAccepted?'已完成':undefined)}</div>
+  setMarkup($('task-detail'),`<div class="detail-head"><div><h3>${escapeText(task.title)}</h3><p>${escapeText(task.model_name)} · ${escapeText(engineNames[task.engine]||'历史执行器')} · ${task.kind==='chat'?'咨询 / 分析':'修改项目文件'} · ${clock(task.started_at||task.created_at)}</p></div>${active?`<button class="button secondary" id="stop-task">停止任务</button>`:pendingRecovery?'<button class="button primary" id="recover-task">恢复执行（需确认）</button>':hasAgentSession(task)?`<button class="button secondary" id="continue-task">${task.engine==='zcode'?'继续任务（新会话）':'继续会话'}</button>`:badge(taskDisplayStatus(task),independentlyAccepted?'已完成':undefined)}</div>
     <div class="detail-body"><div class="phase-track">${phases.map((phase,i)=>`${i?'<span class="phase-arrow">→</span>':''}<span class="phase-item ${i<phaseIndex?'done':i===phaseIndex?'current':''}">${escapeText(phase)}</span>`).join('')}</div>
     <div class="detail-facts"><div><span class="label">当前状态</span><span class="value">${escapeText(displayPhase)} · ${escapeText(duration(task))}</span></div><div><span class="label">${task.kind==='chat'?'Token 用量':'项目文件夹'}</span><span class="value">${task.kind==='chat'?(usage?.total_tokens?`${usage.total_tokens.toLocaleString()} tokens${task.cost_unknown_calls>0?`（另有 ${task.cost_unknown_calls} 次未返回用量，未知；不是全目标总量）`:''}`:'服务端尚未返回用量'):escapeText(task.project||'—')}</span></div></div>
     ${window.ModelDeskExecutionResult?.render(task.execution_result)||''}
@@ -1089,8 +1101,8 @@ function renderDetail() {
     ${task.engine==='workbuddy'?`<p class="session-note">WorkBuddy 原生会话 · ${task.workbuddy_tool_mode==='native-development-v1'?(task.workbuddy_access_mode==='full'?'完全访问 · 原生开发工具':'项目范围 · 原生开发工具'):'限定文件工具'} · 清理状态：${escapeText(task.workbuddy?.cleanup||'待核实')} · ${escapeText(task.workbuddy_session_id||'会话待确认')}</p>`:''}
     ${task.engine==='pi'?`<p class="session-note">Pi Agent ${escapeText(task.executor_version||'')} · 记录目录保护：${task.record_protection?'已验证':'待验证'}</p>`:''}
     ${task.engine==='dsh'?`<p class="session-note">Agent：${escapeText(presetNames[task.agent_preset]||task.agent_preset||'历史配置')} · ${task.preset_verified?'实际绑定已验证':task.agent_preset?'等待执行验证':'预设未记录'} · <span title="${escapeText(thinking.note)}">思考等级：${escapeText(thinking.label)}</span> · 权限：${escapeText({'danger-full-access':'完全权限','workspace-write':'项目内写入','read-only':'只读'}[task.sandbox_mode]||'历史任务未记录')}</p>`:''}
-    ${(task.pi_session_id||task.dsh_session_id)?`<p class="session-note">${task.parent_task_id?'已续接原会话':'独立会话'} · ${escapeText(task.pi_session_id||task.dsh_session_id)}</p>`:''}
-    ${task.tool_calls?.length?`<div class="tool-timeline" aria-label="模型工具调用">${task.tool_calls.slice(-8).map(tool=>`<div><span class="tool-state ${escapeText(tool.status)}">${({completed:'✓',failed:'!',in_progress:'↻',pending:'·'})[tool.status]||'·'}</span><span>${escapeText(({read:'读取',write:'写入',edit:'修改',grep:'搜索',glob:'查找文件',pwsh:'执行命令'})[tool.title]||tool.title||tool.kind||'工具调用')}${tool.file?' · '+escapeText(tool.file):''}</span><small>${({completed:'已完成',failed:'失败',in_progress:'执行中',pending:'等待'})[tool.status]||tool.status||''}</small></div>`).join('')}</div>`:''}
+    ${(task.pi_session_id||task.dsh_session_id||task.zcode_session_id)?`<p class="session-note">${task.session_policy==='fresh_with_handoff'?'带交接的新会话':task.parent_task_id?'已续接原会话':'独立会话'} · ${escapeText(task.pi_session_id||task.dsh_session_id||task.zcode_session_id)}</p>`:''}
+    ${task.tool_calls?.length?`<div class="tool-timeline" aria-label="模型工具调用">${task.tool_calls.slice(-8).map(tool=>`<div><span class="tool-state ${escapeText(tool.status)}">${({completed:'✓',failed:'!',in_progress:'↻',pending:'·'})[tool.status]||'·'}</span><span>${escapeText(({read:'读取',write:'写入',edit:'修改',grep:'搜索',glob:'查找文件',pwsh:'执行命令',read_file:'读取文件',write_file:'写入文件',edit_file:'修改文件',list_directory:'浏览目录',search_files:'搜索文件',read_image:'读取图片',run_command:'运行命令'})[tool.title]||tool.title||tool.kind||'工具调用')}${tool.file?' · '+escapeText(tool.file):''}</span><small>${({completed:'已完成',failed:'失败',in_progress:'执行中',pending:'等待'})[tool.status]||tool.status||''}</small></div>`).join('')}</div>`:''}
     <details class="obs-sub" id="detail-observability"${treeOpen.has('detail-obs:'+task.id)?' open':''}><summary>可信观测（费用 / 用量 / 计量 / 上下文 / 失败 / 预测 / 子代理）</summary><div class="obs-body">${renderObservability(task.id)}</div><details class="obs-sub"><summary>子代理（${escapeText(((state.observability?.[task.id]||{}).children||{}).state||'未验证')}）</summary>${renderChildren({children_state:(state.observability?.[task.id]||{}).children,children:(state.observability?.[task.id]||{}).child_rows||[]})}</details></details>
     <div class="detail-tabs"><button class="detail-tab ${detailTab==='result'?'active':''}" data-tab="result">${task.kind==='chat'?'模型回复':'执行结果'}</button><button class="detail-tab ${detailTab==='prompt'?'active':''}" data-tab="prompt">任务内容</button><button class="detail-tab ${detailTab==='log'?'active':''}" data-tab="log">执行日志</button></div>
     <pre id="detail-content" class="detail-content ${detailTab==='log'?'log':''}"></pre>${active?'<div class="waiting-line"><span class="pulse"></span><span>正在同步执行状态，暂不提供完成百分比。</span></div>':''}</div>`);
@@ -1234,7 +1246,7 @@ function renderThinkingNote(){
 }
 function taskAgentHint(){
   const nativeModel=state.models.find(m=>m.id===$('task-model').value);
-  if($('task-route').value!=='auto'&&nativeModel?.provider==='zcode')return `使用 ZCode 登录账户 ${nativeModel.model}；受控文件与 PowerShell 自测，主脑独立验收。原生额度用量未知，子代理/续接未开放。`;
+  if($('task-route').value!=='auto'&&nativeModel?.provider==='zcode')return `使用 ZCode 登录账户 ${nativeModel.model}；受控文件与 PowerShell 自测，主脑独立验收。套餐额度可只读刷新；支持带交接的新会话续接，子代理及原会话直接复用未开放。`;
   if($('task-route').value!=='auto'&&nativeModel?.provider==='workbuddy')return `使用 WorkBuddy 登录账户 ${nativeModel.model}；原生开发工具与终端自测，主脑独立验收。子代理/续接未开放，积分与实际请求数未知。`;
   const control=$('task-engine'),selected=control.value,automatic=$('task-route').value==='auto';
   if(continuingTask)return `继续使用原任务的 ${engineNames[continuingTask.engine]||continuingTask.engine}、原模型与原会话；当前模型偏好不会迁移已有任务。`;
@@ -1254,7 +1266,7 @@ function updateTaskAgentHint(){
   $('task-agent-hint').textContent=taskAgentHint();
   const native=$('task-route').value!=='auto'&&['workbuddy','zcode'].includes(state.models.find(m=>m.id===$('task-model').value)?.provider);
   $('task-test').disabled=false;$('task-request-output').disabled=native;
-  $('task-session-hint').textContent=native?'新建原生执行端独立会话；暂不支持原会话续接，后续任务或整改使用新会话。':continuingTask?`继续同一 ${engineNames[continuingTask.engine]||continuingTask.engine} 会话，保留原任务 Agent/模型/项目。`:'按所选模型的默认 Agent 新建独立会话；任务结束后可以继续追问。';
+  $('task-session-hint').textContent=continuingTask?.engine==='zcode'?'使用带交接的新 ZCode 会话，保留原模型、思考强度、项目、权限与文件范围；不直接复用原生旧会话。':native?'新建原生执行端独立会话；不直接复用原生旧会话。ZCode 后续任务可使用带交接的新会话续接。':continuingTask?`继续同一 ${engineNames[continuingTask.engine]||continuingTask.engine} 会话，保留原任务 Agent/模型/项目。`:'按所选模型的默认 Agent 新建独立会话；任务结束后可以继续追问。';
 }
 function taskFields(){
   const editing=$('task-kind').value==='edit',automatic=$('task-route').value==='auto',control=$('task-engine');
@@ -1306,7 +1318,7 @@ function openTask(parent=null) {
   if(parent?.route?.requirements){const r=parent.route.requirements;$('task-category').value=r.category;$('task-complexity').value=r.complexity;$('task-input-estimate').value=r.input_tokens;$('task-output-estimate').value=r.output_tokens;$('task-calls-estimate').value=r.expected_calls;}
   $('task-request-output').value=parent?.request_output_tokens??'';
   for(const id of ['task-model','task-kind','task-engine','task-project','task-files','task-request-output'])$(id).disabled=!!parent;
-  $('task-session-hint').textContent=parent?`继续同一 ${engineNames[parent.engine]||parent.engine} 会话，保留原任务 Agent/模型/项目；任务结束后可以继续追问。`:'默认按所选模型的默认 Agent 新建独立会话；任务结束后可以继续追问。';
+  $('task-session-hint').textContent=parent?.engine==='zcode'?'使用带交接的新 ZCode 会话，保留原模型、思考强度、项目、权限与文件范围；不直接复用原生旧会话。':parent?`继续同一 ${engineNames[parent.engine]||parent.engine} 会话，保留原任务 Agent/模型/项目；任务结束后可以继续追问。`:'默认按所选模型的默认 Agent 新建独立会话；任务结束后可以继续追问。';
   routeFields();updateTaskOutputHint();$('task-dialog').showModal();
 }
 $('add-model').onclick=()=>openModel();$('add-model-small').onclick=()=>openModel();$('new-task').onclick=()=>openTask();

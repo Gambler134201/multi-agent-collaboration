@@ -6,8 +6,8 @@
   "files": [
     {
       "path": ".gitignore",
-      "sha256": "71ad13cf6f3b0bcea3ca9c169b84a58ca036ef3bf3e8208ff801e5a4a375f143",
-      "bytes": 1343
+      "sha256": "d183eeb218d94ebddc6fe8f344d208e211aafd17cb9bada5a7910c3f12b55365",
+      "bytes": 1374
     },
     {
       "path": ".local-worker/acceptance_profiles.json",
@@ -71,8 +71,8 @@
     },
     {
       "path": ".local-worker/agent-runtime/run-zcode.mjs",
-      "sha256": "2ba279f5c38656c3065fc9dccdf6a1b36ccf5b9eb6387a9ba0e4dcd4a0626e55",
-      "bytes": 7152
+      "sha256": "08976500bd1fc54bb18b86b9c93e69140aa6e71e341895b3e9c7c90308a666d8",
+      "bytes": 9039
     },
     {
       "path": ".local-worker/agent-runtime/subagent-bridge.cjs",
@@ -216,13 +216,13 @@
     },
     {
       "path": ".local-worker/execution_endpoints.py",
-      "sha256": "442f2da802adb5927ac7f7cdc18b7a0b3ea3f7d7238464508ba7145ec44d764f",
-      "bytes": 10516
+      "sha256": "6840044b79eaa2679710938bed9b4b07c5b6447d261d219a782352e61083f48d",
+      "bytes": 11467
     },
     {
       "path": ".local-worker/execution_engines.py",
-      "sha256": "9fb5534f9b0c39d0666d89f7ea1d3141f4adc144c40e7b50daad793912a451d0",
-      "bytes": 6594
+      "sha256": "3e75af3048e1450b6000e77f985938d9724130ade5f7cdcead5059dcfa668f8e",
+      "bytes": 7002
     },
     {
       "path": ".local-worker/execution_result.py",
@@ -276,8 +276,8 @@
     },
     {
       "path": ".local-worker/model_registry.py",
-      "sha256": "98acc568563b23066a51864320672776cc13ec193ed1b3433349721de0a9e087",
-      "bytes": 26759
+      "sha256": "f31534a6a825f3144bfef8126b3374b4bc26f9957fccd00ae2c3489a433efa62",
+      "bytes": 26805
     },
     {
       "path": ".local-worker/model_router.py",
@@ -291,8 +291,8 @@
     },
     {
       "path": ".local-worker/panel/app.js",
-      "sha256": "5e4a3b1a29517a973d303c6d00c3e69faa1ff5a4ca991ea7265b10c94916f260",
-      "bytes": 173569
+      "sha256": "afe66dbc24c35af89c1748e5d39102b0b9f7054b4edf20bb9811405ef86b84c2",
+      "bytes": 177548
     },
     {
       "path": ".local-worker/panel/codex-bridge.js",
@@ -331,8 +331,8 @@
     },
     {
       "path": ".local-worker/panel_server.py",
-      "sha256": "08364110353da8c64808d21acb4ea888ff397776a3147413f1c61c03e5a11f2e",
-      "bytes": 149525
+      "sha256": "e13c738b88f92f031bbc1dde1a61c27205a3b8fbe6844d52a5ab425a959556da",
+      "bytes": 151041
     },
     {
       "path": ".local-worker/panel_service.py",
@@ -661,8 +661,8 @@
     },
     {
       "path": ".local-worker/tests/test_endpoint_cards.cjs",
-      "sha256": "8fd92099e70baa38aff38be2bc864f649dd195322090d83401880e7ad53fac58",
-      "bytes": 13680
+      "sha256": "0025e25c77b10819528a167002e696302b3fd3f88ca8cf58466b0c4d6abed788",
+      "bytes": 15775
     },
     {
       "path": ".local-worker/tests/test_execution_endpoints.py",
@@ -946,8 +946,13 @@
     },
     {
       "path": ".local-worker/tests/test_zcode_integration.py",
-      "sha256": "93b2fb4a6272f24d2d758edc5d449b8acfdaa9976d1bd6551a5d4660c99e664c",
-      "bytes": 8758
+      "sha256": "3db9254140d573e13ddc20cb9c38f10e809c958dc7a9f733f0690999d727bcec",
+      "bytes": 8826
+    },
+    {
+      "path": ".local-worker/tests/test_zcode_parity.py",
+      "sha256": "3cfc019b1b2b3a97d18f0e7db49686aa450d12481acbe7b97eb8690dc99552ce",
+      "bytes": 13026
     },
     {
       "path": ".local-worker/thinking_config.py",
@@ -1051,13 +1056,13 @@
     },
     {
       "path": ".local-worker/zcode_tools.py",
-      "sha256": "93a0eaf2257ecd39697e5f7b84d2c0cc927b535251f15f7289193c4aaf166961",
-      "bytes": 10177
+      "sha256": "1fe8485e1bffa334933df415c8f8f3f47c4db0e8f8e4dd10ff5e48119be2d45b",
+      "bytes": 16733
     },
     {
       "path": ".local-worker/zcode_worker.py",
-      "sha256": "69ace701f68a476665e649150e0eeb0b80b2df66b2324566d11412d3b1091b61",
-      "bytes": 17174
+      "sha256": "199847fecd3065c291fd951cf1fde8642551b61f11f7d850f7863d3ad4983fe6",
+      "bytes": 24085
     },
     {
       "path": "AGENTS.md",
@@ -1076,8 +1081,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "11f4bb0286e9aab93053eb3b0a45944760a28091fb49ba3e718ff32bddb8ae59",
-      "bytes": 12839
+      "sha256": "3e79bd40cb257ef9a0d7465acdd4521f924a64b6dd1b4714130bb85a2349eab8",
+      "bytes": 12990
     },
     {
       "path": "THIRD_PARTY.md",
@@ -1091,8 +1096,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "ab91d0b10ae24a98973c428e5631640ca1ee1c4f89e827d1a429fb5ff665a036",
-      "bytes": 12484
+      "sha256": "c3aed3deac77fa7b705236d4b79cc9169048a0fb962ece49850e0320565804eb",
+      "bytes": 13094
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1116,8 +1121,8 @@
     },
     {
       "path": "docs/EXECUTION_ENDPOINTS.md",
-      "sha256": "fbb388c034b652cdb20b7c01bc1c65425a5e2dbf5aa4deb3652c59c78f40e579",
-      "bytes": 7601
+      "sha256": "9e39f85575df3693b77415f48fafa859da5340ff6903ab96356942ce126e5a3b",
+      "bytes": 7780
     },
     {
       "path": "docs/EXECUTION_RESULTS.md",
@@ -1176,8 +1181,8 @@
     },
     {
       "path": "docs/ZCODE_EXECUTOR.md",
-      "sha256": "be9b9ff46c603deb64e46a043324b16495c4a22d7071488606fe85eebf64b417",
-      "bytes": 3741
+      "sha256": "0f25ebfc359e58aa64a061a55e6efe1aeaaaf2fa66736edbd551ffed285ba924",
+      "bytes": 6740
     },
     {
       "path": "integrations/dsh-brain/LICENSE",
@@ -1226,7 +1231,7 @@
     },
     {
       "path": "project-architecture.json",
-      "sha256": "22bd8ba86e19d00d2c6280425d82f8579d70aa2a5eef53895939bdeaa2c54d92",
+      "sha256": "6b6e4c921524ec9e9c1e8335a4ee4bfafd77c0d00b520c488230cfa23cc348e9",
       "bytes": 5333
     },
     {

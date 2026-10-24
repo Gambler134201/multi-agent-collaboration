@@ -14,9 +14,10 @@ const directory=path.resolve(__dirname,'../panel');
           balance:{status:'ready',balance_infos:[{currency:'CNY',total_balance:'12.33'}]}}};
       const agents={pi:{name:'Pi Agent',ready:true,access_mode:'full',configuration:{model_fields:[]}},
         dsh:{name:'DeepSeek Harness',ready:true,access_mode:'full',configuration:{model_fields:[]}}};
-      const zcode={...model,id:'zcode-fixture',name:'ZCode · GLM-5.3-Flash',provider:'zcode',model:'account:zai-start-plan/GLM-5.3-Flash',default_agent:'zcode',native_selection:{options:{reasoningLevel:'max'}}};
+      const zcode={...model,id:'zcode-fixture',name:'ZCode · GLM-5.3-Flash',provider:'zcode',model:'account:zai-start-plan/GLM-5.3-Flash',default_agent:'zcode',native_selection:{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash',options:{reasoningLevel:'max'}}};
       agents.zcode={name:'ZCode',ready:true,version:'3.16.3',access_mode:'project',configuration:{model_fields:[]},
-        configuration_values:{home:'C:\\zcode-fixture',port:19765},native_catalog:{models:[{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'}]}};
+        configuration_values:{home:'C:\\zcode-fixture',port:19765,auto_connect:false},connection_state:'connected',native_catalog:{models:[{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash',reasoning:['low','high','max']}]},
+        usage:{'account:zai-start-plan':{fetched_at:Date.now()/1000,limits:[{label:'Flash fixture',unit:'token',remaining:42,models:['glm-5.3-flash']},{label:'Other fixture',unit:'credits',remaining:999,models:['other-model']}]}}};
       const fixture={models:[model,paid,zcode],default_model:'home',tasks:[],view:{mode:'project',project:'C:\\fixture'},
         execution_agents:agents,workflow:{enabled:true,execution_agent:'pi',model_scope:'all',paid_allowed:true,
           enforce_paid_budget:false,enforce_model_call_limit:false,daily:{}},
@@ -43,6 +44,8 @@ const directory=path.resolve(__dirname,'../panel');
             const block=request.postDataJSON().endpoint_settings;
             const row=fixture.execution_endpoints.rows.find(e=>e.id===block.id);
             Object.assign(row,block.values);data={ok:true};if(block.values.access_mode)row.runtime.access_mode=block.values.access_mode;
+            if(block.values.native_setup)Object.assign(row.runtime.configuration_values,block.values.native_setup);
+            if(block.values.native_selection)row.model.native_selection.options.reasoningLevel=block.values.native_selection.reasoning;
             if(block.values.native_model){
               const picked={...row.model,id:'native-glm',model:block.values.native_model,name:'WorkBuddy · GLM-5.3'};
               row.model=picked;row.models.push(picked);row.current_model=picked.id;fixture.models.push(picked);
@@ -55,6 +58,8 @@ const directory=path.resolve(__dirname,'../panel');
       await page.locator('.endpoint-card').first().waitFor();
       assert.equal(await page.locator('.endpoint-card').count(),4);
       assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/ZCode 原生额度/);
+      assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/42 token/);
+      assert.doesNotMatch(await page.locator('[data-endpoint-id="zcode"]').textContent(),/999/);
       assert.equal(await page.locator('#model-agent-entry').isVisible(),false);
       assert.match(await page.locator('[data-endpoint-id="dsh"]').textContent(),/12\.33/);
       assert.match(await page.locator('[data-endpoint-id="workbuddy"]').textContent(),/未同步/);
@@ -148,13 +153,28 @@ const directory=path.resolve(__dirname,'../panel');
       await page.locator('[data-endpoint-expand="zcode"]').click();
       await page.locator('[data-endpoint-tab="models"]').click();
       assert.match(await page.locator('#endpoint-connections').textContent(),/max/);
+      await page.locator('[data-zcode-reasoning]').selectOption('high');
+      await page.evaluate(()=>refresh());
+      assert.equal(await page.locator('[data-zcode-reasoning]').inputValue(),'high');
+      await page.locator('[data-zcode-selection] button[type="submit"]').click();
+      await page.waitForTimeout(100);
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.values.native_selection?.reasoning==='high'));
       await page.locator('[data-zcode-setup] input[name="port"]').fill('20000');
+      await page.locator('[data-zcode-setup] input[name="auto_connect"]').check();
       await page.evaluate(()=>refresh());
       assert.equal(await page.locator('[data-zcode-setup] input[name="port"]').inputValue(),'20000');
+      assert.equal(await page.locator('[data-zcode-setup] input[name="auto_connect"]').isChecked(),true);
       await page.locator('[data-zcode-setup] button[type="submit"]').click();
       await page.waitForTimeout(100);
       assert.ok(writes.some(w=>w.body.endpoint_settings?.id==='zcode'&&w.body.endpoint_settings.values.native_setup?.port===20000));
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.values.native_setup?.auto_connect===true));
+      await page.locator('#endpoint-connections [data-zcode-usage]').click();
+      await page.waitForTimeout(100);
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.values.refresh_native_usage===true));
       await page.locator('#endpoint-dialog > .endpoint-modal > .dialog-heading .close-dialog').click();
+      await page.evaluate(()=>openTask({id:'zcode-finished',title:'fixture',engine:'zcode',kind:'edit',project:'C:\\fixture',files:['a.py'],model_id:'zcode-fixture'}));
+      assert.match(await page.locator('#task-session-hint').textContent(),/带交接的新 ZCode 会话/);
+      await page.locator('#task-dialog .dialog-footer .close-dialog').click();
       for(const width of [1100,736,390]){
         await page.setViewportSize({width,height:1000});
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${host} ${width}px overflow`);

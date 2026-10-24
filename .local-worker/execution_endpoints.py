@@ -100,12 +100,23 @@ def update(endpoint, body, settings):
         if set(body) == {'native_setup'}:
             return zcode_worker.configure(body['native_setup'])
         if body == {'connect_native': True}:
-            return zcode_worker.launch()
+            return zcode_worker.connect()
         if body == {'refresh_native_models': True}:
             return zcode_worker.refresh_catalog()
         if set(body) == {'native_model'}:
             model = zcode_worker.select_model(body['native_model'])
             return update(endpoint, {'current_model': model['id']}, settings)
+        if set(body)=={'native_selection'}:
+            selection=body['native_selection']
+            if not isinstance(selection,dict) or set(selection)!={'model','reasoning'}:raise ValueError('ZCode 模型与思考强度设置无效')
+            model=zcode_worker.select_model(selection['model'],selection['reasoning'])
+            return update(endpoint,{'current_model':model['id']},settings)
+        if body=={'refresh_native_usage':True}:
+            current=snapshot()['endpoints'][endpoint]['current_model']
+            candidates=[m for m in registry.list_models()['models'] if m.get('provider')=='zcode' and m.get('enabled',True)]
+            model=registry.get_model(current) if current else candidates[0] if len(candidates)==1 else None
+            if not model or model.get('provider')!='zcode':raise ValueError('请先选择 ZCode 原生模型')
+            return zcode_worker.refresh_usage(model['native_selection']['providerId'])
     if endpoint in ('pi', 'dsh') and isinstance(body, dict) and set(body) == {'access_mode'}:
         import endpoint_access
         return endpoint_access.update(endpoint, body['access_mode'])

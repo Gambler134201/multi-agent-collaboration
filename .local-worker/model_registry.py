@@ -387,11 +387,11 @@ def upsert_native_model(body, model_id=None):
 
 def upsert_zcode_model(body, model_id=None):
     import zcode_worker
-    if (set(body) - {'provider', 'model', 'name', 'enabled', 'default_agent'} or
+    if (set(body) - {'provider', 'model', 'name', 'enabled', 'default_agent','reasoning_level'} or
             body.get('default_agent', 'zcode') != 'zcode' or type(body.get('enabled', True)) is not bool):
         raise ValueError('ZCode 原生账户不接受 API、价格或其他执行端配置')
     code = body.get('model')
-    selected = zcode_worker.selection(code)
+    selected = zcode_worker.selection(code,body.get('reasoning_level'))
     entry = zcode_worker.catalog_model(code)
     ident = zcode_worker.model_row_id(code)
     if model_id is not None and model_id != ident:
