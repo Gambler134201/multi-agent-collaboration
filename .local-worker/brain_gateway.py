@@ -585,7 +585,7 @@ def _preview(context, payload):
         route = _choose_route(context, body)
     except ValueError as error:
         raise BrokerError(str(error)) from None
-    if route.get('engine') not in ('dsh', 'pi', 'workbuddy'):
+    if route.get('engine') not in ('dsh', 'pi', 'workbuddy', 'zcode'):
         raise BrokerError('主脑派发需要 Agent 执行器，当前模型解析到 %s；不会静默回退'
                           % route.get('engine'))
     return {'preview': _public_route(route), 'project': context.project}
@@ -632,7 +632,7 @@ def _dispatch(context, payload):
     if title:
         body['title'] = title
     route = _choose_route(context, body)
-    if route.get('engine') not in ('dsh', 'pi', 'workbuddy'):
+    if route.get('engine') not in ('dsh', 'pi', 'workbuddy', 'zcode'):
         raise BrokerError('主脑派发需要 Agent 执行器，当前模型解析到 %s；不会静默回退'
                           % route.get('engine'))
 
@@ -655,16 +655,17 @@ def _dispatch(context, payload):
 
 
 def _native_execution(task):
-    if task.get('engine') != 'workbuddy':
+    if task.get('engine') not in ('workbuddy', 'zcode'):
         return None
-    native = task.get('workbuddy') or {}
-    return {'session_id': task.get('workbuddy_session_id'), 'model': task.get('model'),
-            'version': task.get('executor_version'), 'billing_source': 'workbuddy-native-account',
+    engine = task['engine']
+    native = task.get(engine) or {}
+    return {'session_id': task.get(engine+'_session_id'), 'model': task.get('model'),
+            'version': task.get('executor_version'), 'billing_source': engine+'-native-account',
             'credits_used': None, 'actual_model_calls': None, 'cost_cny': None,
             'cleanup': native.get('cleanup'), 'prompt_attempted': bool(native.get('prompt_attempted')),
             'outcome_unknown': bool(native.get('outcome_unknown')),
-            'tool_mode': task.get('workbuddy_tool_mode', 'scoped-files-v1'),
-            'tool_protection_verified': bool(task.get('native_tool_proof'))}
+            'tool_mode': task.get(engine+'_tool_mode', 'scoped-files-v1' if engine=='workbuddy' else 'scoped-mcp-development-v1'),
+            'tool_protection_verified': bool(task.get('record_protection'))}
 
 
 def _status(context, payload):

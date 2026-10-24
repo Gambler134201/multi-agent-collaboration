@@ -4,22 +4,23 @@
 
 写代码、反复测试、整理文件，往往会消耗大量主脑额度。换用本地模型或低成本模型后，又需要人来回补充要求、追踪进度、检查结果。
 
-这个项目把这套协作过程放进同一个工作台：由 Codex 或 DSH 主脑理解需求、判断风险、选择执行端并独立验收；由 Pi、DSH 或 WorkBuddy 完成具体的调查、实现和测试。目标是让高价值模型的额度集中用于关键判断，同时让执行模型在明确目标、指导与验收下交付。
+这个项目把这套协作过程放进同一个工作台：由 Codex 或 DSH 主脑理解需求、判断风险、选择执行端并独立验收；由 Pi、DSH、WorkBuddy 或 ZCode 完成具体的调查、实现和测试。目标是让高价值模型的额度集中用于关键判断，同时让执行模型在明确目标、指导与验收下交付。
 
 ## 用你已有的模型和账户，组织一套协作流程
 
 | 角色 | 当前支持 | 负责什么 |
 | --- | --- | --- |
 | 主脑 | Codex、DSH | 理解需求、拆分任务、派发、独立验收与整改判断 |
-| 执行端 | Pi Agent、DeepSeek Harness、WorkBuddy | 调查、设计、实现、测试与修正 |
-| 模型来源 | 自建/本地服务、付费 API、WorkBuddy 登录账户内置模型 | 根据任务和账户条件选择，保留各自的费用与授权边界 |
+| 执行端 | Pi Agent、DeepSeek Harness、WorkBuddy、ZCode | 调查、设计、实现、测试与修正 |
+| 模型来源 | 自建/本地服务、付费 API、WorkBuddy / ZCode 登录账户内置模型 | 根据任务和账户条件选择，保留各自的费用与授权边界 |
 
 **本地模型、低成本 API、平台赠送或限免权益，都可以成为协作资源。** 可用权益取决于平台、模型和你自己的账户；工作台不提供额度，也不保证固定节省比例。
 
 ## 当前可以做什么
 
-- **按执行端管理。** Pi、DSH、WorkBuddy 各有独立开关，卡片展示当前模型与对应余额来源；设置弹窗集中管理整个执行端的能力与成本预设，以及各模型连接。
+- **按执行端管理。** Pi、DSH、WorkBuddy、ZCode 各有独立开关，卡片展示当前模型与对应余额来源；设置弹窗集中管理整个执行端的能力与成本预设，以及各模型连接。
 - **使用 WorkBuddy 内置模型。** 读取当前安装可用的原生模型列表并明确选择，使用已登录账户的模型与积分；不静默切到 Auto、其他模型或 API Key。
+- **使用 ZCode Start Plan。** ZCode 3.16.3 通过本机桌面桥接使用已登录账户的明确模型与思考强度；已对 GLM-5.3-Flash / max 完成真实文件与终端任务独立验收。无需修改安装包；版本、工具和账户计量边界见 [ZCode 指南](docs/ZCODE_EXECUTOR.md)。
 - **让执行端真正动手。** 支持文件编辑、检索和运行测试；WorkBuddy 新任务已接入原生开发工具链。执行器自测之后，主脑仍需独立检查。
 - **等待期间释放主脑。** 在已验证的本机桌面通知链路中，主脑订阅任务后结束当前回合，任务结束再回到原聊天验收，减少重复轮询。
 - **让协作状态与结果可见。** 首轮回复展示真实预检信号；每个项目保留自己的任务、执行、验收和整改记录，区分“执行结束”和“验收通过”。
@@ -28,7 +29,7 @@
 
 将仓库链接和 [Agent 下载安装指南](docs/AGENT_INSTALL.md) 发给你的 Agent，即可按本机环境检查依赖、选择主脑与执行端、安装并逐层验收。
 
-[详细安装](docs/INSTALL.md) · [DSH 主脑](docs/DSH_USAGE.md) · [WorkBuddy 执行端](docs/WORKBUDDY_EXECUTOR.md) · [更新记录](CHANGELOG.md)
+[详细安装](docs/INSTALL.md) · [DSH 主脑](docs/DSH_USAGE.md) · [WorkBuddy 执行端](docs/WORKBUDDY_EXECUTOR.md) · [ZCode 执行端](docs/ZCODE_EXECUTOR.md) · [更新记录](CHANGELOG.md)
 
 本地面板只监听 `127.0.0.1`；配置在本机管理，API 密钥用 Windows DPAPI 加密，任务记录写入各项目自己的 `.model-desk/`。调用云模型时，任务内容仍按所选服务发送。
 
@@ -39,13 +40,14 @@
 - **只支持 Windows**（当前开发验证在 Windows 11 x64）。Linux / macOS 未适配、未测试。
 - Python 只在 **3.12** 实测过（代码要求 3.11+，因为使用 `tomllib`）。
 - Node 只在 **22.x** 实测过；本地 acpx 固定 **0.19.5**（`pnpm-lock.yaml`）。
-- 执行端已适配 **Pi 1.3.0**、经适配的 DSH 安装及 **WorkBuddy 5.8.2 / 5.8.3**。WorkBuddy 5.8.3 已有真实任务验收，其他安装需自行验证。Pi 包名或版本不符会被判定为「不可用」；DSH 的能力验证与实际安装身份绑定，不会自动换引擎。
+- 执行端已适配 **Pi 1.3.0**、经适配的 DSH 安装及 **WorkBuddy 5.8.2 / 5.8.3**、**ZCode 3.16.3**。WorkBuddy 5.8.3 已有真实任务验收，其他安装需自行验证。Pi 包名或版本不符会被判定为「不可用」；DSH 的能力验证与实际安装身份绑定，不会自动换引擎。
 - 不承诺任何固定的额度节省，也不承诺输出质量等同 GPT 或其他模型。用量与费用取决于你的模型、提示和任务，面板里的数字是记账与核对，不是保证。
 - 「原生入口/按钮/侧栏可见性」需要使用者本人在自己的界面里确认，本仓库不做保证。
 - 通知/等待链路（`--notify-on-completion`）依赖本机桌面环境，**新用户需要按 `docs/INSTALL.md` 自行验证**；原作者机器上的验证不能当作通用保证。
 - 当前队列仍为串行，多模型并行尚未上线。WorkBuddy 主脑、Skill/外部连接器/嵌套代理/媒体工具尚未接入，积分余额未同步；DSH 原生 GUI 发起 WorkBuddy 尚未实测。
+- ZCode 适配依赖指定版本的非公开桌面服务与本机调试端口；只开放工作台受控文件/PowerShell 工具，不等于全部原生工具。余额及底层调用次数未知，强制金额/次数上限开启时拒绝执行；DSH 原生入口派发 ZCode 尚未实测。
 - 关闭宿主、重启、系统休眠及跨工作区后的自动唤醒没有完整保证。
-- 第三方应用（DSH、Pi、Codex、WorkBuddy、Node、pnpm）都不随仓库分发，需要你自己安装并保留自己的许可与账号。
+- 第三方应用（DSH、Pi、Codex、WorkBuddy、ZCode、Node、pnpm）都不随仓库分发，需要你自己安装并保留自己的许可与账号。
 
 ## 前提
 
@@ -59,6 +61,7 @@
 | DSH | 用户自装 | 用 `MODEL_DESK_DSH_EXE` 指向 `DeepSeek Harness.exe` |
 | Pi | 用户自装，1.3.0 | 用 `MODEL_DESK_PI_HOME` 指向 Pi 安装根目录 |
 | WorkBuddy（可选） | 用户自装，5.8.2 / 5.8.3 | 执行端卡片配置安装目录与当前用户 profile；需要已登录的桌面宿主 |
+| ZCode（可选） | 用户自装，3.16.3 | 已登录桌面宿主，通过卡片打开本地桥接；见 ZCode 指南 |
 | Codex（可选） | 使用 MCP / 全局规则时需要 | 只影响当前 Windows 用户 |
 
 执行器使用你自己的安装路径：DSH、Pi、Node 通过环境变量或 PATH 配置，WorkBuddy 在卡片中保存安装与用户配置目录，PowerShell 7 支持显式路径和本机发现（见 [安装指南](docs/AGENT_INSTALL.md)）。缺失或版本不符时明确报「不可用」。
@@ -71,7 +74,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -Check      # 只看�
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1             # 建 venv + 装依赖
 ```
 
-默认只安装本目录依赖：在 `.local-worker\venv` 建虚拟环境、按 `requirements.txt` 装 Python 依赖，并在 `.local-worker\agent-runtime` 装本地 Node 依赖（acpx）。它不会启动服务、不会调用模型、不会装 DSH/Pi/WorkBuddy、不会改全局 Codex 配置。
+默认只安装本目录依赖：在 `.local-worker\venv` 建虚拟环境、按 `requirements.txt` 装 Python 依赖，并在 `.local-worker\agent-runtime` 装本地 Node 依赖（acpx）。它不会启动服务、不会调用模型、不会装 DSH/Pi/WorkBuddy/ZCode、不会改全局 Codex 配置。
 
 可选动作必须显式请求：
 

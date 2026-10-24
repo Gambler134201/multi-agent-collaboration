@@ -543,13 +543,13 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                                 % (est_output, model_output))
             rates = rates_for(model, moment)
             cap = None
-            native = model.get('provider') == 'workbuddy'
+            native = model.get('provider') in ('workbuddy', 'zcode')
             if native:
-                import workbuddy_worker
-                workbuddy_worker.validate_task(body, settings)
+                import importlib
+                importlib.import_module(model['provider']+'_worker').validate_task(body, settings)
                 if mode == 'auto' and req['eligible_model_ids'] is None:
-                    raise ValueError('WorkBuddy 原生积分费用未知；自动路由需主脑明确列入 eligible_model_ids，或手动选择')
-                warnings.append('WorkBuddy 积分和实际底层请求数未返回；成本未知，不按免费或最低价排序')
+                    raise ValueError('原生账户额度费用未知；自动路由需主脑明确列入 eligible_model_ids，或手动选择')
+                warnings.append('原生账户用量和实际底层请求数未返回；成本未知，不按免费或最低价排序')
             if is_paid(model) and not native:
                 if not settings.get('paid_allowed'):
                     raise ValueError('付费执行未开启')
@@ -585,7 +585,7 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                           'source': '请求时单价快照 + 预计输入/输出/次数；这是预测，不是实际账单'}
             if native:
                 prediction = {'kind': 'unknown', 'estimated_cost_cny': None, 'base_cost_cny': None,
-                              'source': 'WorkBuddy 原生积分；未取得可核对金额，不能等同于零费用'}
+                              'source': '原生账户额度；未取得可核对金额，不能等同于零费用'}
             # Estimates rank models and inform the user; usage-based caps are
             # checked at the gateway. A worst-case forecast is not spending.
             matches = [tag for tag in model.get('preferred_tasks', []) if any(term in tag for term in CATEGORIES[req['category']])]
@@ -597,7 +597,7 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
             if scope != model_scope.ALL:
                 reason += '执行模型范围：' + model_scope.LABELS[scope] + '；'
             reason += ('匹配标签：' + '、'.join(matches) + '；') if matches else '主脑候选或未设置标签；'
-            reason += ('WorkBuddy 登录账户原生积分，费用未知' if native else
+            reason += (execution_engines.LABELS[agent]+' 登录账户原生额度，费用未知' if native else
                        f"{rates['label'] if rates else '无单价'}，预计总成本 ¥{estimate:.4f}")
             if warnings:
                 reason += '；' + warnings[0]

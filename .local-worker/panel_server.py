@@ -467,12 +467,12 @@ def _forecast(task):
 
 
 def _cost_facts(task):
-    if task.get('engine') == 'workbuddy':
+    if task.get('engine') in ('workbuddy', 'zcode'):
         return {'schema': None, 'known': False, 'settled_cny': None,
                 'recorded_settled_cny': None, 'settled_calls': None,
                 'unsettled_cny': None, 'reserved_cny': None, 'reserved_is_real_cost': False,
-                'unknown_calls': None, 'billing_source': 'workbuddy-native-account',
-                'label': 'WorkBuddy 原生积分未返回',
+                'unknown_calls': None, 'billing_source': task['engine']+'-native-account',
+                'label': execution_engines.LABELS[task['engine']]+(' 原生积分未返回' if task['engine']=='workbuddy' else ' 原生额度用量未返回'),
                 'note': '原生积分、实际底层请求次数及人民币费用未知；不并入 API 人民币账单，不显示为零费用。'}
     settled = _number(task.get("cost_settled_cny"))
     settled_calls = _int_or_none(task.get("cost_settled_calls")) or 0
@@ -797,7 +797,7 @@ def safe_error(exc, key=""):
 
 def probe_model(model_id):
     model = registry.get_model(model_id, require_enabled=False)
-    if model.get('provider') == 'workbuddy':
+    if model.get('provider') in ('workbuddy', 'zcode'):
         raise ValueError('WorkBuddy 不使用 API 连接测试；请派发明确授权的原生账户测试任务')
     start = time.monotonic()
     try:
@@ -918,7 +918,7 @@ def scope_gate(model, settings, task_id=None, engine=None):
 def discover(body):
     if body.get("id") and not body.get("api_base"):
         model = registry.get_model(body["id"], require_enabled=False)
-        if model.get('provider') == 'workbuddy':
+        if model.get('provider') in ('workbuddy', 'zcode'):
             raise ValueError('WorkBuddy 原生模型固定为 DeepSeek V4.1 Flash，不调用 API 模型列表')
     else:
         base = str(body.get("api_base", "")).strip().rstrip("/")
@@ -961,6 +961,8 @@ def execute_task(task_id):
             command = [str(PYTHON), str(HERE / "pi_worker.py"), "--run-id", task_id]
         elif state.get('engine') == 'workbuddy':
             command = [str(PYTHON), str(HERE / 'workbuddy_worker.py'), '--run-id', task_id]
+        elif state.get('engine') == 'zcode':
+            command = [str(PYTHON), str(HERE / 'zcode_worker.py'), '--run-id', task_id]
         elif state["kind"] == "chat":
             command = [str(PYTHON), str(HERE / "chat_worker.py"), "--run-id", task_id]
         else:
@@ -1231,6 +1233,14 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     native_tool_mode = None
     native_tool_revision = None
     native_access_mode = None
+    zcode_snapshot = {}
+    if engine == 'zcode':
+        import zcode_worker, zcode_tools
+        zcode_worker.validate_task(body, settings)
+        zcode_snapshot = ({key: rework_parent.get(key) for key in ('zcode_connection', 'zcode_selection', 'zcode_tool_revision', 'zcode_access_mode')}
+                          if rework_parent else {'zcode_connection': zcode_worker.configuration(),
+                            'zcode_selection': model['native_selection'], 'zcode_tool_revision': zcode_tools.revision(),
+                            'zcode_access_mode': zcode_worker.configuration()['access_mode']})
     if engine == 'workbuddy':
         import workbuddy_worker
         workbuddy_worker.validate_task(body, settings)
@@ -1423,6 +1433,7 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
             'model_identity': trusted_context.model.public(),
         }
     first_fields = {
+        **zcode_snapshot,
         'id': task_id, 'title': str(body.get("title") or prompt.splitlines()[0])[:100],
         'kind': kind, 'engine': engine, 'model_id': model["id"], 'model_name': model["name"],
         'model': model["model"], 'status': "queued", 'phase': "等待执行",
@@ -1493,14 +1504,14 @@ def cancel_task(task_id, reason="", actor="main"):
                                             "reason": str(reason or "")[:1000]})
     with ACTIVE_LOCK:
         process = ACTIVE.get(task_id)
-    if state.get('engine') == 'workbuddy':
+    if state.get('engine') in ('workbuddy', 'zcode'):
         # The CLI is owned by WorkBuddy's host, not a child of this Python
         # process. The worker observes cancelled.flag and closes its exact lease.
         # Never taskkill the GUI or pretend the native cleanup already finished.
         if state['status'] == 'queued':
             registry.patch_task(run, status='cancelled', ended_at=registry.now())
         else:
-            registry.patch_task(run, phase='正在取消 WorkBuddy 原生会话')
+            registry.patch_task(run, phase='正在取消原生执行会话')
         return {'ok': True, 'cancellation_pending': state['status'] == 'running',
                 'cancel_record': registry.read_task(run).get('cancel_record')}
     if process and process.poll() is None:
@@ -1896,9 +1907,9 @@ def recover_task(task_id, body=None, actor="main"):
     state = registry.read_task(run)
     if state.get("status") != "recovery_pending":
         raise ValueError("只有待恢复的任务需要显式恢复；当前状态：" + str(state.get("status")))
-    if state.get('engine') == 'workbuddy':
-        import workbuddy_worker
-        workbuddy_worker.recovery_guard(state)
+    if state.get('engine') in ('workbuddy', 'zcode'):
+        import importlib
+        importlib.import_module(state['engine']+'_worker').recovery_guard(state)
     review = delegation_policy.load(run)
     if review and review.get("state") in {"accepted", "final_accepted"}:
         raise ValueError("任务已通过独立验收，不能恢复原执行；请新建任务")
@@ -2424,7 +2435,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('执行端设置需要独立保存，不能混入范围、预算或授权')
                     return self.send_json(execution_endpoints.update(block['id'], block['values'], workflow_settings.snapshot()))
                 return self.send_json(workflow_settings.save_settings(body))
-            endpoint_match = re.fullmatch(r'/api/execution-endpoints/(pi|dsh|workbuddy)', path)
+            endpoint_match = re.fullmatch(r'/api/execution-endpoints/(pi|dsh|workbuddy|zcode)', path)
             if endpoint_match:
                 import execution_endpoints
                 return self.send_json(execution_endpoints.update(endpoint_match.group(1), body, workflow_settings.snapshot()))
@@ -2526,7 +2537,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": safe_error(exc)}, 400)
 
 
-WORKER_SCRIPTS = ("run_worker.py", "chat_worker.py", "dsh_worker.py", "pi_worker.py", "workbuddy_worker.py")
+WORKER_SCRIPTS = ("run_worker.py", "chat_worker.py", "dsh_worker.py", "pi_worker.py", "workbuddy_worker.py", "zcode_worker.py")
 # A real worker process always starts *before* the record's ``started_at`` is
 # written, so a process created later than the record cannot be that worker
 # (a reused PID).  The tolerance only absorbs clock jitter; a slow startup

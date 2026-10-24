@@ -2,7 +2,7 @@
   "schema": 1,
   "title": "多 Agent 协作：从需求到独立验收",
   "summary": "主脑明确目标与验收，执行 Agent 完成工作，工作台保留项目记录；地图帮助理解代码和职责。图中是源码整理的职责关系，不是实测运行时调用链。",
-  "snapshot_hash": "1abbee676279e64a3e3267a6e2cbea416defcf25336449c045adbd955054808b",
+  "snapshot_hash": "ca72addd4f1ceb741876dbcedb6c25eb7e96a1e47969dbbf8b1b4b0c0547e534",
   "nodes": [
     {
       "id": "entry",
@@ -13,7 +13,7 @@
       "evidence": [
         {
           "path": ".local-worker/brain_gateway.py",
-          "sha256": "88e2925d25083f296e096b5d93205697e0f0e7806c44e58e2e5f5e236e27996c"
+          "sha256": "e212754f114dc3ef54bc6f5c7660bc38eb9274ace47bd8ba61ea787a887bb9a0"
         },
         {
           "path": ".local-worker/brain_context.py",
@@ -30,11 +30,11 @@
       "evidence": [
         {
           "path": ".local-worker/model_router.py",
-          "sha256": "d7a60ad9f19efbd12909851cd8b3323bb57482f12ae04b274ef45e1982232da5"
+          "sha256": "1bf57654c516e578959ae5202b004798ea32133c10f4467329ab5c969580bf46"
         },
         {
           "path": ".local-worker/dispatch_task.py",
-          "sha256": "98ced63f0e6d67d767870f2ff91d69ac3d4ce338c6ad226eaaf065ba56ff99d0"
+          "sha256": "1b04cf425a0a605f4f26a94066db01ec86ca6346cf1e73f530966b6a1d098afb"
         }
       ]
     },
@@ -47,7 +47,7 @@
       "evidence": [
         {
           "path": ".local-worker/execution_engines.py",
-          "sha256": "0d49f3b2e6fd68036ee83e2a09c0aeaf9adb0695e3c30bda03a859088ed3d8be"
+          "sha256": "9fb5534f9b0c39d0666d89f7ea1d3141f4adc144c40e7b50daad793912a451d0"
         },
         {
           "path": ".local-worker/workbuddy_worker.py",
@@ -77,11 +77,11 @@
       "evidence": [
         {
           "path": ".local-worker/panel_server.py",
-          "sha256": "6257c37fb1f2c5625ae46618afa89b80db1857004d394f0f65ee2ef063c306f2"
+          "sha256": "08364110353da8c64808d21acb4ea888ff397776a3147413f1c61c03e5a11f2e"
         },
         {
           "path": ".local-worker/execution_result.py",
-          "sha256": "648c564c2c62b855d1a28828434cf32315279f58dfea4ba1ab7d5fe4c49783bc"
+          "sha256": "82ebb05acf032599cb2fc209c5af964df7e6380ce513074a2c09fb1b8cdff29b"
         }
       ]
     },

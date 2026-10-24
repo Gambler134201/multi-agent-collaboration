@@ -1,19 +1,20 @@
 """Execution-agent selection, independent of provider/model routing."""
 from copy import deepcopy
 
-AGENTS = ('dsh', 'pi', 'workbuddy')
-ENGINES = ('dsh', 'pi', 'workbuddy', 'direct', 'aider')
+AGENTS = ('dsh', 'pi', 'workbuddy', 'zcode')
+ENGINES = (*AGENTS, 'direct', 'aider')
 DEFAULT = 'dsh'
 # Explicit form value meaning "omit the override and let the selected model (then
 # the global default) decide".  It is accepted as the absence of an override, not
 # as an execution engine.
 TASK_DEFAULT = 'model_default'
-LABELS = {'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy', 'direct': '直接调用', 'aider': 'Aider'}
+LABELS = {'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy', 'zcode': 'ZCode', 'direct': '直接调用', 'aider': 'Aider'}
 
 # Each adapter declares its own controls. Model connection forms never interpret
 # another adapter's configuration. The legacy DSH storage key stays compatible
 # with existing task/session/evidence identities.
 CONFIGURATION = {
+    'zcode': {'description': 'ZCode 原生登录账户；指定模型与思考强度，受控文件/终端工具。无子代理和旧会话复用。', 'model_fields': []},
     'dsh': {'description': '按模型选择 DeepSeek Harness 的运行预设；更改后用于新的 DSH 会话。已有会话需要保持原配置。',
             'model_fields': [{'key': 'agent_preset', 'label': '运行预设', 'type': 'select',
                               'default': 'standard', 'provider_defaults': {'local': 'native'},
@@ -99,8 +100,10 @@ def resolve(body, settings, model=None):
 
 
 def validate_model(engine, model):
-    if model is not None and (engine == 'workbuddy') != (model.get('provider') == 'workbuddy'):
-        raise ValueError('WorkBuddy 仅执行其原生账户模型；不能与 API 模型或其他执行端互换')
+    if model is not None:
+        for native in ('workbuddy', 'zcode'):
+            if (engine == native) != (model.get('provider') == native):
+                raise ValueError(LABELS[native] + ' 仅执行其原生账户模型；不能与 API 模型或其他执行端互换')
 
 
 def has_session(task):
@@ -115,6 +118,9 @@ def session_fields(task):
 
 
 def availability(engine):
+    if engine == 'zcode':
+        import zcode_worker
+        return zcode_worker.availability()
     if engine == 'workbuddy':
         import workbuddy_worker
         return workbuddy_worker.availability()

@@ -224,7 +224,7 @@ def get_model(model_id=None, require_enabled=True):
         raise ValueError("请选择一个已配置的执行模型")
     if require_enabled and not row.get("enabled", True):
         raise ValueError("这个模型已停用")
-    if row.get('provider') == 'workbuddy':
+    if row.get('provider') in ('workbuddy', 'zcode'):
         if row.get('secret') or row.get('api_key_env'):
             raise ValueError('WorkBuddy 原生模型不能保存 API 密钥')
         row['api_key'] = ''
@@ -234,6 +234,8 @@ def get_model(model_id=None, require_enabled=True):
 
 
 def upsert_model(body, model_id=None):
+    if body.get('provider') == 'zcode':
+        return upsert_zcode_model(body, model_id)
     if body.get('provider') == 'workbuddy':
         return upsert_native_model(body, model_id)
     name = str(body.get("name", "")).strip()
@@ -263,7 +265,7 @@ def upsert_model(body, model_id=None):
         previous = next((m for m in data["models"] if m["id"] == model_id), None)
         if model_id and previous is None:
             raise ValueError("模型不存在")
-        if previous and previous.get('provider') == 'workbuddy':
+        if previous and previous.get('provider') in ('workbuddy', 'zcode'):
             raise ValueError('原生账户模型不能转换为 API 模型；请另行添加连接')
         model_id = model_id or uuid4().hex[:12]
         secret = previous.get("secret", "") if previous else ""
@@ -379,6 +381,38 @@ def upsert_native_model(body, model_id=None):
                'subagent': model_capabilities.normalize_block(None, None)}
         data['models'] = [row if m['id'] == ident else m for m in data['models']] if previous else data['models'] + [row]
         # Never change the user's existing manual default as part of integration.
+        write_json(REGISTRY, data)
+    return public_model(row)
+
+
+def upsert_zcode_model(body, model_id=None):
+    import zcode_worker
+    if (set(body) - {'provider', 'model', 'name', 'enabled', 'default_agent'} or
+            body.get('default_agent', 'zcode') != 'zcode' or type(body.get('enabled', True)) is not bool):
+        raise ValueError('ZCode 原生账户不接受 API、价格或其他执行端配置')
+    code = body.get('model')
+    selected = zcode_worker.selection(code)
+    entry = zcode_worker.catalog_model(code)
+    ident = zcode_worker.model_row_id(code)
+    if model_id is not None and model_id != ident:
+        raise ValueError('ZCode 原生模型标识不可换绑')
+    with registry_lock():
+        data = read_registry()
+        previous = next((m for m in data['models'] if m['id'] == ident), None)
+        if previous and previous.get('provider') != 'zcode':
+            raise ValueError('模型标识已占用')
+        row = {'id': ident, 'name': str(body.get('name') or 'ZCode · '+selected['modelId'])[:100],
+               'provider': 'zcode', 'model': code, 'native_selection': selected, 'default_agent': 'zcode',
+               'api_base': '', 'secret': '', 'api_key_env': '', 'bypass_proxy': False,
+               'enabled': body.get('enabled', previous.get('enabled', True) if previous else True),
+               'created_at': previous['created_at'] if previous else now(),
+               'max_input_tokens': min(int(entry.get('contextWindow') or 32768), 1048576), 'max_output_tokens': 128000,
+               'thinking_level': 'default', 'agent_preset': 'standard', 'last_check': None,
+               'max_task_complexity': 'complex', 'preferred_tasks': ['代码实现', '测试', '文档'],
+               'capability_notes': 'ZCode 原生账户与指定模型；受控文件及终端工具。声明不是实测评分。',
+               'cost_preference': 'economy', 'pricing_cny': None,
+               'subagent': model_capabilities.normalize_block(None, None)}
+        data['models'] = [row if m['id'] == ident else m for m in data['models']] if previous else data['models']+[row]
         write_json(REGISTRY, data)
     return public_model(row)
 

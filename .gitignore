@@ -53,3 +53,6 @@ Thumbs.db
 
 .local-worker/endpoint-access.json
 .local-worker/endpoint-access.lock
+# Native ZCode connection/catalogue are machine-local; never publish them.
+.local-worker/zcode.json
+.local-worker/zcode-catalog.json

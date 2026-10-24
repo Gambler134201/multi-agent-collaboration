@@ -14,14 +14,18 @@ const directory=path.resolve(__dirname,'../panel');
           balance:{status:'ready',balance_infos:[{currency:'CNY',total_balance:'12.33'}]}}};
       const agents={pi:{name:'Pi Agent',ready:true,access_mode:'full',configuration:{model_fields:[]}},
         dsh:{name:'DeepSeek Harness',ready:true,access_mode:'full',configuration:{model_fields:[]}}};
-      const fixture={models:[model,paid],default_model:'home',tasks:[],view:{mode:'project',project:'C:\\fixture'},
+      const zcode={...model,id:'zcode-fixture',name:'ZCode · GLM-5.3-Flash',provider:'zcode',model:'account:zai-start-plan/GLM-5.3-Flash',default_agent:'zcode',native_selection:{options:{reasoningLevel:'max'}}};
+      agents.zcode={name:'ZCode',ready:true,version:'3.16.3',access_mode:'project',configuration:{model_fields:[]},
+        configuration_values:{home:'C:\\zcode-fixture',port:19765},native_catalog:{models:[{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'}]}};
+      const fixture={models:[model,paid,zcode],default_model:'home',tasks:[],view:{mode:'project',project:'C:\\fixture'},
         execution_agents:agents,workflow:{enabled:true,execution_agent:'pi',model_scope:'all',paid_allowed:true,
           enforce_paid_budget:false,enforce_model_call_limit:false,daily:{}},
         codex_usage:{status:'unavailable',buckets:[]},stages:{stats:{},recovery:[]},
         execution_endpoints:{readable:true,rows:[
           {id:'pi',name:'Pi Agent',enabled:true,ready:true,model,models:[model],runtime:agents.pi},
           {id:'dsh',name:'DeepSeek Harness',enabled:true,ready:true,model:paid,models:[paid],runtime:agents.dsh},
-          {id:'workbuddy',name:'WorkBuddy',enabled:false,ready:false,models:[],runtime:{}}]}};
+          {id:'workbuddy',name:'WorkBuddy',enabled:false,ready:false,models:[],runtime:{}},
+          {id:'zcode',name:'ZCode',enabled:true,ready:true,model:zcode,models:[zcode],runtime:agents.zcode}]}};
       page.on('pageerror',error=>errors.push(error.message));
       await page.route('http://modeldesk.invalid/**',async route=>{
         const request=route.request(),pathname=new URL(request.url()).pathname;
@@ -49,7 +53,8 @@ const directory=path.resolve(__dirname,'../panel');
       });
       await page.goto(`http://modeldesk.invalid/?host=${host}&project=C%3A%5Cfixture`);
       await page.locator('.endpoint-card').first().waitFor();
-      assert.equal(await page.locator('.endpoint-card').count(),3);
+      assert.equal(await page.locator('.endpoint-card').count(),4);
+      assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/ZCode 原生额度/);
       assert.equal(await page.locator('#model-agent-entry').isVisible(),false);
       assert.match(await page.locator('[data-endpoint-id="dsh"]').textContent(),/12\.33/);
       assert.match(await page.locator('[data-endpoint-id="workbuddy"]').textContent(),/未同步/);
@@ -140,6 +145,16 @@ const directory=path.resolve(__dirname,'../panel');
       assert.equal(await page.locator('#task-test').isDisabled(),false);
       assert.match(await page.locator('#task-agent-hint').textContent(),/WorkBuddy 登录账户/);
       await page.locator('#task-dialog .dialog-footer .close-dialog').click();
+      await page.locator('[data-endpoint-expand="zcode"]').click();
+      await page.locator('[data-endpoint-tab="models"]').click();
+      assert.match(await page.locator('#endpoint-connections').textContent(),/max/);
+      await page.locator('[data-zcode-setup] input[name="port"]').fill('20000');
+      await page.evaluate(()=>refresh());
+      assert.equal(await page.locator('[data-zcode-setup] input[name="port"]').inputValue(),'20000');
+      await page.locator('[data-zcode-setup] button[type="submit"]').click();
+      await page.waitForTimeout(100);
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.id==='zcode'&&w.body.endpoint_settings.values.native_setup?.port===20000));
+      await page.locator('#endpoint-dialog > .endpoint-modal > .dialog-heading .close-dialog').click();
       for(const width of [1100,736,390]){
         await page.setViewportSize({width,height:1000});
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${host} ${width}px overflow`);

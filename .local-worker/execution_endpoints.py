@@ -9,7 +9,7 @@ from pathlib import Path
 import execution_engines
 import model_registry as registry
 
-IDS = ('pi', 'dsh', 'workbuddy')
+IDS = ('pi', 'dsh', 'workbuddy', 'zcode')
 LABELS = {**execution_engines.LABELS, 'workbuddy': 'WorkBuddy'}
 CONFIG_NAME = 'execution-endpoints.json'
 PRESET_FIELDS = ('preferred_tasks', 'capability_notes', 'cost_preference', 'max_task_complexity')
@@ -43,7 +43,7 @@ def apply_preset(model, engine, controls=None):
 
 
 def defaults():
-    return {key: {'enabled': key != 'workbuddy', 'current_model': None} for key in IDS}
+    return {key: {'enabled': key in ('pi', 'dsh'), 'current_model': None} for key in IDS}
 
 
 def snapshot():
@@ -93,6 +93,19 @@ def gate(engine, model, settings, *, controls=None, automatic=False):
 
 
 def update(endpoint, body, settings):
+    if endpoint == 'zcode' and isinstance(body, dict):
+        import zcode_worker
+        if set(body) == {'access_mode'}:
+            return zcode_worker.set_access_mode(body['access_mode'])
+        if set(body) == {'native_setup'}:
+            return zcode_worker.configure(body['native_setup'])
+        if body == {'connect_native': True}:
+            return zcode_worker.launch()
+        if body == {'refresh_native_models': True}:
+            return zcode_worker.refresh_catalog()
+        if set(body) == {'native_model'}:
+            model = zcode_worker.select_model(body['native_model'])
+            return update(endpoint, {'current_model': model['id']}, settings)
     if endpoint in ('pi', 'dsh') and isinstance(body, dict) and set(body) == {'access_mode'}:
         import endpoint_access
         return endpoint_access.update(endpoint, body['access_mode'])
@@ -175,7 +188,7 @@ def public_rows(models, settings, agents=None):
                      'selection_error': ('当前模型已移除或改属其他执行端，请重新选择'
                                          if pref['current_model'] and selected is None else
                                          '当前模型已停用，请启用或重新选择' if selected and not selected.get('enabled', True) else ''),
-                     'billing_source': 'workbuddy-native-account' if key == 'workbuddy' else 'model-provider',
+                     'billing_source': key+'-native-account' if key in ('workbuddy', 'zcode') else 'model-provider',
                      'balance': None,
                      'message': info.get('message', '')})
     return {'rows': rows, 'unassigned_models': [m for m in models if m['id'] not in assigned],

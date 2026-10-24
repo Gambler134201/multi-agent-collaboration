@@ -1,5 +1,9 @@
 # 跨主脑功能更新约定
 
+## ZCode 执行端
+
+Codex/DSH 的主脑路由、派发、状态、交付、独立验收和共享工作台均已接入 `zcode` 执行端；每卡独立开关与统一预设沿用公共实现。两主脑接口使用隔离记录验证；真实 Start Plan / GLM-5.3-Flash / max 文件/终端任务另行记录，不据此声明 DSH 原生发起任务已验收。ZCode 为执行端，不是新增主脑。既有常驻 MCP 连接须重新加载新模块；使用方法及原生工具边界见 [ZCode 执行端](ZCODE_EXECUTOR.md)。
+
 ## 执行结果与失败阶段
 
 Pi、DSH、WorkBuddy 的控制器阶段证据共用 `execution_result.py`；工作台两种宿主视图、`brain_status` / `brain_delivery` 及 Codex CLI 交付包使用相同只读摘要。执行、指定自测、会话关闭、已有文件与独立验收分别展示；历史缺少阶段时为未知，不根据文字补造。Pi/DSH 完成通知在本任务子进程关闭后发布终态。两宿主及三执行端的离线检查与真实原生 GUI/模型任务分开记录；这不是 WorkBuddy 主脑适配。参见[结果字段与证据边界](EXECUTION_RESULTS.md)。

@@ -15,9 +15,9 @@ from copy import deepcopy
 
 FIELD = 'default_agent'
 FOLLOW_GLOBAL = 'follow_global'
-AGENT_VALUES = ('dsh', 'pi', 'workbuddy')
+AGENT_VALUES = ('dsh', 'pi', 'workbuddy', 'zcode')
 VALUES = (FOLLOW_GLOBAL, *AGENT_VALUES)
-LABELS = {FOLLOW_GLOBAL: '跟随全局默认', 'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy'}
+LABELS = {FOLLOW_GLOBAL: '跟随全局默认', 'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy', 'zcode': 'ZCode'}
 SOURCE_LABELS = {'explicit': '本次显式指定', 'model': '模型指定', 'global': '跟随全局默认'}
 INVALID_MESSAGE = ('模型默认执行 Agent 无效；请选择“跟随全局默认 / DeepSeek Harness / Pi Agent”，'
                    '不会自动改用其他 Agent')
@@ -129,7 +129,7 @@ def update(model_id, value):
         if row is None:
             raise ValueError('模型不存在')
         import execution_engines
-        if normalized == FOLLOW_GLOBAL and row.get('provider') == 'workbuddy':
+        if normalized == FOLLOW_GLOBAL and row.get('provider') in ('workbuddy', 'zcode'):
             raise ValueError('WorkBuddy 原生模型必须固定使用 WorkBuddy 执行端')
         execution_engines.validate_model(normalized, row)
         row[FIELD] = normalized

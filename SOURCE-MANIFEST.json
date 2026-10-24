@@ -6,8 +6,8 @@
   "files": [
     {
       "path": ".gitignore",
-      "sha256": "3189fefe8429e5f1775ae7034059e84c58900fab5bb96f48699cda84d75029f8",
-      "bytes": 1210
+      "sha256": "71ad13cf6f3b0bcea3ca9c169b84a58ca036ef3bf3e8208ff801e5a4a375f143",
+      "bytes": 1343
     },
     {
       "path": ".local-worker/acceptance_profiles.json",
@@ -70,6 +70,11 @@
       "bytes": 7106
     },
     {
+      "path": ".local-worker/agent-runtime/run-zcode.mjs",
+      "sha256": "2ba279f5c38656c3065fc9dccdf6a1b36ccf5b9eb6387a9ba0e4dcd4a0626e55",
+      "bytes": 7152
+    },
+    {
       "path": ".local-worker/agent-runtime/subagent-bridge.cjs",
       "sha256": "4ef28b715e3c066822f2e9b6ba31797aa31f15e890718f7882c6785b30c2c469",
       "bytes": 3420
@@ -101,8 +106,8 @@
     },
     {
       "path": ".local-worker/brain_gateway.py",
-      "sha256": "88e2925d25083f296e096b5d93205697e0f0e7806c44e58e2e5f5e236e27996c",
-      "bytes": 43177
+      "sha256": "e212754f114dc3ef54bc6f5c7660bc38eb9274ace47bd8ba61ea787a887bb9a0",
+      "bytes": 43283
     },
     {
       "path": ".local-worker/brain_mcp_server.py",
@@ -131,8 +136,8 @@
     },
     {
       "path": ".local-worker/codex_mcp_server.py",
-      "sha256": "c912e056c89dcdf4dc30c1a27a2cddaeb7d3883fb834f600d3d55518b41fdce3",
-      "bytes": 29451
+      "sha256": "361df06576ad9015c4cf4c0e52e3d06b5a495864d65f58ffd4e6614678c4f1f3",
+      "bytes": 29457
     },
     {
       "path": ".local-worker/codex_usage.py",
@@ -166,8 +171,8 @@
     },
     {
       "path": ".local-worker/delegation_policy.py",
-      "sha256": "1a388a9007c25c95deef16add0791459c46be75833727797255744dba63ae421",
-      "bytes": 38914
+      "sha256": "46a67bdc1b0a3f0d61d9591eba2777d7cc585f9438e9ef7288950f358778270e",
+      "bytes": 38923
     },
     {
       "path": ".local-worker/desktop_notify.py",
@@ -176,8 +181,8 @@
     },
     {
       "path": ".local-worker/dispatch_task.py",
-      "sha256": "98ced63f0e6d67d767870f2ff91d69ac3d4ce338c6ad226eaaf065ba56ff99d0",
-      "bytes": 18251
+      "sha256": "1b04cf425a0a605f4f26a94066db01ec86ca6346cf1e73f530966b6a1d098afb",
+      "bytes": 18260
     },
     {
       "path": ".local-worker/dsh_brain_desktop.py",
@@ -211,18 +216,18 @@
     },
     {
       "path": ".local-worker/execution_endpoints.py",
-      "sha256": "4796761df87cc8f3ba0c8126664db9a7c57d4c0915d0b06e68ef454cd82988d6",
-      "bytes": 9824
+      "sha256": "442f2da802adb5927ac7f7cdc18b7a0b3ea3f7d7238464508ba7145ec44d764f",
+      "bytes": 10516
     },
     {
       "path": ".local-worker/execution_engines.py",
-      "sha256": "0d49f3b2e6fd68036ee83e2a09c0aeaf9adb0695e3c30bda03a859088ed3d8be",
-      "bytes": 6251
+      "sha256": "9fb5534f9b0c39d0666d89f7ea1d3141f4adc144c40e7b50daad793912a451d0",
+      "bytes": 6594
     },
     {
       "path": ".local-worker/execution_result.py",
-      "sha256": "648c564c2c62b855d1a28828434cf32315279f58dfea4ba1ab7d5fe4c49783bc",
-      "bytes": 8592
+      "sha256": "82ebb05acf032599cb2fc209c5af964df7e6380ce513074a2c09fb1b8cdff29b",
+      "bytes": 8615
     },
     {
       "path": ".local-worker/executor_adapter.py",
@@ -261,8 +266,8 @@
     },
     {
       "path": ".local-worker/model_agent_defaults.py",
-      "sha256": "2aee181b29fd345ab82af6a6be3acd69d3bed58cd0622798ebea15e2038131c9",
-      "bytes": 5501
+      "sha256": "99eb6ab7ae3230b4b34992779d768b0bec04b02c09faed33caab22b03975c217",
+      "bytes": 5539
     },
     {
       "path": ".local-worker/model_capabilities.py",
@@ -271,13 +276,13 @@
     },
     {
       "path": ".local-worker/model_registry.py",
-      "sha256": "d8fb73d89367bb88b8f0e1ca6ce814255dd4bee4ab13c2d74331e6de745b86a2",
-      "bytes": 24521
+      "sha256": "98acc568563b23066a51864320672776cc13ec193ed1b3433349721de0a9e087",
+      "bytes": 26759
     },
     {
       "path": ".local-worker/model_router.py",
-      "sha256": "d7a60ad9f19efbd12909851cd8b3323bb57482f12ae04b274ef45e1982232da5",
-      "bytes": 38325
+      "sha256": "1bf57654c516e578959ae5202b004798ea32133c10f4467329ab5c969580bf46",
+      "bytes": 38382
     },
     {
       "path": ".local-worker/model_scope.py",
@@ -286,8 +291,8 @@
     },
     {
       "path": ".local-worker/panel/app.js",
-      "sha256": "825bf28ae6dac737b2a7975cc70a439aa49ad202092b25baba4006cde66f4f49",
-      "bytes": 169401
+      "sha256": "5e4a3b1a29517a973d303c6d00c3e69faa1ff5a4ca991ea7265b10c94916f260",
+      "bytes": 173569
     },
     {
       "path": ".local-worker/panel/codex-bridge.js",
@@ -326,8 +331,8 @@
     },
     {
       "path": ".local-worker/panel_server.py",
-      "sha256": "6257c37fb1f2c5625ae46618afa89b80db1857004d394f0f65ee2ef063c306f2",
-      "bytes": 148549
+      "sha256": "08364110353da8c64808d21acb4ea888ff397776a3147413f1c61c03e5a11f2e",
+      "bytes": 149525
     },
     {
       "path": ".local-worker/panel_service.py",
@@ -656,8 +661,8 @@
     },
     {
       "path": ".local-worker/tests/test_endpoint_cards.cjs",
-      "sha256": "7d7cd0591e58c86454509d3ee825c0bd540cb01083ffdaf82926e93669659f6c",
-      "bytes": 12177
+      "sha256": "8fd92099e70baa38aff38be2bc864f649dd195322090d83401880e7ad53fac58",
+      "bytes": 13680
     },
     {
       "path": ".local-worker/tests/test_execution_endpoints.py",
@@ -940,6 +945,11 @@
       "bytes": 28366
     },
     {
+      "path": ".local-worker/tests/test_zcode_integration.py",
+      "sha256": "93b2fb4a6272f24d2d758edc5d449b8acfdaa9976d1bd6551a5d4660c99e664c",
+      "bytes": 8758
+    },
+    {
       "path": ".local-worker/thinking_config.py",
       "sha256": "790cef2778d99c1cfaba2a071b80389d89c54b71494908da7555d35b07924710",
       "bytes": 19987
@@ -1040,6 +1050,16 @@
       "bytes": 6601
     },
     {
+      "path": ".local-worker/zcode_tools.py",
+      "sha256": "93a0eaf2257ecd39697e5f7b84d2c0cc927b535251f15f7289193c4aaf166961",
+      "bytes": 10177
+    },
+    {
+      "path": ".local-worker/zcode_worker.py",
+      "sha256": "69ace701f68a476665e649150e0eeb0b80b2df66b2324566d11412d3b1091b61",
+      "bytes": 17174
+    },
+    {
       "path": "AGENTS.md",
       "sha256": "10428f4f260a0940513c64259af7c42f224b8d02db74b711e4be97f7cedb1f2b",
       "bytes": 2621
@@ -1056,8 +1076,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "90f89d77aea6daa66306b7327365dadfb6d7eedf738f3d1ab672582a9b1563cc",
-      "bytes": 12011
+      "sha256": "11f4bb0286e9aab93053eb3b0a45944760a28091fb49ba3e718ff32bddb8ae59",
+      "bytes": 12839
     },
     {
       "path": "THIRD_PARTY.md",
@@ -1071,8 +1091,8 @@
     },
     {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "8afa20f434d789bf9cb04a72f4c80f1b7b75b49a3bd5ad93cdcec9a2605bef7e",
-      "bytes": 11956
+      "sha256": "ab91d0b10ae24a98973c428e5631640ca1ee1c4f89e827d1a429fb5ff665a036",
+      "bytes": 12484
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1096,8 +1116,8 @@
     },
     {
       "path": "docs/EXECUTION_ENDPOINTS.md",
-      "sha256": "b8c5dc335f43a807b769806be156a42e9a55b4cd0e0ad41062124caf8b2326c3",
-      "bytes": 6957
+      "sha256": "fbb388c034b652cdb20b7c01bc1c65425a5e2dbf5aa4deb3652c59c78f40e579",
+      "bytes": 7601
     },
     {
       "path": "docs/EXECUTION_RESULTS.md",
@@ -1155,6 +1175,11 @@
       "bytes": 39290
     },
     {
+      "path": "docs/ZCODE_EXECUTOR.md",
+      "sha256": "be9b9ff46c603deb64e46a043324b16495c4a22d7071488606fe85eebf64b417",
+      "bytes": 3741
+    },
+    {
       "path": "integrations/dsh-brain/LICENSE",
       "sha256": "60328975c8e674f94b10103c12309e2c73d55b26037bed432007b9288f4c5901",
       "bytes": 1070
@@ -1201,7 +1226,7 @@
     },
     {
       "path": "project-architecture.json",
-      "sha256": "766e39ed2ad7e1bba2c15c4660ffbdb5a6a25cb0334a7c5cee67f19737870ba3",
+      "sha256": "22bd8ba86e19d00d2c6280425d82f8579d70aa2a5eef53895939bdeaa2c54d92",
       "bytes": 5333
     },
     {

@@ -62,7 +62,7 @@ class ReworkClaimRefused(ValueError):
 
 
 MAIN_ACTORS = {'main', 'codex', 'human', 'user'}
-EXECUTOR_ACTORS = {'executor', 'worker', 'dsh', 'pi', 'workbuddy', 'agent', 'self', 'panel'}
+EXECUTOR_ACTORS = {'executor', 'worker', 'dsh', 'pi', 'workbuddy', 'zcode', 'agent', 'self', 'panel'}
 INDEPENDENT_SOURCES = {'reviewer_file', 'reviewer_test', 'reviewer_inspection'}
 EXECUTOR_SOURCES = {'executor_report', 'executor_test', 'self_report'}
 EVIDENCE_SOURCES = INDEPENDENT_SOURCES | EXECUTOR_SOURCES

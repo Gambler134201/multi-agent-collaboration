@@ -126,7 +126,7 @@ def project(task, review=None, *, review_error=''):
     source = _text(test.get('source'), 80) or ('recorded_test' if test else 'none')
     if code is not None:
         test_state = 'passed' if code == 0 else 'failed'
-        if source == 'workbuddy-native-tools' and test.get('verified') is not True and code == 0:
+        if source in ('workbuddy-native-tools', 'zcode-mcp-command') and test.get('verified') is not True and code == 0:
             test_state = 'unknown'
     elif not task.get('test_command') and not test:
         test_state = 'not_requested'
