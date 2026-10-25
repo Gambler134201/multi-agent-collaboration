@@ -16,7 +16,7 @@ try {
     if ($panelAddress.Scheme -ne 'http' -or $panelAddress.Host -ne '127.0.0.1') {
         throw '面板地址异常，请检查本地服务配置。'
     }
-    $panelState = Invoke-RestMethod -Uri ($panelAddress.AbsoluteUri.TrimEnd('/') + '/api/state') -NoProxy -TimeoutSec 3
+    $panelState = Invoke-RestMethod -Uri ($panelAddress.AbsoluteUri.TrimEnd('/') + '/api/state') -NoProxy -TimeoutSec 8
     if ($panelState.workspace -ne $PSScriptRoot) {
         throw '当前端口上的服务不是这个模型工作台。'
     }

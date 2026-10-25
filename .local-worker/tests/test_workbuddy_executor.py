@@ -31,6 +31,9 @@ for line in sys.stdin:
         r = {'sessionId': 'test-session', 'models': {'availableModels': [{'modelId': 'glm-test', 'name': 'Test'}]}}
     elif method == 'session/set_config_option':
         r = {'configOptions': [{'id': 'model', 'currentValue': 'other' if scenario == 'wrong_model' else 'glm-test'}]}
+        if scenario == 'thinking':
+            r['configOptions'].append({'id':'thought_level','currentValue':q['params']['value'] if q['params']['configId']=='thought_level' else 'low',
+                                      'options':[{'value':'low','name':'Low'},{'value':'max','name':'Max'}]})
     elif method == 'session/prompt':
         if scenario == 'auth_required':
             r = {'stopReason': 'refusal', '_meta': {'codebuddy.ai/errorMessage': json.dumps({
@@ -77,6 +80,13 @@ class WorkBuddyExecutorTests(unittest.TestCase):
         info = wb.availability(self.root)
         self.assertFalse(info['ready'])
         self.assertFalse(info['installed'])
+
+    def test_thinking_is_confirmed_after_final_model_before_prompt(self):
+        c=self.client('thinking');c.native_reasoning={'value':'max','config_id':'thought_level'}
+        self.assertEqual(c.chat('glm-test','test',PERMITTED)['status'],'completed')
+        requests=self.requests();steps=[(q['method'],q['params'].get('configId'),q['params'].get('value')) for q in requests]
+        self.assertEqual(steps[-3:],[('session/set_config_option','model','glm-test'),
+                                    ('session/set_config_option','thought_level','max'),('session/prompt',None,None)])
 
     def test_explicit_invalid_install_does_not_fall_back(self):
         with patch.dict(os.environ, {wb.HOME_ENV: str(self.root)}):

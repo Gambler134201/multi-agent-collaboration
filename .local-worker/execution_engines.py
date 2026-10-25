@@ -1,19 +1,21 @@
 """Execution-agent selection, independent of provider/model routing."""
 from copy import deepcopy
 
-AGENTS = ('dsh', 'pi', 'workbuddy', 'zcode')
+AGENTS = ('dsh', 'pi', 'workbuddy', 'zcode', 'opencode', 'commandcode')
 ENGINES = (*AGENTS, 'direct', 'aider')
 DEFAULT = 'dsh'
 # Explicit form value meaning "omit the override and let the selected model (then
 # the global default) decide".  It is accepted as the absence of an override, not
 # as an execution engine.
 TASK_DEFAULT = 'model_default'
-LABELS = {'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy', 'zcode': 'ZCode', 'direct': '直接调用', 'aider': 'Aider'}
+LABELS = {'zcode': 'ZCode', 'commandcode': 'CommandCode', 'opencode': 'OpenCode', 'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy', 'direct': '直接调用', 'aider': 'Aider'}
 
 # Each adapter declares its own controls. Model connection forms never interpret
 # another adapter's configuration. The legacy DSH storage key stays compatible
 # with existing task/session/evidence identities.
 CONFIGURATION = {
+    'commandcode': {'description': '官方 Command Code CLI；限定文件读写，不开放终端/子代理/续接；普通DeepSeek占用原生套餐额度。', 'model_fields': []},
+    'opencode': {'description': '原生 OpenCode ACP；限定文件读写，不开放终端、子代理、续接或 API 转发。', 'model_fields': []},
     'zcode': {'description': 'ZCode 原生登录账户；指定模型与思考强度，文件/搜索/读图/公开网页/终端工具，支持带交接的新会话续接。无子代理和原会话直接复用。', 'model_fields': []},
     'dsh': {'description': '按模型选择 DeepSeek Harness 的运行预设；更改后用于新的 DSH 会话。已有会话需要保持原配置。',
             'model_fields': [{'key': 'agent_preset', 'label': '运行预设', 'type': 'select',
@@ -121,6 +123,12 @@ def session_fields(task):
 
 
 def availability(engine):
+    if engine == 'commandcode':
+        import commandcode_worker
+        return commandcode_worker.availability()
+    if engine == 'opencode':
+        import opencode_worker
+        return opencode_worker.availability()
     if engine == 'zcode':
         import zcode_worker
         return zcode_worker.availability()

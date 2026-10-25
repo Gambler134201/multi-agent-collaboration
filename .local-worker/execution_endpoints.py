@@ -9,7 +9,7 @@ from pathlib import Path
 import execution_engines
 import model_registry as registry
 
-IDS = ('pi', 'dsh', 'workbuddy', 'zcode')
+IDS = ('pi', 'dsh', 'workbuddy', 'zcode', 'opencode', 'commandcode')
 LABELS = {**execution_engines.LABELS, 'workbuddy': 'WorkBuddy'}
 CONFIG_NAME = 'execution-endpoints.json'
 PRESET_FIELDS = ('preferred_tasks', 'capability_notes', 'cost_preference', 'max_task_complexity')
@@ -87,12 +87,49 @@ def gate(engine, model, settings, *, controls=None, automatic=False):
     if row and not row['enabled']:
         raise ValueError(LABELS[key] + ' 执行端已禁用；不会切换到其他执行端')
     execution_engines.validate_model(key, model)
-    if automatic and row and row['current_model'] and model.get('id') != row['current_model']:
+    import routing_priority
+    ordered = routing_priority.snapshot()
+    in_order = ordered['readable'] and ordered['enabled'] and routing_priority.rank(model.get('id'), ordered) is not None
+    if automatic and row and row['current_model'] and model.get('id') != row['current_model'] and not in_order:
         raise ValueError(LABELS[key] + ' 当前模型为 ' + row['current_model'] + '；此模型未选作该执行端的当前模型')
     return key
 
 
 def update(endpoint, body, settings):
+    if isinstance(body,dict) and set(body)=={'model_picker'}:
+        import model_picker
+        op=body['model_picker']
+        if not isinstance(op,dict):raise ValueError('模型选择参数无效')
+        action=op.get('action')
+        if action=='catalog' and set(op)=={'action'}:
+            return {'ok':True,'catalog':model_picker.public(model_picker.catalog(endpoint,settings)),'model_called':False}
+        if action=='refresh' and set(op)=={'action','source_id'}:
+            return model_picker.refresh(endpoint,op['source_id'],settings)
+        if action=='details' and set(op)=={'action','choice_id'}:
+            return model_picker.details(endpoint,op['choice_id'],settings)
+        if action=='select' and set(op)=={'action','selection'}:
+            return model_picker.select(endpoint,op['selection'],settings)
+        raise ValueError('模型选择操作无效')
+    if endpoint in ('workbuddy','zcode','opencode','commandcode') and isinstance(body,dict):
+        import native_quota
+        if set(body)=={'quota_sync'}:
+            return native_quota.save(endpoint,body['quota_sync'])
+        if body in ({'refresh_quota':True},{'refresh_quota':'auto'}):
+            current=snapshot()['endpoints'][endpoint]['current_model']
+            model=registry.get_model(current,require_enabled=False) if current else None
+            return native_quota.refresh(endpoint,model,automatic=body['refresh_quota']=='auto')
+        if body=={'connect_quota':True}:
+            return native_quota.connect(endpoint)
+    if endpoint == 'commandcode' and isinstance(body, dict) and set(body) == {'native_setup'}:
+        import commandcode_worker
+        return commandcode_worker.configure(body['native_setup'])
+    if endpoint == 'commandcode' and isinstance(body, dict) and set(body) == {'access_mode'}:
+        raise ValueError('CommandCode 仅支持明确文件范围，不开放完全访问')
+    if endpoint == 'opencode' and isinstance(body, dict) and set(body) == {'native_setup'}:
+        import opencode_worker
+        return opencode_worker.configure(body['native_setup'])
+    if endpoint == 'opencode' and isinstance(body, dict) and set(body) == {'access_mode'}:
+        raise ValueError('OpenCode 初始接入只开放明确文件范围，不支持完全访问')
     if endpoint == 'zcode' and isinstance(body, dict):
         import zcode_worker
         if set(body) == {'access_mode'}:
@@ -192,6 +229,7 @@ def public_rows(models, settings, agents=None):
                 info['access_mode'] = endpoint_access.saved(key)
             except ValueError as exc:
                 info.update(access_mode=None, message=str(exc))
+        import native_quota
         rows.append({'id': key, 'name': LABELS[key], **pref, 'models': group,
                      'preset': pref.get('preset'),
                      'model': display, 'runtime': info, 'ready': bool(info.get('ready')),
@@ -201,6 +239,7 @@ def public_rows(models, settings, agents=None):
                                          '当前模型已停用，请启用或重新选择' if selected and not selected.get('enabled', True) else ''),
                      'billing_source': key+'-native-account' if key in ('workbuddy', 'zcode') else 'model-provider',
                      'balance': None,
+                     'quota':native_quota.view(key,display),
                      'message': info.get('message', '')})
     return {'rows': rows, 'unassigned_models': [m for m in models if m['id'] not in assigned],
             'readable': controls['readable'], 'error': controls['error']}

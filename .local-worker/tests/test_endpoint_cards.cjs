@@ -13,7 +13,7 @@ const directory=path.resolve(__dirname,'../panel');
         api_base:'https://api.deepseek.com',default_agent:'dsh',billing:{pricing:{period:'unknown',label:'fixture'},
           balance:{status:'ready',balance_infos:[{currency:'CNY',total_balance:'12.33'}]}}};
       const agents={pi:{name:'Pi Agent',ready:true,access_mode:'full',configuration:{model_fields:[]}},
-        dsh:{name:'DeepSeek Harness',ready:true,access_mode:'full',configuration:{model_fields:[]}}};
+        dsh:{name:'DeepSeek Harness',ready:true,access_mode:'full',configuration:{model_fields:[]}},opencode:{name:'OpenCode',ready:true,access_mode:'project',configuration:{model_fields:[]}},commandcode:{name:'CommandCode',ready:true,access_mode:'project',configuration:{model_fields:[]}}};
       const zcode={...model,id:'zcode-fixture',name:'ZCode · GLM-5.3-Flash',provider:'zcode',model:'account:zai-start-plan/GLM-5.3-Flash',default_agent:'zcode',native_selection:{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash',options:{reasoningLevel:'max'}}};
       agents.zcode={name:'ZCode',ready:true,version:'3.16.3',access_mode:'project',configuration:{model_fields:[]},
         configuration_values:{home:'C:\\zcode-fixture',port:19765,auto_connect:false},connection_state:'connected',native_catalog:{models:[{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash',reasoning:['low','high','max']}]},
@@ -21,16 +21,22 @@ const directory=path.resolve(__dirname,'../panel');
       const fixture={models:[model,paid,zcode],default_model:'home',tasks:[],view:{mode:'project',project:'C:\\fixture'},
         execution_agents:agents,workflow:{enabled:true,execution_agent:'pi',model_scope:'all',paid_allowed:true,
           enforce_paid_budget:false,enforce_model_call_limit:false,daily:{}},
+        routing_priority:{enabled:true,readable:true,slots:[
+          {label:'OpenCode免费',model_id:'free'}, {label:'CommandCode免费',model_id:null,unavailable_reason:'未提供'},
+          {label:'WorkBuddy积分',model_id:'wb'}, {label:'OpenCode Go',model_id:'go'}, {label:'CommandCode普通',model_id:'cmd'}]},
         codex_usage:{status:'unavailable',buckets:[]},stages:{stats:{},recovery:[]},
         execution_endpoints:{readable:true,rows:[
           {id:'pi',name:'Pi Agent',enabled:true,ready:true,model,models:[model],runtime:agents.pi},
           {id:'dsh',name:'DeepSeek Harness',enabled:true,ready:true,model:paid,models:[paid],runtime:agents.dsh},
           {id:'workbuddy',name:'WorkBuddy',enabled:false,ready:false,models:[],runtime:{}},
+          {id:'opencode',name:'OpenCode',enabled:true,ready:true,models:[],runtime:agents.opencode},
+          {id:'commandcode',name:'CommandCode',enabled:true,ready:true,models:[],runtime:agents.commandcode},
           {id:'zcode',name:'ZCode',enabled:true,ready:true,model:zcode,models:[zcode],runtime:agents.zcode}]}};
+      for(const row of fixture.execution_endpoints.rows){if(['workbuddy','zcode','opencode','commandcode'].includes(row.id))row.quota={status:'never',capability:'native',can_refresh:true,source_label:row.name+' 账户',source_url:'',sync:{enabled:false,interval_seconds:180,port:19766,model_id:'',provider:'account:zai-start-plan'},limits:[]};}
       page.on('pageerror',error=>errors.push(error.message));
       await page.route('http://modeldesk.invalid/**',async route=>{
         const request=route.request(),pathname=new URL(request.url()).pathname;
-        if(['/','/app.js','/style.css'].includes(pathname)){
+        if(pathname==='/'||(/^\/[a-z0-9-]+\.(js|css)$/.test(pathname)&&fs.existsSync(path.join(directory,pathname.slice(1))))){
           const name=pathname==='/'?'index.html':pathname.slice(1);
           return route.fulfill({body:fs.readFileSync(path.join(directory,name)),contentType:
             name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html'});
@@ -43,7 +49,7 @@ const directory=path.resolve(__dirname,'../panel');
           if(pathname==='/api/workflow'&&request.postDataJSON().endpoint_settings){
             const block=request.postDataJSON().endpoint_settings;
             const row=fixture.execution_endpoints.rows.find(e=>e.id===block.id);
-            Object.assign(row,block.values);data={ok:true};if(block.values.access_mode)row.runtime.access_mode=block.values.access_mode;
+            Object.assign(row,block.values);data={ok:true};if(block.values.quota_sync)Object.assign(row.quota.sync,block.values.quota_sync);if(block.values.refresh_quota){Object.assign(row.quota,{status:'ready',fetched_at:Date.now()/1000,last_attempt_at:Date.now()/1000,limits:[{label:'测试窗口',unit:'%',remaining:55,total:100,remaining_percent:55}]});}if(block.values.access_mode)row.runtime.access_mode=block.values.access_mode;
             if(block.values.native_setup)Object.assign(row.runtime.configuration_values,block.values.native_setup);
             if(block.values.native_selection)row.model.native_selection.options.reasoningLevel=block.values.native_selection.reasoning;
             if(block.values.native_model){
@@ -56,13 +62,37 @@ const directory=path.resolve(__dirname,'../panel');
       });
       await page.goto(`http://modeldesk.invalid/?host=${host}&project=C%3A%5Cfixture`);
       await page.locator('.endpoint-card').first().waitFor();
-      assert.equal(await page.locator('.endpoint-card').count(),4);
+      assert.equal(await page.locator('.endpoint-card').count(),6);
+      assert.match(await page.locator('#routing-priority-summary').textContent(),/OpenCode免费.*CommandCode免费.*跳过.*WorkBuddy积分.*OpenCode Go.*CommandCode普通/);
       assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/ZCode 原生额度/);
-      assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/42 token/);
-      assert.doesNotMatch(await page.locator('[data-endpoint-id="zcode"]').textContent(),/999/);
+      assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/尚未同步/);
       assert.equal(await page.locator('#model-agent-entry').isVisible(),false);
       assert.match(await page.locator('[data-endpoint-id="dsh"]').textContent(),/12\.33/);
       assert.match(await page.locator('[data-endpoint-id="workbuddy"]').textContent(),/未同步/);
+      assert.match(await page.locator('[data-endpoint-id="opencode"]').textContent(),/OpenCode/);
+      await page.locator('[data-endpoint-expand="opencode"]').click();
+      await page.locator('[data-endpoint-tab="models"]').click();
+      assert.match(await page.locator('#endpoint-connections').textContent(),/原生客户端/);
+      assert.equal(writes.some(w=>w.body.endpoint_settings?.values.refresh_quota),false,'No quota request on render');
+      await page.locator('[data-quota-auto="opencode"]').check();
+      await page.waitForFunction(()=>document.querySelector('[data-quota-auto="opencode"]')?.checked===true);
+      await page.waitForTimeout(200);
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.values.quota_sync?.enabled===true));
+      await page.locator('[data-quota-interval="opencode"]').selectOption('300');
+      await page.waitForTimeout(200);
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.values.quota_sync?.interval_seconds===300));
+      assert.equal(fixture.workflow.enabled,true);
+      await page.locator('#endpoint-connections [data-quota-refresh="opencode"]').click();
+      await page.waitForTimeout(200);
+      assert.match(await page.locator('#endpoint-connections').textContent(),/55%/);
+      const beforeHidden=writes.filter(w=>w.body.endpoint_settings?.values.refresh_quota).length;
+      await page.evaluate(async()=>{Object.defineProperty(document,'hidden',{get:()=>true,configurable:true});Object.defineProperty(document,'visibilityState',{get:()=> 'hidden',configurable:true});state.execution_endpoints.rows.find(r=>r.id==='opencode').quota.last_attempt_at=0;await ModelDeskQuotaController.maybeSync();});
+      assert.equal(writes.filter(w=>w.body.endpoint_settings?.values.refresh_quota).length,beforeHidden,'Hidden pages must not query accounts');
+      await page.evaluate(()=>{Object.defineProperty(document,'hidden',{get:()=>false,configurable:true});Object.defineProperty(document,'visibilityState',{get:()=> 'visible',configurable:true});});
+
+
+      assert.equal(await page.locator('[data-access-endpoint="opencode"]').count(),0);
+      await page.locator('#endpoint-dialog .close-dialog').click();
       const height=(await page.locator('[data-endpoint-id="pi"]').boundingBox()).height;
       await page.locator('[data-endpoint-expand="pi"]').click();
       assert.equal(await page.locator('#endpoint-preset-panel').isVisible(),true);
@@ -168,9 +198,9 @@ const directory=path.resolve(__dirname,'../panel');
       await page.waitForTimeout(100);
       assert.ok(writes.some(w=>w.body.endpoint_settings?.id==='zcode'&&w.body.endpoint_settings.values.native_setup?.port===20000));
       assert.ok(writes.some(w=>w.body.endpoint_settings?.values.native_setup?.auto_connect===true));
-      await page.locator('#endpoint-connections [data-zcode-usage]').click();
+      await page.locator('#endpoint-connections [data-quota-refresh="zcode"]').click();
       await page.waitForTimeout(100);
-      assert.ok(writes.some(w=>w.body.endpoint_settings?.values.refresh_native_usage===true));
+      assert.ok(writes.some(w=>w.body.endpoint_settings?.values.refresh_quota===true));
       await page.locator('#endpoint-dialog > .endpoint-modal > .dialog-heading .close-dialog').click();
       await page.evaluate(()=>openTask({id:'zcode-finished',title:'fixture',engine:'zcode',kind:'edit',project:'C:\\fixture',files:['a.py'],model_id:'zcode-fixture'}));
       assert.match(await page.locator('#task-session-hint').textContent(),/带交接的新 ZCode 会话/);

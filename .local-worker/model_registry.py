@@ -336,6 +336,11 @@ def upsert_model(body, model_id=None):
                'thinking_level': thinking_level, 'thinking_info': thinking_info,
                'model_version': str(body.get('model_version', previous.get('model_version', '') if previous else '')).strip()[:120],
                'subagent': subagent_block}
+        # A key/name-only edit must retain the native model and thought-level
+        # selection. Changing its channel/model/Agent invalidates that metadata.
+        if previous and all(row.get(k)==previous.get(k) for k in ('provider','api_base','model','default_agent')):
+            for key in ('native_model_id','native_reasoning','picker_source'):
+                if key in previous:row[key]=previous[key]
         data["models"] = [row if m["id"] == model_id else m for m in data["models"]] if previous else data["models"] + [row]
         if body.get("make_default"):
             if not row["enabled"]:

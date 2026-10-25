@@ -333,6 +333,7 @@ def run_task(run, state, model, *, client_factory=None):
         client = factory(info, project, config['profile'], model['model'], **client_args)
         client.cancel_check = cancel
         connected = client.connect()
+        client.native_reasoning=model.get('native_reasoning')
         native['permission_mode'] = connected.get('permission_mode')
         registry.patch_task(run, workbuddy_session_id=connected['session_id'], workbuddy=dict(native), phase='WorkBuddy 正在执行')
         tracker.mark('prepare', 'completed')

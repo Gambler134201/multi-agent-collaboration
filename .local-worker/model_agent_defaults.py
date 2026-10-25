@@ -15,9 +15,9 @@ from copy import deepcopy
 
 FIELD = 'default_agent'
 FOLLOW_GLOBAL = 'follow_global'
-AGENT_VALUES = ('dsh', 'pi', 'workbuddy', 'zcode')
+AGENT_VALUES = ('dsh', 'pi', 'workbuddy', 'zcode', 'opencode', 'commandcode')
 VALUES = (FOLLOW_GLOBAL, *AGENT_VALUES)
-LABELS = {FOLLOW_GLOBAL: '跟随全局默认', 'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy', 'zcode': 'ZCode'}
+LABELS = {'zcode': 'ZCode', 'commandcode': 'CommandCode', 'opencode': 'OpenCode', FOLLOW_GLOBAL: '跟随全局默认', 'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy'}
 SOURCE_LABELS = {'explicit': '本次显式指定', 'model': '模型指定', 'global': '跟随全局默认'}
 INVALID_MESSAGE = ('模型默认执行 Agent 无效；请选择“跟随全局默认 / DeepSeek Harness / Pi Agent”，'
                    '不会自动改用其他 Agent')

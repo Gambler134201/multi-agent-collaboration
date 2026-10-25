@@ -798,6 +798,8 @@ def safe_error(exc, key=""):
 
 def probe_model(model_id):
     model = registry.get_model(model_id, require_enabled=False)
+    if model.get('default_agent') in ('opencode', 'commandcode'):
+        raise ValueError('该模型使用原生客户端；请派发只读任务验证，不使用 HTTP 生成测试')
     if model.get('provider') in ('workbuddy', 'zcode'):
         raise ValueError('WorkBuddy 不使用 API 连接测试；请派发明确授权的原生账户测试任务')
     start = time.monotonic()
@@ -960,6 +962,10 @@ def execute_task(task_id):
             command = [str(PYTHON), str(HERE / "dsh_worker.py"), "--run-id", task_id]
         elif state.get("engine") == "pi":
             command = [str(PYTHON), str(HERE / "pi_worker.py"), "--run-id", task_id]
+        elif state.get('engine') == 'commandcode':
+            command = [str(PYTHON), str(HERE / 'commandcode_worker.py'), '--run-id', task_id]
+        elif state.get('engine') == 'opencode':
+            command = [str(PYTHON), str(HERE / 'opencode_worker.py'), '--run-id', task_id]
         elif state.get('engine') == 'workbuddy':
             command = [str(PYTHON), str(HERE / 'workbuddy_worker.py'), '--run-id', task_id]
         elif state.get('engine') == 'zcode':
@@ -1255,11 +1261,18 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
                               else workbuddy_native_tools.access_mode())
         if native_tool_mode == workbuddy_native_tools.LEGACY and body.get('test_command'):
             raise ValueError('旧 WorkBuddy 任务的整改不能新增终端权限')
+    if engine == 'commandcode':
+        import commandcode_worker
+        commandcode_worker.validate_task(body, settings, model)
+    if engine == 'opencode':
+        import opencode_worker
+        opencode_worker.validate_task(body, settings, model)
     thinking_config.validate(model)
     # A stale failed connection check must not permanently exclude a capable
     # local model: recheck reachability read-only (no inference) before the real
     # dispatch.  Model/paid/complexity/identity gates above stay authoritative.
-    connectivity = connectivity_gate(model)
+    connectivity = ({'checked': False, 'blocked': False, 'message': '原生客户端账户，HTTP探测不适用', 'verdict': None, 'check': None}
+                    if engine in ('opencode', 'commandcode') else connectivity_gate(model))
     if connectivity['blocked']:
         raise ValueError(connectivity['message'])
     if engine == 'aider' and model.get('thinking_level', 'default') != 'default':
@@ -1533,7 +1546,7 @@ def cancel_task(task_id, reason="", actor="main"):
         return {'ok': True, 'cancellation_pending': state['status'] == 'running',
                 'cancel_record': registry.read_task(run).get('cancel_record')}
     if process and process.poll() is None:
-        if state.get("engine") in {"dsh", "pi"}:
+        if state.get("engine") in {"dsh", "pi", "opencode", "commandcode"}:
             # Let acpx send ACP cancellation and flush session persistence first.
             try:
                 process.wait(timeout=8)
@@ -2240,6 +2253,7 @@ class Handler(BaseHTTPRequestHandler):
                                       "workspace": str(HERE.parent), "execution": "任务按顺序执行", "agent": execution_engines.public_selection(settings)[1],
                                       "execution_agents": agent_rows,
                                       "execution_endpoints": endpoint_rows,
+                                      'routing_priority': __import__('routing_priority').snapshot(),
                                       'execution_activity':execution_activity(),
                                       'workflow': {**settings, 'daily': public_daily_cost(settings)}, 'codex_usage': codex_usage.usage_state(),
                                       'host_account': host_balance.state(),
@@ -2358,13 +2372,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"task": None, "transient": True,
                                            "error": "任务记录暂时不可读，请重试"}, 503)
                 return self.send_json({"task": public_task_cost(row), "prompt": prompt.read_text(encoding="utf-8") if prompt.exists() else ""})
-            assets = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
+            assets = {"/routing-priority-view.js":"routing-priority-view.js","/routing-priority-controller.js":"routing-priority-controller.js","/routing-priority.css":"routing-priority.css","/model-picker-view.js":"model-picker-view.js","/model-picker-controller.js":"model-picker-controller.js","/model-picker.css":"model-picker.css","/native-quota.js":"native-quota.js","/quota-controller.js":"quota-controller.js","/native-quota.css":"native-quota.css","/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
                       '/project-map.js': 'project-map.js', '/project-map.css': 'project-map.css',
                       '/execution-result.js': 'execution-result.js', '/execution-result.css': 'execution-result.css'}
             if path not in assets:
                 return self.send_json({"error": "页面不存在"}, 404)
             raw = (WEB / assets[path]).read_bytes()
-            mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css",
+            mime = {"/routing-priority-view.js":"text/javascript","/routing-priority-controller.js":"text/javascript","/routing-priority.css":"text/css","/model-picker-view.js":"text/javascript","/model-picker-controller.js":"text/javascript","/model-picker.css":"text/css","/native-quota.js":"text/javascript","/quota-controller.js":"text/javascript","/native-quota.css":"text/css","/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css",
                     '/project-map.js': 'text/javascript', '/project-map.css': 'text/css',
                     '/execution-result.js': 'text/javascript', '/execution-result.css': 'text/css'}[path]
             self.send_response(200)
@@ -2452,8 +2466,11 @@ class Handler(BaseHTTPRequestHandler):
                     if set(body) != {'endpoint_settings'} or not isinstance(block, dict) or set(block) != {'id', 'values'}:
                         raise ValueError('执行端设置需要独立保存，不能混入范围、预算或授权')
                     return self.send_json(execution_endpoints.update(block['id'], block['values'], workflow_settings.snapshot()))
+                if isinstance(body, dict) and set(body) == {'routing_priority'}:
+                    import routing_priority
+                    return self.send_json(routing_priority.save(body['routing_priority']))
                 return self.send_json(workflow_settings.save_settings(body))
-            endpoint_match = re.fullmatch(r'/api/execution-endpoints/(pi|dsh|workbuddy|zcode)', path)
+            endpoint_match = re.fullmatch(r'/api/execution-endpoints/(pi|dsh|workbuddy|zcode|opencode|commandcode)', path)
             if endpoint_match:
                 import execution_endpoints
                 return self.send_json(execution_endpoints.update(endpoint_match.group(1), body, workflow_settings.snapshot()))
@@ -2555,7 +2572,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": safe_error(exc)}, 400)
 
 
-WORKER_SCRIPTS = ("run_worker.py", "chat_worker.py", "dsh_worker.py", "pi_worker.py", "workbuddy_worker.py", "zcode_worker.py")
+WORKER_SCRIPTS = ("run_worker.py", "chat_worker.py", "dsh_worker.py", "pi_worker.py", "workbuddy_worker.py", "zcode_worker.py", "opencode_worker.py", "commandcode_worker.py")
 # A real worker process always starts *before* the record's ``started_at`` is
 # written, so a process created later than the record cannot be that worker
 # (a reused PID).  The tolerance only absorbs clock jitter; a slow startup

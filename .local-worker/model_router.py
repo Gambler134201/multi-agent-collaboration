@@ -481,11 +481,17 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                                        or not 1 <= request_target <= 131072):
         raise ValueError('单请求输出额度需要是 1 到 131072 的整数')
     classification = failure.classify_history(history)
+    import routing_priority
+    priority = routing_priority.snapshot() if mode == 'auto' else {'enabled': False, 'slots': [], 'readable': True}
+    if not priority['readable']:
+        raise ValueError(priority['error'])
     candidates, excluded = [], []
     for model in models:
         if mode == 'manual' and model['id'] != body.get('model_id'):
             continue
         try:
+            if mode == 'auto' and priority['enabled'] and routing_priority.rank(model['id'], priority) is None:
+                raise ValueError('不在用户指定的模型使用顺序内')
             if not model_scope.matches(scope, is_paid(model)):
                 # Explicitly refused, never replaced by a model of the other
                 # class; the reason is surfaced verbatim when no candidate is
@@ -510,9 +516,16 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                                      + (('：' + detail) if detail else ''))
             elif mode == 'auto' and agent not in execution_engines.AGENTS:
                 raise ValueError('自动协作请使用 DSH 或 Pi 执行器')
+            if agent == 'commandcode':
+                import commandcode_worker
+                commandcode_worker.validate_task(body, settings, model)
+            if agent == 'opencode':
+                import opencode_worker
+                opencode_worker.validate_task(body, settings, model)
             connectivity = None
             if mode == 'auto':
-                connectivity = connectivity_verdict(model)
+                connectivity = ({'blocked': False, 'recoverable': False} if agent in ('opencode', 'commandcode')
+                                else connectivity_verdict(model))
                 if connectivity['blocked']:
                     raise ValueError(connectivity['reason'])
                 if req['eligible_model_ids'] is not None and model['id'] not in req['eligible_model_ids']:
@@ -543,11 +556,11 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
                                 % (est_output, model_output))
             rates = rates_for(model, moment)
             cap = None
-            native = model.get('provider') in ('workbuddy', 'zcode')
-            if native:
+            native = model.get('provider') in ('workbuddy', 'zcode') or agent in ('opencode', 'commandcode')
+            if model.get('provider') in ('workbuddy', 'zcode'):
                 import importlib
                 importlib.import_module(model['provider']+'_worker').validate_task(body, settings)
-                if mode == 'auto' and req['eligible_model_ids'] is None:
+                if mode == 'auto' and req['eligible_model_ids'] is None and not priority['enabled']:
                     raise ValueError('原生账户额度费用未知；自动路由需主脑明确列入 eligible_model_ids，或手动选择')
                 warnings.append('原生账户用量和实际底层请求数未返回；成本未知，不按免费或最低价排序')
             if is_paid(model) and not native:
@@ -616,13 +629,15 @@ def choose(body, models, settings, history=(), daily_remaining=None, moment=None
     if not candidates:
         message = '；'.join(f"{row['model_name']}：{row['reason']}" for row in excluded) or '没有可用模型'
         raise ValueError('需要主脑重新拆分任务或人工调整：' + message)
-    candidates.sort(key=lambda row: (row['estimated_cost_cny'] is None, row['estimated_cost_cny'] or 0, is_paid(row['model']), {'economy': 0, 'balanced': 1, 'quality': 2}.get(row['model'].get('cost_preference'), 1), -len(row['matched_tags'])))
+    candidates.sort(key=lambda row: ((routing_priority.rank(row['model']['id'], priority) if priority['enabled'] else 0), row['estimated_cost_cny'] is None, row['estimated_cost_cny'] or 0, is_paid(row['model']), {'economy': 0, 'balanced': 1, 'quality': 2}.get(row['model'].get('cost_preference'), 1), -len(row['matched_tags'])))
     selected = candidates[0]
     model = selected['model']
+    if priority['enabled']:
+        selected['reason'] = '用户指定顺位 %s/%s；' % (routing_priority.rank(model['id'], priority) + 1, len(priority['slots'])) + selected['reason']
     observed = cost_observations(history, model['id'], req['category'])
     model_ceiling = model.get('max_output_tokens', 4096)
     goal = request_target if request_target is not None else est_output
-    return {'mode': mode, 'model_id': model['id'], 'reason': selected['reason'], 'requirements': req,
+    return {'priority': priority if priority['enabled'] else None, 'mode': mode, 'model_id': model['id'], 'reason': selected['reason'], 'requirements': req,
             'engine': selected['engine'], 'agent_source': selected['agent_source'],
             'agent_label': execution_engines.LABELS.get(selected['engine'], selected['engine']),
             'model_default_agent': model.get('default_agent', 'follow_global'),
