@@ -1,18 +1,33 @@
 {
   "project": "多agent协作",
   "license": "MIT",
-  "release_date": "2026-10-24",
-  "scope": "Git-tracked source files; excludes this manifest itself and ignored runtime data.",
+  "release_date": "2026-10-26",
+  "scope": "Git-tracked source blob bytes; excludes this manifest itself and ignored runtime data. Text hashes use Git normalization.",
   "files": [
     {
       "path": ".gitignore",
-      "sha256": "d183eeb218d94ebddc6fe8f344d208e211aafd17cb9bada5a7910c3f12b55365",
-      "bytes": 1374
+      "sha256": "3462d8a2445fa90cd4104cbf72da2e798ce3cda7364655d2e64f1f092d3b4557",
+      "bytes": 1720
     },
     {
       "path": ".local-worker/acceptance_profiles.json",
       "sha256": "a25b5c78df91f707a4d4fb64a4d8ab010bd97314e400401afb30391a45c6c128",
       "bytes": 20044
+    },
+    {
+      "path": ".local-worker/agent-runtime/commandcode-guard.mjs",
+      "sha256": "16097023c51d9d3db4a88f791ee20429f3a75014a50ca39e0951ea15b2376f22",
+      "bytes": 2443
+    },
+    {
+      "path": ".local-worker/agent-runtime/commandcode-models-loader.mjs",
+      "sha256": "2bf1e67f536379055575f21f4b294e34bdfd2b6ae76aac34423a2535459c2207",
+      "bytes": 1809
+    },
+    {
+      "path": ".local-worker/agent-runtime/commandcode-quota-loader.mjs",
+      "sha256": "257bc8a0a27900b35af0b0b042fc8c1559dc454ffa914039bdf68ecd4829e68b",
+      "bytes": 2903
     },
     {
       "path": ".local-worker/agent-runtime/endpoint-access.cjs",
@@ -95,6 +110,11 @@
       "bytes": 14137
     },
     {
+      "path": ".local-worker/agent-runtime/workbuddy-quota.mjs",
+      "sha256": "e84004f604b56d37e553089cadf1786a844367818f505e65910aa3e0ee36060a",
+      "bytes": 3841
+    },
+    {
       "path": ".local-worker/aider.yml",
       "sha256": "e3566b3a06430868d71e9287dfd6c6c520a3da027aabea01951d407ee131dc2f",
       "bytes": 4
@@ -106,8 +126,8 @@
     },
     {
       "path": ".local-worker/brain_gateway.py",
-      "sha256": "e212754f114dc3ef54bc6f5c7660bc38eb9274ace47bd8ba61ea787a887bb9a0",
-      "bytes": 43283
+      "sha256": "2e047cacd6abe57a9c61bd8b654de683b33802b75c13a9177c646a453cf9c94c",
+      "bytes": 44052
     },
     {
       "path": ".local-worker/brain_mcp_server.py",
@@ -136,8 +156,8 @@
     },
     {
       "path": ".local-worker/codex_mcp_server.py",
-      "sha256": "361df06576ad9015c4cf4c0e52e3d06b5a495864d65f58ffd4e6614678c4f1f3",
-      "bytes": 29457
+      "sha256": "a6ed99a18433b90495f5a910cf284c59711751e3c78b3c4dc23bce9394842478",
+      "bytes": 29478
     },
     {
       "path": ".local-worker/codex_usage.py",
@@ -148,6 +168,11 @@
       "path": ".local-worker/collaboration_status.py",
       "sha256": "5c3160b0c1166f67caed2efcbb08a2669b22ad5e3ce18051732f1cca6927371d",
       "bytes": 4023
+    },
+    {
+      "path": ".local-worker/commandcode_worker.py",
+      "sha256": "978e996a472eaba8a3b6126e47e3d2a70c0718dc633528fbbaac7b57512bdf42",
+      "bytes": 13696
     },
     {
       "path": ".local-worker/completion_host.py",
@@ -181,8 +206,8 @@
     },
     {
       "path": ".local-worker/dispatch_task.py",
-      "sha256": "1b04cf425a0a605f4f26a94066db01ec86ca6346cf1e73f530966b6a1d098afb",
-      "bytes": 18260
+      "sha256": "140127bee7e106afc19931028b2de905119a29a38b21691a95a57ba94ff51ca9",
+      "bytes": 18287
     },
     {
       "path": ".local-worker/dsh_brain_desktop.py",
@@ -216,13 +241,13 @@
     },
     {
       "path": ".local-worker/execution_endpoints.py",
-      "sha256": "6840044b79eaa2679710938bed9b4b07c5b6447d261d219a782352e61083f48d",
-      "bytes": 11467
+      "sha256": "eac7005d77a83cc341035f1fb99e657ed8f72df1f836b108eb457387804172c3",
+      "bytes": 14078
     },
     {
       "path": ".local-worker/execution_engines.py",
-      "sha256": "3e75af3048e1450b6000e77f985938d9724130ade5f7cdcead5059dcfa668f8e",
-      "bytes": 7002
+      "sha256": "04f6cef90689664bbd16bb5669d2d7edb8d014c1dd3122cee61a781184ac3e13",
+      "bytes": 7640
     },
     {
       "path": ".local-worker/execution_result.py",
@@ -266,8 +291,8 @@
     },
     {
       "path": ".local-worker/model_agent_defaults.py",
-      "sha256": "99eb6ab7ae3230b4b34992779d768b0bec04b02c09faed33caab22b03975c217",
-      "bytes": 5539
+      "sha256": "2f76c7c4b6d1e53d8fc726dd7b31054be07dbe12ac062c935e254f8be74daa3e",
+      "bytes": 5620
     },
     {
       "path": ".local-worker/model_capabilities.py",
@@ -275,14 +300,19 @@
       "bytes": 29609
     },
     {
+      "path": ".local-worker/model_picker.py",
+      "sha256": "93a81d163abbdf36e99110db4ea4a52e6d194ec214e184db88e02dd8c834b397",
+      "bytes": 22955
+    },
+    {
       "path": ".local-worker/model_registry.py",
-      "sha256": "f31534a6a825f3144bfef8126b3374b4bc26f9957fccd00ae2c3489a433efa62",
-      "bytes": 26805
+      "sha256": "366c45e9d1c6d7a6cce6b1ac5fdb554572a89c4943ab6a8552c93c10a5adc10f",
+      "bytes": 27216
     },
     {
       "path": ".local-worker/model_router.py",
-      "sha256": "1bf57654c516e578959ae5202b004798ea32133c10f4467329ab5c969580bf46",
-      "bytes": 38382
+      "sha256": "8069a72352b82df6e45b18950b98ca4cb070e0f494ef900acd9b678ba50a63b5",
+      "bytes": 39645
     },
     {
       "path": ".local-worker/model_scope.py",
@@ -290,9 +320,24 @@
       "bytes": 5234
     },
     {
+      "path": ".local-worker/native_models.py",
+      "sha256": "3a61c1580ea124c3855a07fddcf35c559eeccf5d894564db516b2a6e05875614",
+      "bytes": 10262
+    },
+    {
+      "path": ".local-worker/native_quota.py",
+      "sha256": "447786cd5dccb469ad4c6ca1768f2869b3ee183df5dfed248a35de2914ed0fa4",
+      "bytes": 16206
+    },
+    {
+      "path": ".local-worker/opencode_worker.py",
+      "sha256": "e5a27d7c4694bd4cf07911aff8caa79040cc6766497845ff879a49d876286b0b",
+      "bytes": 25947
+    },
+    {
       "path": ".local-worker/panel/app.js",
-      "sha256": "8d0dac1ff7ccdaef2a6d96943e3d6fc26927a9c544234be25930ba9c80abfbef",
-      "bytes": 179475
+      "sha256": "d63a940e0c619275b09604284223f9a882f42df8ef816d25a7e957d185e305b4",
+      "bytes": 181832
     },
     {
       "path": ".local-worker/panel/codex-bridge.js",
@@ -311,8 +356,33 @@
     },
     {
       "path": ".local-worker/panel/index.html",
-      "sha256": "7f6c9df5624d9a78ef5822f340a81202644ec4568753b97c42e4c0f6b9548b64",
-      "bytes": 35008
+      "sha256": "64bcf54e797d59597286f8e39f4c74dc30180ca30550dff0b1b5a64869b1cf47",
+      "bytes": 35440
+    },
+    {
+      "path": ".local-worker/panel/model-picker-controller.js",
+      "sha256": "81d26c40d29fcf7d852c56bf51d2d9e53c6526d5bc60cfe6ff8f0b369868a307",
+      "bytes": 8761
+    },
+    {
+      "path": ".local-worker/panel/model-picker-view.js",
+      "sha256": "c8963318accd6952f1d6394954f56e774f4af14f7bef19820b4193cfc41a0c1a",
+      "bytes": 24039
+    },
+    {
+      "path": ".local-worker/panel/model-picker.css",
+      "sha256": "0226a08f5d6b24841482e4aae424822ace143c07d75d90b1bfdd1f161a438893",
+      "bytes": 5594
+    },
+    {
+      "path": ".local-worker/panel/native-quota.css",
+      "sha256": "2f81e399416244878870e7735b85a6ed817db396049e51f8ef185823456c31f1",
+      "bytes": 4781
+    },
+    {
+      "path": ".local-worker/panel/native-quota.js",
+      "sha256": "0720bdbadfe83e60222220ddad19dd6666b0fffd614b2684320fff129143d5e1",
+      "bytes": 22292
     },
     {
       "path": ".local-worker/panel/project-map.css",
@@ -325,24 +395,49 @@
       "bytes": 39620
     },
     {
+      "path": ".local-worker/panel/quota-controller.js",
+      "sha256": "404f8a5a9bf5c7286d5bf693b209560091b0f2e1408fdc288007bfe2890a94b5",
+      "bytes": 5807
+    },
+    {
+      "path": ".local-worker/panel/routing-priority-controller.js",
+      "sha256": "589967fe30a17cadaed4cc7021a0d1ded4528ce29d48089f166503ce2527926d",
+      "bytes": 6963
+    },
+    {
+      "path": ".local-worker/panel/routing-priority-view.js",
+      "sha256": "bc841bb8e475ac0853aaf16bf7a9bffc40f13aa9fe9bb9238039642c694c0100",
+      "bytes": 13730
+    },
+    {
+      "path": ".local-worker/panel/routing-priority.css",
+      "sha256": "763d128b286e8597f4517a05370824b83b8671ba5970ab5f93fee8c760c94a60",
+      "bytes": 8968
+    },
+    {
       "path": ".local-worker/panel/style.css",
       "sha256": "5c1d86f51bfd092be7b8d5b1a37a49858af19f28e64909f222b5c5ecd0dfeb18",
       "bytes": 56501
     },
     {
       "path": ".local-worker/panel_server.py",
-      "sha256": "e13c738b88f92f031bbc1dde1a61c27205a3b8fbe6844d52a5ab425a959556da",
-      "bytes": 151041
+      "sha256": "96335d16aea570b00b8f3c055496ac68bb3dbd24834942eebbb4354865254700",
+      "bytes": 153166
     },
     {
       "path": ".local-worker/panel_service.py",
-      "sha256": "9c31c4b4d7c7ef2539fe1335ff634fec887a5445ca5a8110fe594139193a2d17",
+      "sha256": "054b441dccb36ef539691adb248c639adcb3db855b637c0a160fad51d53d41fc",
       "bytes": 3845
     },
     {
       "path": ".local-worker/pi_worker.py",
       "sha256": "f431316396e4175943b62d014dfcc38215534de3dc8e0458eab3ea27730bf004",
       "bytes": 11165
+    },
+    {
+      "path": ".local-worker/pick_project_folder.ps1",
+      "sha256": "a7ef9cf91489b4dc15e7173ce0820d6f53603899a6feacd61a8c82e8c277a709",
+      "bytes": 1045
     },
     {
       "path": ".local-worker/powershell_runtime.py",
@@ -393,6 +488,11 @@
       "path": ".local-worker/review_task.py",
       "sha256": "b814c81628d8ba0c2d1d6e804163bf391698f112ee1903206dbe22ad35610d08",
       "bytes": 10256
+    },
+    {
+      "path": ".local-worker/routing_priority.py",
+      "sha256": "5e457fc6c3b2ad0312bc305f137b52627554f2167bf356fbfd16f9c038264f27",
+      "bytes": 4809
     },
     {
       "path": ".local-worker/run_worker.py",
@@ -565,6 +665,11 @@
       "bytes": 4421
     },
     {
+      "path": ".local-worker/tests/test_commandcode_guard.mjs",
+      "sha256": "309638bfafcfadd63626407ce2279c14c43113efcb4a32e24fc5c4ba375b5149",
+      "bytes": 2009
+    },
+    {
       "path": ".local-worker/tests/test_completion_host.py",
       "sha256": "b31653e61f5f1eb68d01f6d075004d2d95ace7d34e87440b699f573ebedba750",
       "bytes": 5595
@@ -661,8 +766,8 @@
     },
     {
       "path": ".local-worker/tests/test_endpoint_cards.cjs",
-      "sha256": "0025e25c77b10819528a167002e696302b3fd3f88ca8cf58466b0c4d6abed788",
-      "bytes": 15775
+      "sha256": "26b0c2e6e2084efbe82d6d34981da97ba6987200f56e78bcb8d6350003572122",
+      "bytes": 19466
     },
     {
       "path": ".local-worker/tests/test_execution_endpoints.py",
@@ -725,6 +830,16 @@
       "bytes": 21285
     },
     {
+      "path": ".local-worker/tests/test_model_picker.py",
+      "sha256": "6ccdcaae719b13d4128ebc685d2e381fa3befd14cf0ee7c481cc8ddd562d8f0c",
+      "bytes": 15885
+    },
+    {
+      "path": ".local-worker/tests/test_model_picker_ui.cjs",
+      "sha256": "2c137712a2f3579f1e41ad90077796483b994a8c8242716a2f6553d1271d0628",
+      "bytes": 8973
+    },
+    {
       "path": ".local-worker/tests/test_model_scope.py",
       "sha256": "3d294306a1b33b8fab3c6b96810f0564d4ea8d0137ecac6364208aadac81d3b8",
       "bytes": 27376
@@ -735,9 +850,29 @@
       "bytes": 8602
     },
     {
+      "path": ".local-worker/tests/test_native_quota.py",
+      "sha256": "a03937cacc71b05c9730472989372e8efabf1e5af0b78f816744447cba051216",
+      "bytes": 5420
+    },
+    {
+      "path": ".local-worker/tests/test_native_quota_ui.cjs",
+      "sha256": "bc96ffe06c8acd32e895781d049221084346883dad1bfaa4c893b1bfe08a3683",
+      "bytes": 1970
+    },
+    {
+      "path": ".local-worker/tests/test_opencode_executor.py",
+      "sha256": "ac54c4c1d754de9788acf9ec27f15205d2f4aa5569064eb0b7c7adc36b7c2d51",
+      "bytes": 9705
+    },
+    {
       "path": ".local-worker/tests/test_opensource_bootstrap.py",
       "sha256": "df74c77b3324de8e27a1352532186b0588ff93c9f0e2e30f2c3c392e60812d20",
       "bytes": 17446
+    },
+    {
+      "path": ".local-worker/tests/test_ordered_native_routing.py",
+      "sha256": "6c9781d001e3e52d747585f587b9b47bf9f215eafb5910a1d3801c9787a9def5",
+      "bytes": 6785
     },
     {
       "path": ".local-worker/tests/test_panel.py",
@@ -783,6 +918,16 @@
       "path": ".local-worker/tests/test_presets.py",
       "sha256": "bbc6565680600829fa8bfe8e1243156bafdbaf8a5cb6498df2aa9872ce631eb4",
       "bytes": 2750
+    },
+    {
+      "path": ".local-worker/tests/test_priority_editor.py",
+      "sha256": "698623186dc397919354dafd584898700ac8e499776ad8f97c4a73e168108358",
+      "bytes": 4380
+    },
+    {
+      "path": ".local-worker/tests/test_priority_editor_ui.cjs",
+      "sha256": "505a1c4dce8deaf983aa01be24192cd62b7811acca386f570142f53a9948534d",
+      "bytes": 15048
     },
     {
       "path": ".local-worker/tests/test_project_architecture.py",
@@ -896,8 +1041,8 @@
     },
     {
       "path": ".local-worker/tests/test_workbuddy_executor.py",
-      "sha256": "600777e53785ad6d79840678c77129c72271c7414ad047a4fab656586cfb00cd",
-      "bytes": 16457
+      "sha256": "d3486619a9d8e170ba3c45b8dc32e9e7d48b03a10437d509b555e1da1e72fa3b",
+      "bytes": 17342
     },
     {
       "path": ".local-worker/tests/test_workbuddy_host_bridge.py",
@@ -971,8 +1116,8 @@
     },
     {
       "path": ".local-worker/workbuddy_executor.py",
-      "sha256": "9a01a4b2d3d4c91f10aadcd909c7656aec4555ee8e4995f16b56b51b32e5d6d8",
-      "bytes": 32991
+      "sha256": "68ebc60fd5a0260dd10aa625fd8221833449494cd64f3e992593db7770aa16ea",
+      "bytes": 33351
     },
     {
       "path": ".local-worker/workbuddy_host_bridge.py",
@@ -991,13 +1136,13 @@
     },
     {
       "path": ".local-worker/workbuddy_worker.py",
-      "sha256": "e656e3a82daf6e27dd8fbdcd6850ab32bfec06cfde42861e255c7dcea4ab27aa",
-      "bytes": 28687
+      "sha256": "1e403e04ae989440f3ca92ca01a974dd21076b2430e1105ee4e9e6ed66ff9cde",
+      "bytes": 28749
     },
     {
       "path": ".local-worker/workflow-guides/core.md",
-      "sha256": "92307901981c88b5326d96e4dc29f5b5d12f259d770a9995889fb4fec5e276a6",
-      "bytes": 7429
+      "sha256": "69ccff609ac676eb2f38aa1cdadb10b7217f46a7909d263954fec2df780e7c8a",
+      "bytes": 7372
     },
     {
       "path": ".local-worker/workflow-guides/delegation.md",
@@ -1006,8 +1151,8 @@
     },
     {
       "path": ".local-worker/workflow-guides/dispatch.md",
-      "sha256": "0d4907af38e5fde74c9004de8583c31b4cf0ee99572194be612c78ca50687340",
-      "bytes": 7757
+      "sha256": "ca5644aa7a1b5e884846efd1a27320f61c3fbe63f555d3bb29600499f1ea2dcf",
+      "bytes": 8900
     },
     {
       "path": ".local-worker/workflow-guides/efficiency.md",
@@ -1016,8 +1161,8 @@
     },
     {
       "path": ".local-worker/workflow-guides/limits.md",
-      "sha256": "d1a9b822de2fbdfeb7d858228deaf9bb9b10a47b44ed573645064ace7b0604da",
-      "bytes": 953
+      "sha256": "b52c9ebc14fca6f9b9c1df965515f0d53f255290dc8e6c6fa748163e91241f8d",
+      "bytes": 1292
     },
     {
       "path": ".local-worker/workflow-guides/opening.md",
@@ -1076,8 +1221,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "d9f2dee9ca136d62d098327d223c0a8b0dfbcb28321416fd1894e7d7754f8db3",
-      "bytes": 7093
+      "sha256": "68eed493a7ec53473631334ba4e57a499fa0c7d1b284539268cc6fd93189a882",
+      "bytes": 8847
     },
     {
       "path": "LICENSE",
@@ -1086,13 +1231,13 @@
     },
     {
       "path": "README.md",
-      "sha256": "3e79bd40cb257ef9a0d7465acdd4521f924a64b6dd1b4714130bb85a2349eab8",
-      "bytes": 12990
+      "sha256": "84dd8b6b0db90dd1a446688a136f48387817614419e18f6f88c014c1b3941a9f",
+      "bytes": 14358
     },
     {
       "path": "THIRD_PARTY.md",
-      "sha256": "e3517dd12eb758e89d4dd66fa7af33129278b9109cff93d41a56b5456101a95c",
-      "bytes": 1310
+      "sha256": "ad5aa1203b5491000e4732c12fcdc18fe82ec81df5cc1079795744656144492b",
+      "bytes": 1405
     },
     {
       "path": "docs/AGENT_INSTALL.md",
@@ -1100,9 +1245,14 @@
       "bytes": 12539
     },
     {
+      "path": "docs/COMMANDCODE_EXECUTOR.md",
+      "sha256": "7a3c3aa55079b82bcd2c6e9061e812fcd9ac3c8bc4dc46fac7a6aec4a9b88802",
+      "bytes": 3018
+    },
+    {
       "path": "docs/CROSS_HOST_FEATURES.md",
-      "sha256": "c3aed3deac77fa7b705236d4b79cc9169048a0fb962ece49850e0320565804eb",
-      "bytes": 13094
+      "sha256": "b41a9f4f6bf612a3a8e5f2b2808fd9847fb7009ad103604b1fdf7bd3c1bfbe33",
+      "bytes": 19094
     },
     {
       "path": "docs/DSH_BRAIN_PLUGIN.md",
@@ -1148,6 +1298,16 @@
       "path": "docs/MAIN_BRAIN_CORE.md",
       "sha256": "427328b1d00bcd2696ea66b6bca5121ebb3252ebf4f9fe4292f28e5f90912783",
       "bytes": 16140
+    },
+    {
+      "path": "docs/MODEL_SELECTION_AND_QUOTAS.md",
+      "sha256": "ee461853bb7f46379ee07a23cf0dd68bdbbdace0f1fbf4c9c3fc978e125ec599",
+      "bytes": 6962
+    },
+    {
+      "path": "docs/OPENCODE_EXECUTOR.md",
+      "sha256": "35209ea0cd52cab344c599d24514c7c4d19f6be33dfde03e21b16093548cc568",
+      "bytes": 4222
     },
     {
       "path": "docs/PROJECT_ARCHITECTURE.md",
@@ -1286,15 +1446,13 @@
     },
     {
       "path": "启动模型面板.ps1",
-      "sha256": "c76ce9583edc6c66ce004f806c956fd08971d531380391593fb63c906b5471a5",
+      "sha256": "38236a85acac6a638e29c2ef87c7b4949da315641734f64872cfd62cb2ff6a57",
       "bytes": 2992
     },
     {
       "path": "打开模型工作台.ps1",
-      "sha256": "c4d9785488bf5ed81037ec4f1fddd2eac089490dfa860cc782269948d1ce1184",
+      "sha256": "f0d418e75ddfac724be5f96181d21d5f23d14ecffb7251e18b193a2758e1222d",
       "bytes": 1658
     }
-  ],
-  "repository": "https://github.com/Gambler134201/multi-agent-collaboration",
-  "copyright": "Copyright (c) 2026 Gambler134201"
+  ]
 }

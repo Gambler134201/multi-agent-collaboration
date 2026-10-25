@@ -465,7 +465,7 @@ def _candidates(context, payload):
             'paid_allowed': paid_allowed,
             'dispatch_ready': bool(selectable and (not paid or paid_allowed) and not native_policy_error),
             'execution_capabilities': agent.get('capabilities'),
-            'billing_source': 'workbuddy-native-account' if model.get('provider') == 'workbuddy' else 'model-api',
+            'billing_source': engine + '-native-account' if engine in ('workbuddy', 'zcode', 'opencode', 'commandcode') else 'model-api',
             'authorization_note': native_policy_error or ('付费执行未开启；这是独立授权，不是范围或候选排除。'
                                    if paid and not paid_allowed else ''),
             'max_input_tokens': model.get('max_input_tokens'),
@@ -478,6 +478,15 @@ def _candidates(context, payload):
             'routing_preset': model.get('routing_preset'),
             'identity_state': 'declared',
         })
+    import routing_priority
+    priority = routing_priority.snapshot()
+    for row in rows:
+        row['priority_rank'] = routing_priority.rank(row['model_id'], priority) + 1 if priority['readable'] and priority['enabled'] and routing_priority.rank(row['model_id'], priority) is not None else None
+        if not priority['readable'] or priority['enabled'] and row['priority_rank'] is None:
+            row['dispatch_ready'] = False
+            row['authorization_note'] = priority.get('error') or '不在用户指定的自动模型顺序内；手动选择保持独立'
+    if priority['enabled']:
+        rows.sort(key=lambda row: row['priority_rank'] or 999)
     default_model = data.get('default_model')
     default_row = next((row for row in rows if row['model_id'] == default_model), None)
     in_scope_ids = [row['model_id'] for row in rows if row['scope_ok']]
@@ -497,7 +506,7 @@ def _candidates(context, payload):
                         % (default_model, default_row['selectable_reason'] or '状态未就绪'))
     else:
         default_note = '手动默认模型在范围内；省略 model_id 时仍使用该默认模型。'
-    return {'models': rows, 'default_model': default_model,
+    return {'routing_priority': priority, 'models': rows, 'default_model': default_model,
             'workflow': {key: settings.get(key) for key in
                          ('enabled', 'readable', 'model_scope', 'paid_allowed',
                           'enforce_paid_budget', 'enforce_model_call_limit', 'execution_agent')},
@@ -585,7 +594,7 @@ def _preview(context, payload):
         route = _choose_route(context, body)
     except ValueError as error:
         raise BrokerError(str(error)) from None
-    if route.get('engine') not in ('dsh', 'pi', 'workbuddy', 'zcode'):
+    if route.get('engine') not in ('dsh', 'pi', 'workbuddy', 'zcode', 'opencode', 'commandcode'):
         raise BrokerError('主脑派发需要 Agent 执行器，当前模型解析到 %s；不会静默回退'
                           % route.get('engine'))
     return {'preview': _public_route(route), 'project': context.project}
@@ -632,7 +641,7 @@ def _dispatch(context, payload):
     if title:
         body['title'] = title
     route = _choose_route(context, body)
-    if route.get('engine') not in ('dsh', 'pi', 'workbuddy', 'zcode'):
+    if route.get('engine') not in ('dsh', 'pi', 'workbuddy', 'zcode', 'opencode', 'commandcode'):
         raise BrokerError('主脑派发需要 Agent 执行器，当前模型解析到 %s；不会静默回退'
                           % route.get('engine'))
 

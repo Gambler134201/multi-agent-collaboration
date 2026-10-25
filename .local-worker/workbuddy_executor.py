@@ -487,6 +487,7 @@ class NativeChatClient:
                 if reported_mode != 'fullAccess' or not confirmed:
                     raise ProtocolError('WorkBuddy 未确认原生完全访问权限；未发送提示词')
         self.models = model_catalog(result)
+        self.config_options = result.get('configOptions') or []
         current = result.get('models', {}).get('currentModelId')
         # WorkBuddy's suggested picker list can omit an explicitly selected
         # built-in model. Require BOTH native current-model reports before
@@ -543,6 +544,11 @@ class NativeChatClient:
         options = selected.get('configOptions', [])
         if not any(isinstance(o, dict) and o.get('id') == 'model' and o.get('currentValue') == model_id for o in options):
             raise ProtocolError('WorkBuddy 未确认指定模型，未发送提示词')
+        # Changing the model may reset its thought level. Apply and confirm
+        # the requested native setting AFTER the final model confirmation.
+        self.config_options=options
+        import native_models
+        native_models.apply_control(self,getattr(self,'native_reasoning',None))
         answer = []
 
         def update(value):

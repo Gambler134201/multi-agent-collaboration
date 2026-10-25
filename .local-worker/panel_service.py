@@ -32,7 +32,7 @@ class NoRedirect(HTTPRedirectHandler):
 def workspace(base_url):
     request = build_opener(ProxyHandler({}), NoRedirect())
     try:
-        with request.open(base_url + '/api/state', timeout=2) as response:
+        with request.open(base_url + '/api/state', timeout=5) as response:
             data = json.loads(response.read(2 * 1024 * 1024).decode('utf-8'))
     except HTTPError as error:
         raise ValueError('端口返回异常 HTTP 状态；不会替换已有服务') from error

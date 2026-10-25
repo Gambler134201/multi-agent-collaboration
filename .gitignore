@@ -53,7 +53,18 @@ Thumbs.db
 
 .local-worker/endpoint-access.json
 .local-worker/endpoint-access.lock
+
+.local-worker/opencode-runtime.json
+
+.local-worker/commandcode-runtime.json
+.local-worker/routing-priority.json
 # Native ZCode connection/catalogue are machine-local; never publish them.
 .local-worker/zcode.json
 .local-worker/zcode-catalog.json
 .local-worker/zcode-usage.json
+.local-worker/native-quota-settings.json
+.local-worker/native-quota-cache.json
+
+# Display-safe native/model picker catalogs are per-installation caches.
+.local-worker/native-model-catalog.json
+.local-worker/model-picker-catalog.json
