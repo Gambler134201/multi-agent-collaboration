@@ -26,7 +26,7 @@ import threading
 import project_storage
 
 SCHEMA = 1
-KINDS = ('dispatch', 'review', 'rework')
+KINDS = ('dispatch', 'review', 'rework', 'integrate', 'accept_integration', 'finalize', 'reconcile_integration','plan')
 STATES = ('reserved', 'completed', 'rejected', 'unknown')
 REQUEST_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$')
 OWNER_ID = re.compile(r'^[^\s/\\\x00-\x1f]{1,128}$')
@@ -168,7 +168,7 @@ def reserve(project, owner, kind, request_id, payload):
         if existing is not None:
             row = _row(existing)
             if row['payload_digest'] != digest:
-                raise RequestConflict('request_id %s 已用于不同的请求内容；拒绝覆盖或自动换 ID' % request_id)
+                raise RequestConflict('request_id %s 已用于不同的请求内容；各操作请使用各自的新 request_id，不要复用' % request_id)
             if row['state'] == 'reserved':
                 with _ACTIVE_LOCK:
                     active = key in _ACTIVE
@@ -334,7 +334,7 @@ def replay(project, owner, kind, request_id, payload):
     if row is None:
         return None
     if row['payload_digest'] != digest:
-        raise RequestConflict('request_id %s 已用于不同的请求内容；拒绝覆盖或自动换 ID' % request_id)
+        raise RequestConflict('request_id %s 已用于不同的请求内容；各操作请使用各自的新 request_id，不要复用' % request_id)
     if row['state'] == 'unknown':
         raise UnknownOutcome('原请求结果未知，未自动重派；请按原请求引用核查。',
                              row['reference'], kind, request_id)

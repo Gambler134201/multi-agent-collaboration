@@ -68,6 +68,14 @@
 
   var REVIEW_FALLBACK = '尚无独立验收结论';
 
+  var PROBLEM_LABEL = {
+    permission_denied: '权限或保护规则拒绝', outcome_unknown: '原生操作结果未知',
+    verification_failed: '指定自测未通过', verification_unconfirmed: '验证证据不足',
+    cleanup_unconfirmed: '会话收尾未确认', preparation_error: '执行前准备失败',
+    execution_error: '原生执行未完成', record_error: '结果记录异常',
+    artifact_unconfirmed: '成果核对未确认', unknown: '原因尚未分类'
+  };
+
   /* review.state 写成通过类结论，但 accepted 不是严格 true 时：不显示通过，也不给通过配色 */
   var REVIEW_PASS_STATES = { accepted: true, final_accepted: true };
   var REVIEW_UNCONFIRMED = '验收结论待核实';
@@ -205,7 +213,8 @@
       code: text(raw.code),
       message: text(raw.message),
       source: text(raw.source),
-      rule: text(raw.rule_id)
+      rule: text(raw.rule_id),
+      kind: pick(PROBLEM_LABEL, key(raw.kind), '') ? key(raw.kind) : ''
     };
     var stageRaw = text(raw.stage);
     if (stageRaw) {
@@ -279,6 +288,8 @@
     var artifacts = isObject(result.artifacts) ? result.artifacts : null;
     var verification = isObject(result.verification) ? result.verification : null;
     var review = isObject(result.review) ? result.review : null;
+    var settlement = isObject(result.controller_finalization) ? result.controller_finalization : null;
+    var blockedSettlement = !!(settlement && (settlement.state === 'pending' || settlement.state === 'attention'));
     var issues = normIssues(result.issues);
 
     var hasData = !!(exec || stages.length || failure || artifacts || verification || review || issues.length || legacy);
@@ -295,6 +306,11 @@
       (legacy ? '<span class="mdx-res-chip">历史记录</span>' : '') +
       '</div>';
     parts.push(head);
+    if (blockedSettlement) {
+      parts.push(row('controller', '控制器收尾',
+        tag(settlement.state === 'pending' ? '正在提交成果与释放资源' : '收尾需要核对', 'warn') +
+        note(text(settlement.note)), ' data-controller-state="' + tok(settlement.state) + '"'));
+    }
 
     if (legacy) {
       parts.push('<div class="mdx-res-alert">历史记录：阶段证据不足，未据此判定测试通过</div>');
@@ -320,6 +336,7 @@
     /* 失败：阶段 / code / message / 来源 / 规则 */
     if (failure) {
       var fv = '';
+      if (failure.kind) fv += tag(PROBLEM_LABEL[failure.kind], 'warn');
       fv += tag('阶段：' + (failure.stageText ? failure.stageText : '未记录'), 'err');
       if (failure.code) fv += '<code class="mdx-res-code">' + esc(failure.code) + '</code>';
       if (failure.message) fv += '<span class="mdx-res-msg">' + esc(failure.message) + '</span>';
@@ -327,7 +344,7 @@
       if (failure.source) fmeta.push('来源 ' + failure.source);
       if (failure.rule) fmeta.push('规则 ' + failure.rule);
       if (fmeta.length) fv += note(fmeta.join(' · '));
-      parts.push(row('fail', '失败', fv, ' data-failure-stage="' + tok(failure.stageId) + '"'));
+      parts.push(row('fail', '需关注', fv, ' data-failure-stage="' + tok(failure.stageId) + '" data-problem-kind="' + tok(failure.kind) + '"'));
     }
 
     /* 已有文件 */
@@ -365,7 +382,7 @@
     /* 独立验收（主脑结论）：通过类结论必须有严格 true 的 accepted 才按通过显示 */
     var rKey = review ? key(review.state) : '';
     var hasAcceptedField = !!(review && Object.prototype.hasOwnProperty.call(review, 'accepted'));
-    var acceptedStrict = !!(review && review.accepted === true);
+    var acceptedStrict = !!(review && review.accepted === true && !blockedSettlement);
     var claimsPass = !!(rKey && Object.prototype.hasOwnProperty.call(REVIEW_PASS_STATES, rKey));
     var passConfirmed = claimsPass && acceptedStrict;
     var passUnconfirmed = claimsPass && !acceptedStrict;
@@ -382,6 +399,7 @@
     var rv = tag(rLabel, rTone);
     var rnotes = [];
     if (review) {
+      if (blockedSettlement) rnotes.push('控制器收尾未确认，不能作为完整交付');
       if (hasAcceptedField) rnotes.push('接受标记：' + (acceptedStrict ? '是' : '否（非严格 true）'));
       else rnotes.push('结果未记录接受标记');
       if (passUnconfirmed) rnotes.push('记录结论为通过类，但接受标记不成立，未视为通过');

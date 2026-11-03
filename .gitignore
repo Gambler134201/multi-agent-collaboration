@@ -27,6 +27,7 @@
 .local-worker/agent-runtime/state/
 .local-worker/agent-runtime/node_modules/
 .codex/
+.zcode/
 
 # Environments, caches and generated test evidence
 .venv/

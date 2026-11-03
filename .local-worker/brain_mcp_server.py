@@ -42,11 +42,16 @@ TOOL_PROJECT_MAP = 'brain_project_map'
 TOOL_DELIVERY = 'brain_delivery'
 TOOL_REVIEW = 'brain_review'
 TOOL_REWORK = 'brain_rework'
+TOOL_INTEGRATE = 'brain_integrate'
+TOOL_ACCEPT_INTEGRATION = 'brain_accept_integration'
+TOOL_FINALIZE = 'brain_finalize'
+TOOL_RECONCILE_INTEGRATION = 'brain_reconcile_integration'
+TOOL_PLAN='brain_plan'
 TOOL_WAKE_PROBE = 'brain_wakeup_probe'
 TOOL_WAIT = 'brain_wait'
 
 TOOLS = (TOOL_CONNECT, TOOL_PREFLIGHT, TOOL_DESCRIBE, TOOL_CANDIDATES, TOOL_PREVIEW, TOOL_DISPATCH,
-         TOOL_STATUS, TOOL_REQUEST_STATUS, TOOL_PROJECT_MAP, TOOL_DELIVERY, TOOL_REVIEW, TOOL_REWORK)
+         TOOL_STATUS, TOOL_REQUEST_STATUS, TOOL_PROJECT_MAP, TOOL_DELIVERY, TOOL_REVIEW, TOOL_REWORK, TOOL_INTEGRATE, TOOL_ACCEPT_INTEGRATION, TOOL_FINALIZE, TOOL_RECONCILE_INTEGRATION,TOOL_PLAN)
 
 _CONTEXT = None
 _TRANSPORT = None
@@ -173,6 +178,9 @@ def tool_definitions():
                 'acceptance': {'type': 'array', 'minItems': 1, 'maxItems': 20,
                                'items': {'type': 'string', 'maxLength': 500}},
                 'title': {'type': 'string', 'maxLength': 100},
+                'write_scope': {'type': 'string', 'enum': ['workspace','declared_files'],
+                                'description': 'edit 默认省略或用 workspace，执行端可创建必要源码、测试及说明；files 只是预期交付。只有用户明确要求只能改指定文件时才用 declared_files，主脑不要自行加白名单'},
+                'readonly_files': {'type': 'array', 'maxItems': 30, 'items': {'type':'string'}},
             }, required=('request_id', 'prompt', 'acceptance')),
             annotations=types.ToolAnnotations(title='快速派发执行任务', destructiveHint=False,
                                               idempotentHint=True, openWorldHint=False),
@@ -220,6 +228,9 @@ def tool_definitions():
             name=TOOL_REVIEW, title='独立验收或退回整改',
             description=('记录主脑逐条验收结论与证据，或退回整改/记录受阻。'
                          '验收通过必须为每条条件提供主脑独立证据；执行器自报不能通过。'
+                         '常规终态是 accept（state=accepted）；final_accept 仅用于主脑接管未完成的执行，'
+                         '不能在 accept 之后追认。每个操作使用各自的新 request_id，'
+                         '不要复用其他操作的 ID；参数缺失的调用不占用 request_id，补全后可用原 ID 重发。'
                          '同一 request_id 不会重复消耗整改次数。'),
             inputSchema=_object({
                 'request_id': {'type': 'string', 'pattern': '^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'},
@@ -238,15 +249,69 @@ def tool_definitions():
         types.Tool(
             name=TOOL_REWORK, title='派发一次整改',
             description=('对已退回整改的同一任务派发一次整改，保持原模型与执行器，默认使用新会话。'
+                         'instructions 可附加本轮整改的主脑补充指令（如提示词措辞陷阱的规避、'
+                         '新边界），会以显式覆盖块并入整改提示词。'
                          '仍然最多一次；不能借整改接管其他拥有者或项目的任务。'),
             inputSchema=_object({
                 'request_id': {'type': 'string', 'pattern': '^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'},
                 'parent_task_id': {'type': 'string', 'maxLength': 80},
+                'instructions': {'type': 'string', 'maxLength': 2000},
             }, required=('request_id', 'parent_task_id')),
             annotations=types.ToolAnnotations(title='派发一次整改', destructiveHint=True,
                                               idempotentHint=True, openWorldHint=False),
         ),
+        types.Tool(
+            name=TOOL_INTEGRATE,title='检查已验收批次的集成结果',
+            description='仅集成当前责任会话中已独立验收、收尾完成的任务。固定成果提交，在副本运行检查，保留副本待主脑复核；不调用模型、不覆盖原项目、不自动验收。可选 enqueue=true 先保存原作业进入持久队列；queue.state=queued 不代表已完成，按原 request_id 查询；重连后明确重复原已完成的入队请求可继续未开始的同一作业，不创建第二份。checks 是参数向量数组且不经 shell 执行，例如 [["git","log","--oneline","-n","1"]]。同步返回的 merge_passed 表示合并是否全部干净，verdict 汇总检查判定。未知执行结果不重跑。',
+            inputSchema=_object({
+                'request_id':{'type':'string','pattern':'^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'},
+                'task_ids':{'type':'array','minItems':1,'maxItems':8,'items':{'type':'string','maxLength':80}},
+                'enqueue':{'type':'boolean','description':'可选；true 时先保存原集成意图并进入可查询队列，返回不代表已合并或验收。默认保留同步行为。'},
+                'checks':{'type':'array','minItems':1,'maxItems':8,'items':{'type':'array','minItems':1,'maxItems':40,'items':{'type':'string','maxLength':4000}}},
+            },required=('request_id','task_ids','checks')),
+            annotations=types.ToolAnnotations(title='检查已验收批次的集成结果',destructiveHint=True,idempotentHint=True,openWorldHint=False),
+        ),
     ]
+    tools.append(types.Tool(
+        name=TOOL_ACCEPT_INTEGRATION, title='独立验收集成成果',
+        description='主脑检查集成副本、独立测试并取得逐条证据后，接受 brain_integrate 返回的 name。重新核对当前项目/拥有者、任务验收和冻结提交、集成副本及独立证据。仅记录集成独立验收，不执行模型、合并、检查命令或覆盖原树；通过后可供后续阶段采用集成基线。重复相同 request_id 返回原回执，结果未知按原请求查询，不更换 ID 重试。',
+        inputSchema=_object({
+            'request_id': {'type': 'string', 'pattern': '^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'},
+            'name': {'type': 'string', 'maxLength': 80},
+            'criteria': _CRITERIA,
+        }, required=('request_id', 'name', 'criteria')),
+        annotations=types.ToolAnnotations(title='独立验收集成成果', destructiveHint=True,
+                                          idempotentHint=True, openWorldHint=False)))
+    tools.append(types.Tool(
+        name=TOOL_FINALIZE,title='核对控制器收尾',
+        description='显式核对已结束但收尾待处理的本责任会话任务。确认进程及原生会话已结束后处理成果与本任务资源，不调用模型、不重发执行、不自动验收。未知进程或未关闭原生会话会拒绝。',
+        inputSchema=_object({'request_id':{'type':'string','pattern':'^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'},
+                             'task_id':{'type':'string','maxLength':80}},required=('request_id','task_id')),
+        annotations=types.ToolAnnotations(title='核对控制器收尾',destructiveHint=True,idempotentHint=True,openWorldHint=False)))
+    tools.append(types.Tool(
+        name=TOOL_RECONCILE_INTEGRATION,title='核对原集成作业收尾',
+        description='仅核对本责任会话的原排队集成。完整结束回执、原领取和原进程退出均有证据时，只释放该作业的集成占用；检查结果不全或身份未知则保留现场。返回 reconciliation.state=settled 才表示收尾已核对，不表示验收通过。不会重新合并、运行检查、调用模型、改写原失败或更新原项目。每次明确核对使用自己的 request_id，响应未知先查询原请求，不自动重试。',
+        inputSchema=_object({'request_id':{'type':'string','pattern':'^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'},
+                             'name':{'type':'string','maxLength':80}},required=('request_id','name')),
+        annotations=types.ToolAnnotations(title='核对原集成作业收尾',destructiveHint=True,idempotentHint=True,openWorldHint=False)))
+    tools.append(types.Tool(name=TOOL_PLAN,title='创建并续接已批准计划',
+        description='draft创建带固定模型和依赖的草案，prepare为无原任务的工作台草案声明当前责任；两者不批准或派发。用户必须在工作台确认包含责任会话的具体版本。status/preview只读；resume仅原主脑续接已批准版本，不解除用户暂停，不收养旧任务；handover仅为本责任的已独立验收任务创建真实文件哈希交接。变更各用原request_id；未知先brain_request_status，不换ID重试。不会自动验收、部署、发布或更新main。',
+        inputSchema=_object({
+            'action':{'type':'string','enum':['draft','prepare','status','preview','resume','handover']},
+            'request_id':{'type':'string','pattern':'^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'},
+            'goal_id':{'type':'string','maxLength':120},'digest':{'type':'string','maxLength':64},
+            'checks':{'type':'array','maxItems':8,'items':{'type':'array','minItems':1,'maxItems':40,'items':{'type':'string','maxLength':4000}},'description':'draft/preview：显式联合检查参数数组；随版本由用户批准，前置分支需要集成时使用，不经shell、不自动验收'},
+            'title':{'type':'string','maxLength':200},'objective':{'type':'string','maxLength':2000},
+            'task_id':{'type':'string','maxLength':80},'summary':{'type':'string','maxLength':2000},
+            **{k:{'type':'array','maxItems':40,'items':{'type':'string','maxLength':500}} for k in ('interfaces','decisions','remaining_issues')},
+            'stages':{'type':'array','minItems':1,'maxItems':20,'items':_object({
+                'key':{'type':'string','maxLength':120},'title':{'type':'string','maxLength':200},
+                'objective':{'type':'string','maxLength':2000},'kind':{'type':'string','enum':['edit','chat']},
+                'model_id':{'type':'string','maxLength':80},
+                'depends_on':{'type':'array','maxItems':20,'items':{'type':'string','maxLength':120}},
+                'acceptance':{'type':'array','minItems':1,'maxItems':20,'items':{'type':'string','maxLength':500}}},
+                required=('key','title','objective','model_id','acceptance'))}},required=('action',)),
+        annotations=types.ToolAnnotations(title='创建并续接已批准计划',destructiveHint=True,idempotentHint=True,openWorldHint=False)))
     if probe_available():
         tools.append(types.Tool(name=TOOL_WAKE_PROBE,title='原聊天自动唤醒探针',
             description=('仅在用户要求诊断时使用。start 后在约30秒及原聊天空闲时投递一次固定诊断事件，'
@@ -529,7 +594,7 @@ def _run(name, arguments):
         _strict(arguments, ('model_id', 'prompt', 'kind', 'files', 'acceptance'), 'route_preview')
         return _ok(_call('route_preview', arguments), '已返回路由预览；未派发任务，未替换 model_id。')
     if name == TOOL_DISPATCH:
-        _strict(arguments, ('request_id', 'prompt', 'model_id', 'kind', 'files',
+        _strict(arguments, ('request_id', 'prompt', 'model_id', 'kind', 'files', 'readonly_files', 'write_scope',
                             'acceptance', 'title'), 'dispatch')
         acceptance = arguments.get('acceptance')
         if not isinstance(acceptance, list) or not 1 <= len(acceptance) <= 20:
@@ -557,6 +622,28 @@ def _run(name, arguments):
         if arguments.get('criteria'):
             _check_criteria(arguments['criteria'])
         return _ok(_call('review', arguments), '已记录验收操作；不会自动重试。')
+    if name == TOOL_INTEGRATE:
+        _strict(arguments,('request_id','task_ids','checks','enqueue'),'integrate')
+        summary=('已返回原集成作业；入队不代表检查或验收完成，请按原请求查询。' if arguments.get('enqueue') is True
+                 else '已返回集成检查结果；副本待主脑复核，未覆盖原项目、未自动验收。')
+        return _ok(_call('integrate',arguments),summary)
+    if name == TOOL_ACCEPT_INTEGRATION:
+        _strict(arguments, ('request_id', 'name', 'criteria'), 'accept_integration')
+        _check_criteria(arguments.get('criteria'))
+        return _ok(_call('accept_integration', arguments),
+                   '已记录集成独立验收；未覆盖原项目，可核对后续阶段的集成基线。')
+    if name == TOOL_FINALIZE:
+        _strict(arguments,('request_id','task_id'),'finalize')
+        return _ok(_call('finalize',arguments),'已返回控制器收尾核对结果；未重新执行任务、未调用模型。')
+    if name == TOOL_RECONCILE_INTEGRATION:
+        _strict(arguments,('request_id','name'),'reconcile_integration')
+        return _ok(_call('reconcile_integration',arguments),'已核对原集成作业；请读取收尾结论，未重跑或自动验收。')
+    if name==TOOL_PLAN:
+        _strict(arguments,('action','request_id','goal_id','digest','title','objective','stages','task_id','summary','interfaces','decisions','remaining_issues','checks'),'plan')
+        action=arguments.get('action')
+        if action not in ('draft','prepare','status','preview','resume','handover'):raise ValueError('未知计划动作')
+        return _ok(_call('plan_'+action,{k:v for k,v in arguments.items() if k!='action'}),
+                   '已返回原计划操作结果；草案不等于用户批准，执行完成不等于独立验收。')
     if name == TOOL_REWORK:
         _strict(arguments, ('request_id', 'parent_task_id'), 'rework')
         result=_call('rework', arguments)

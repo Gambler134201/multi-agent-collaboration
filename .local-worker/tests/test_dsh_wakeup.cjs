@@ -148,7 +148,7 @@ test('formal MCP completion pipeline: '+scenario,
     followup:msg=>{calls.push(msg);if(scenario==='unknown')throw Error('fixture_only_unconfirmed')}};
   const bridge=createBridge({agent,identity,isCurrent:()=>true});
   await bridge.start();
-  let releasedIdle=false,callsBeforeIdle=null;
+  let releasedIdle=false,callsBeforeIdle=null,verified=false;
   try{
     const result=await new Promise((resolve,reject)=>{
       const child=spawn(process.env.MODEL_DESK_TEST_PYTHON,[path.join(__dirname,'dsh-task-wait-fixture.py'),scenario],
@@ -171,8 +171,12 @@ test('formal MCP completion pipeline: '+scenario,
       assert.ok(text.startsWith('[Model Desk completion event]'));
       assert.ok(text.includes('brain_wait'));assert.ok(text.includes('action=received'));
     }
+    verified=true;
   }finally{
-    await bridge.dispose();fs.rmSync(project,{recursive:true,force:true});
+    await bridge.dispose();
+    // Preserve failed fixtures and their first error instead of masking it
+    // with a cleanup error from an unfinished watcher process.
+    if(verified)fs.rmSync(project,{recursive:true,force:true});
   }
 });
 }

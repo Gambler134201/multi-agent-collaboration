@@ -136,6 +136,52 @@ ENGINE_NOTES['pi'] = {
 }
 IMPLEMENTED_ENGINES = ("dsh", "pi")
 
+# The two native-account executors run one task per dedicated native session
+# through their worker module, exactly like the plan's light-adapter shape.
+# Their chain capabilities are declared honestly: dispatch/session/events/
+# cancel/outcome are real and measured; usage stays unsupported because the
+# native accounts do not report per-task cost (unknown is never estimated);
+# subagent stays unsupported with a hard deny in the worker.  No per-operation
+# adapter transport exists for them yet (P2 boundary), so only ``dispatch``
+# names a delegate and every other binding is unavailable instead of claimed.
+ENGINE_METHODS['workbuddy'] = {**ENGINE_METHODS['dsh'], 'usage': STATE_UNSUPPORTED,
+                               'subagent': STATE_UNSUPPORTED}
+ENGINE_BINDINGS['workbuddy'] = {**{key: BINDING_UNAVAILABLE for key in CAPABILITY_KEYS},
+                                'dispatch': BINDING_DELEGATED, 'subagent': BINDING_GATED}
+ENGINE_DELEGATES['workbuddy'] = {'dispatch': 'workbuddy_worker.run_task'}
+ENGINE_NOTES['workbuddy'] = {
+    'dispatch': "delegated to workbuddy_worker.run_task -> workbuddy_executor.NativeChatClient 一次性 ACP 会话",
+    'session': "连接后创建专用原生会话并记录 workbuddy_session_id；不支持原会话续接，整改/新任务一律新会话",
+    'discover': "安装身份固定 5.8.x ASAR 校验；使用登录账户的指定内置模型，不读取额外模型目录",
+    'events': "原生工具保护与阶段事件写入 workbuddy-native-events.jsonl 及任务记录；无第二事件通道",
+    'cancel': "cancelled.flag 由 worker 与 client.cancel_check 在会话循环内轮询；只停本任务，不关闭用户程序",
+    'outcome': "任务记录保存答复/改动/自测证据；积分与人民币费用未知，不宣称计量",
+    'usage': "原生积分消耗不逐请求返回；真实费用未知，保持未知，不估算",
+    'subagent': "原生工具白名单不含子代理；worker 恒 deny",
+}
+ENGINE_METHODS['zcode'] = {**ENGINE_METHODS['dsh'], 'usage': STATE_UNSUPPORTED,
+                           'subagent': STATE_UNSUPPORTED}
+# ZCode records its event stream and outcome in the run's task.json and the
+# worker/runtime poll cancelled.flag, so events/cancel/outcome have real
+# adapter-level (direct) operations; session identity lives inside the
+# worker's native job and discover/usage have no adapter-level call.
+ENGINE_BINDINGS['zcode'] = {**{key: BINDING_UNAVAILABLE for key in CAPABILITY_KEYS},
+                            'dispatch': BINDING_DELEGATED, 'events': BINDING_DIRECT,
+                            'cancel': BINDING_DIRECT, 'outcome': BINDING_DIRECT,
+                            'subagent': BINDING_GATED}
+ENGINE_DELEGATES['zcode'] = {'dispatch': 'zcode_worker.run_task'}
+ENGINE_NOTES['zcode'] = {
+    'dispatch': "delegated to zcode_worker.run_task -> agent-runtime/run-zcode.mjs 一次性原生会话桥",
+    'session': "创建 modeldesk-zcode- 专用会话并核对 createSession/setMode/readSession 回执；不支持原会话直接复用，续接为新会话+控制器交接",
+    'discover': "原生模型目录经只读桥读取；安装身份与 glm/zcode.cjs 指纹绑定",
+    'events': "原生会话事件由控制器订阅并写入任务记录与 zcode-native-events.jsonl；无第二事件通道",
+    'cancel': "run-zcode.mjs 轮询 cancelled.flag 后 stopSession；只停本任务会话，不重启用户桌面",
+    'outcome': "任务记录保存答复/改动/自测证据；原生套餐余额不逐任务结算，逐任务费用未知",
+    'usage': "原生额度快照存在，但逐任务真实费用/调用次数不可计量，保持未知，不估算",
+    'subagent': "原生工具白名单不含子代理；任务记录 subagent_decision 恒为 deny",
+}
+IMPLEMENTED_ENGINES = (*IMPLEMENTED_ENGINES, 'workbuddy', 'zcode')
+
 # The event contract the E2 UI can consume.  It is deliberately described here
 # instead of being inferred from the model's answer text: the executor-side
 # bridge (agent-runtime/subagent-bridge.cjs) writes one line per DSH lifecycle
@@ -380,6 +426,24 @@ def executor_report(engine="dsh", model=None, version=None, executable=None, ide
         report['subagent_lifecycle_schema'] = None
         report['probe_command'] = None
         report['evidence_command'] = 'python .local-worker/tests/test_pi_runtime.py'
+        return model_capabilities.public_view(report)
+    if engine in ("workbuddy", "zcode"):
+        info = {}
+        try:
+            import importlib
+            info = importlib.import_module(engine + "_worker").availability() or {}
+        except Exception:
+            info = {}
+        report["identity"] = model_capabilities.public_view({
+            "executor": engine, "version": info.get("version"),
+            "executable": info.get("executable"), "ready": bool(info.get("ready")),
+            "message": info.get("message")})
+        report["reason"] = ("原生账户执行端；积分与人民币费用未知，子代理未开放" if engine == "workbuddy"
+                            else "原生账户执行端；原生额度不逐任务计量，子代理未开放")
+        report["evidence_command"] = ("python .local-worker/tests/test_workbuddy_executor.py" if engine == "workbuddy"
+                                      else "python .local-worker/tests/test_zcode_integration.py")
+        report["probe_command"] = None
+        report["subagent_lifecycle_schema"] = None
         return model_capabilities.public_view(report)
     if engine != "dsh":
         report["reason"] = "该执行器尚未实现能力接口，子代理一律禁止"
@@ -641,10 +705,103 @@ class PiCapabilityAdapter(DshCapabilityAdapter):
                  'outcome': 'agent_settled + assistant stopReason', 'usage': 'budget_relay upstream usage'}
 
 
+class WorkerTaskAdapter(ExecutorCapabilityAdapter):
+    """Native-account executors with a task-level delegate only.
+
+    WorkBuddy runs one task per dedicated native session through its worker
+    module and has no per-operation adapter transport yet (P4 boundary).  A
+    dispatch forwards once to a bound transport or refuses with
+    :class:`CapabilityNotWired` naming the worker entrypoint; every other
+    operation refuses the same way instead of pretending an interface.
+    ZCode subclasses this with direct record operations.
+    """
+
+    @property
+    def DELEGATES(self):
+        return ENGINE_DELEGATES.get(self.engine_name, {})
+
+    def dispatch(self, **kwargs):
+        return self._delegate("dispatch", **kwargs)
+
+    def _not_wired(self, capability):
+        return CapabilityNotWired(capability, self.DELEGATES.get(capability), self.engine_name)
+
+    def new_session(self, **kwargs):
+        raise self._not_wired("session")
+
+    def stream_events(self, **kwargs):
+        raise self._not_wired("events")
+
+    def cancel(self, **kwargs):
+        raise self._not_wired("cancel")
+
+    def outcome(self, **kwargs):
+        raise self._not_wired("outcome")
+
+    def usage(self, **kwargs):
+        raise self._not_wired("usage")
+
+
+class ZcodeTaskAdapter(WorkerTaskAdapter):
+    """ZCode: task-level dispatch delegate plus direct record operations.
+
+    The worker records the event stream and the outcome in the run's
+    ``task.json``, and the runtime bridge polls ``cancelled.flag``; events,
+    cancel and outcome therefore read or write real recorded state here
+    without any per-operation transport.  ``new_session`` and ``usage`` keep
+    the honest refusal: session identity lives inside the worker's native job
+    and the native account does not meter per-task usage.
+    """
+
+    name = "zcode"
+
+    def stream_events(self, run=None, **kwargs):
+        return read_events(run)
+
+    def cancel(self, run=None, **kwargs):
+        return request_cancel(run, reason=kwargs.get("reason"))
+
+    def outcome(self, run=None, **kwargs):
+        return read_task_outcome(run)
+
+
+def read_task_outcome(run):
+    """Recorded outcome for executors that keep it in ``task.json``.
+
+    WorkBuddy and ZCode patch the final status, changed files, summary and
+    self-test evidence into the task record instead of a separate
+    ``result.json``.  Reading it never re-runs or charges anything; a missing
+    record stays ``None``.
+    """
+    if not run:
+        return None
+    run = Path(run)
+    path = run / "task.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return model_capabilities.public_view({
+        "task_id": data.get("id"),
+        "status": data.get("status"),
+        "engine": data.get("engine"),
+        "model": data.get("model"),
+        "changed_files": data.get("changed_files") or [],
+        "summary": (data.get("summary") or "")[-2000:],
+        "test": data.get("test_result"),
+        "usage": read_usage(run),
+    })
+
+
 def resolve(engine="dsh"):
     """Return the adapter class for an engine name without instantiating it."""
     name = str(engine or "dsh").strip().lower()
-    return {'dsh': DshCapabilityAdapter, 'pi': PiCapabilityAdapter}.get(name, ExecutorCapabilityAdapter)
+    return {'dsh': DshCapabilityAdapter, 'pi': PiCapabilityAdapter,
+            'workbuddy': WorkerTaskAdapter, 'zcode': ZcodeTaskAdapter}.get(name, ExecutorCapabilityAdapter)
 
 
 def adapter_for(engine="dsh", model=None, version=None, executable=None, transport=None):

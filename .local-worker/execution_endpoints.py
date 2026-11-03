@@ -166,8 +166,9 @@ def update(endpoint, body, settings):
     return {'ok': True, 'endpoint': endpoint, **old['endpoints'][endpoint]}
 
 
-def public_rows(models, settings, agents=None):
-    controls = snapshot()
+def public_rows(models, settings, agents=None, *, controls=None):
+    import endpoint_readiness
+    controls = snapshot() if controls is None else controls
     agents = execution_engines.public_agents() if agents is None else agents
     rows = []
     assigned = set()
@@ -192,6 +193,7 @@ def public_rows(models, settings, agents=None):
                 info['access_mode'] = endpoint_access.saved(key)
             except ValueError as exc:
                 info.update(access_mode=None, message=str(exc))
+                info['readiness']=endpoint_readiness.runtime('access_config_unreadable')
         rows.append({'id': key, 'name': LABELS[key], **pref, 'models': group,
                      'preset': pref.get('preset'),
                      'model': display, 'runtime': info, 'ready': bool(info.get('ready')),
@@ -202,5 +204,6 @@ def public_rows(models, settings, agents=None):
                      'billing_source': key+'-native-account' if key in ('workbuddy', 'zcode') else 'model-provider',
                      'balance': None,
                      'message': info.get('message', '')})
+        rows[-1]['diagnostic']=endpoint_readiness.diagnose(rows[-1],settings)
     return {'rows': rows, 'unassigned_models': [m for m in models if m['id'] not in assigned],
             'readable': controls['readable'], 'error': controls['error']}

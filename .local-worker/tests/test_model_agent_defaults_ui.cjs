@@ -47,7 +47,8 @@ const root=path.resolve(__dirname,'..'),project='C:\\model-agent-defaults-fixtur
         contentType:'application/json',body:JSON.stringify({error:'有任务运行，不能修改连接配置'})});
       modelSaves.push({id,body});Object.assign(model,body);return json(model);
     }
-    const asset={'/':'index.html','/app.js':'app.js','/style.css':'style.css'}[p];
+    // Load every actual panel module rather than a stale three-file subset.
+    const asset=p==='/'?'index.html':/^\/[a-z0-9-]+\.(?:js|css)$/.test(p)&&fs.existsSync(path.join(root,'panel',path.basename(p)))?path.basename(p):null;
     if(asset)return route.fulfill({status:200,contentType:p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':'text/html',body:fs.readFileSync(path.join(root,'panel',asset))});
     unexpected.push(request.method()+' '+p);return json({});
   });

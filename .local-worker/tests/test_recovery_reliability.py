@@ -893,7 +893,7 @@ class RestartRecoveryTests(Sandbox):
         actions = panel.recover_pending_tasks(entries=[{'run': run}])
         self.assertEqual(actions, [])
         state = registry.read_task(run)
-        self.assertEqual(state['status'], 'queued')
+        self.assertEqual(state['status'], 'cancelled')
         self.assertEqual(state['recovery'], {'kind': 'x'})
         self.assertNotEqual(state['recovery'].get('kind'), 'worker_gone')
 

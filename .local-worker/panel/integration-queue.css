@@ -1,0 +1,18 @@
+.iq-dialog{width:min(1000px,calc(100vw / var(--ui-scale,1) - 32px));max-width:none;max-height:calc(90dvh / var(--ui-scale,1));padding:20px;overflow:auto}
+.iq-dialog *{box-sizing:border-box}.iq-dialog [hidden]{display:none!important}
+.iq-scope,.iq-footnote{font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}
+.iq-error{color:var(--red);background:var(--red-bg);padding:10px;border-radius:7px;overflow-wrap:anywhere}
+.iq-layout{display:grid;grid-template-columns:280px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.iq-list{background:var(--inset);padding:10px;max-height:65dvh;overflow:auto;min-width:0}
+.iq-row{display:flex;flex-direction:column;gap:7px;text-align:left;width:100%;padding:13px;margin-bottom:8px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font:inherit;overflow-wrap:anywhere}
+.iq-row>span{font-size:.86rem;color:var(--green)}.iq-row>small{color:var(--muted);font-size:.86rem}.iq-row>strong{font-size:.93rem;font-weight:500}
+.iq-row[aria-pressed="true"]{border-color:var(--green);box-shadow:0 0 0 2px var(--green-bg)}.iq-row:hover{background:var(--surface-hover)}
+.iq-detail{padding:20px;border-left:1px solid var(--line);max-height:65dvh;overflow:auto;min-width:0;overflow-wrap:anywhere}
+.iq-detail h3{font-size:1.15rem;font-weight:600;margin:0 0 9px}.iq-status{color:var(--ink-soft);font-size:.86rem}
+.iq-section{margin-top:22px}.iq-section h4{font-size:.86rem;font-weight:500;color:var(--muted);margin:0 0 8px}.iq-section p{margin:7px 0}
+.iq-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.86rem;font-family:var(--mono);background:var(--inset);padding:10px;border-radius:6px;margin:8px 0}
+.iq-inputs{padding-left:18px}.iq-inputs li{margin:12px 0}.iq-inputs code{display:block;font-size:.86rem;color:var(--muted);overflow-wrap:anywhere}
+.iq-check{padding:10px 0;border-bottom:1px solid var(--line)}.iq-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.iq-empty{padding:20px 8px;color:var(--muted);overflow-wrap:anywhere}
+@media(max-width:680px){.iq-dialog{width:calc(100vw / var(--ui-scale,1) - 16px);padding:14px}.iq-layout{grid-template-columns:1fr}.iq-list{max-height:240px}.iq-detail{border-left:0;border-top:1px solid var(--line);max-height:none;padding:14px}}
+@media(pointer:coarse){.iq-dialog button{min-height:44px}}

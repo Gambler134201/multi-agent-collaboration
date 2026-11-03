@@ -185,6 +185,20 @@ class RetiredReserveClientTests(Base):
 
 
 class PanelSnapshotTests(Base):
+    def test_task_graph_assets_are_served_for_dsh_browser_entry(self):
+        for name, mime in [('task-graph.js', 'text/javascript'), ('task-graph.css', 'text/css')]:
+            with self.opener.open(self.url + '/' + name) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn(mime, response.headers['Content-Type'])
+                self.assertEqual(response.read(), (panel.WEB / name).read_bytes())
+
+    def test_task_status_assets_are_served_by_the_browser_entry(self):
+        for name, mime in [('task-status.js', 'text/javascript'), ('task-status.css', 'text/css')]:
+            with self.opener.open(self.url + '/' + name) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn(mime, response.headers['Content-Type'])
+                self.assertEqual(response.read(), (panel.WEB / name).read_bytes())
+
     def test_polling_omits_audit_histories_but_detail_and_records_keep_them(self):
         tools = [{'id': str(i), 'title': 'read', 'status': 'completed'} for i in range(60)]
         audit = {'cost_requests': [{'request_id': str(i), 'note': 'x' * 1024}
@@ -209,6 +223,7 @@ class PanelSnapshotTests(Base):
         self.assertEqual(snapshot['tool_calls'], tools[-8:])
         self.assertEqual(detail['tool_calls'], tools)
         self.assertEqual(snapshot['review']['state'], 'accepted')
+        self.assertEqual(snapshot['execution_result']['summary'], detail['execution_result']['summary'])
         for field in ('answer', 'summary', 'cost_settled_cny', 'cost_settled_calls', 'cost_unknown_calls'):
             self.assertEqual(snapshot[field], detail[field])
         self.assertLess(len(json.dumps(snapshot)), len(json.dumps(detail)) / 5)
@@ -286,6 +301,20 @@ class StageDispatchAuthorityTests(Base):
         with mock.patch.object(panel.EXECUTOR, "submit"), \
              mock.patch.object(panel.dsh_worker, "availability", return_value={"ready": True}):
             return self.request(f"/api/stages/{stage['id']}/dispatch", body)
+
+    def complete_mocked_run(self, task_id):
+        """Settlement precondition for reviews on mocked stage dispatches.
+
+        The mocked ``EXECUTOR.submit`` never runs the worker, so the controller
+        steps a real dispatch performs — terminal executor state, then resource
+        settlement — would never happen.  Reviews require that settlement since
+        bounded scheduling (07252e7), so the fixture performs those controller
+        steps explicitly instead of bypassing the gate.
+        """
+        import task_finalization
+        run = registry.task_dir(task_id)
+        registry.patch_task(run, status="completed", phase="执行完成，等待验收", ended_at=registry.now())
+        task_finalization.settle(run)
 
     def test_request_kind_cannot_promote_or_demote_stage(self):
         _, chat_stage = self.make_stage("只读阶段", "chat")
@@ -388,6 +417,7 @@ class StageDispatchAuthorityTests(Base):
         result = self.dispatch(stage, {"prompt": "x", "source": "codex", "route_mode": "manual"})
         task_id = result["task"]["id"]
         run = registry.task_dir(task_id)
+        self.complete_mocked_run(task_id)
         # A tampered/foreign record accepted against another condition set.
         self.real_review(task_id, criteria=("另一条验收条件",))
         self.assertEqual(delegation_policy.load(run)["state"], delegation_policy.ACCEPTED)
@@ -401,6 +431,7 @@ class StageDispatchAuthorityTests(Base):
         stage = stage_store.add_stage(goal["id"], "阶段", "obj", kind="chat", files=["a.py"],
                                       acceptance=["c1"], candidates=["home"])
         result = self.dispatch(stage, {"prompt": "x", "source": "codex", "route_mode": "manual"})
+        self.complete_mocked_run(result["task"]["id"])
         self.real_review(result["task"]["id"], criteria=("c1",))
         stage_store.sync_from_tasks()
         self.assertEqual(stage_store.get_stage(stage["id"])["status"], stage_store.ACCEPTED)

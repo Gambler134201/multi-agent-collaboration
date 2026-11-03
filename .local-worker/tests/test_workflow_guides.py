@@ -8,6 +8,12 @@ import install_workflow_rules as rules
 
 
 class WorkflowGuideTests(unittest.TestCase):
+    def test_autonomous_dispatch_is_shared_and_strict_scope_requires_human_limits(self):
+        self.assertIn('use workspace unless human-limited', rules.block())
+        text=(rules.GUIDE_TEMPLATES/'dispatch.md').read_text(encoding='utf-8')
+        self.assertIn('Only a direct human requirement', text)
+        self.assertIn('Reports may be returned in the final answer', text)
+
     def test_core_is_compact_and_enforces_boundaries_before_on_demand_reads(self):
         text = rules.block()
         # Bound paths vary with the installation directory; measure the rule

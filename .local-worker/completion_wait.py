@@ -110,7 +110,7 @@ def task_record(project, task_id):
 
 def digest():
     return {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
-            for name in ('completion_wait.py', 'desktop_notify.py','completion_host.py','dsh_notify.py')}
+            for name in ('completion_wait.py', 'task_finalization.py', 'desktop_notify.py','completion_host.py','dsh_notify.py')}
 
 
 def owned_task(data,task_id):
@@ -188,6 +188,7 @@ def project_status(data):
 
 
 def evaluate(tasks):
+    import task_finalization
     states = [task.get('status') for task in tasks]
     if any(state == 'recovery_pending' for state in states):
         return 'needs_attention'
@@ -197,6 +198,11 @@ def evaluate(tasks):
         return None
     if any(not task.get('ended_at') for task in tasks):
         raise ValueError('执行结束记录不完整，不能当作执行完成')
+    settlements = [task_finalization.view(task)['state'] for task in tasks]
+    if 'pending' in settlements:
+        return None
+    if 'attention' in settlements:
+        return 'needs_attention'
     return 'awaiting_review' if all(state == 'completed' for state in states) else 'needs_attention'
 
 

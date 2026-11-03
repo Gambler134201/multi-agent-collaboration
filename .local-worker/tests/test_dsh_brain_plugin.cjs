@@ -455,6 +455,8 @@ test('binds one top-level native chat and mounts one agent-scoped MCP client', a
   assert.match(text, /waiting=true/);
   assert.match(text, /不要周期性轮询/);
   assert.match(text, /brain_dispatch/);
+  assert.match(text, /普通新 edit 任务省略 write_scope 或用 workspace/);
+  assert.match(text, /只有用户明确要求时才限定文件/);
   assert.match(text, /reviewer_file/);
   assert.match(text, new RegExp(f.projectReal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
@@ -463,6 +465,12 @@ test('binds one top-level native chat and mounts one agent-scoped MCP client', a
   assert.match(guardCall(agent, publicName('brain_dispatch'), child), /子 Agent|只允许/);
   assert.equal(guardCall(agent, publicName('brain_dispatch')), undefined);
   assert.equal(guardCall(agent, publicName('brain_status')), undefined);
+  assert.ok(PLUGIN._test.BRAIN_TOOLS.includes('brain_reconcile_integration'));
+  assert.ok(PLUGIN._test.BRAIN_TOOLS.includes('brain_plan'));
+  assert.equal(guardCall(agent, publicName('brain_plan')), undefined);
+  assert.match(guardCall(agent, publicName('brain_plan'), child), /子 Agent|只允许/);
+  assert.equal(guardCall(agent, publicName('brain_reconcile_integration')), undefined);
+  assert.match(guardCall(agent, publicName('brain_reconcile_integration'), child), /子 Agent|只允许/);
   assert.equal(guardCall(agent, 'read_file'), undefined, 'normal DSH tools are not blocked');
 
   // Duplicate created, sequential and concurrent, must not remount.

@@ -14,13 +14,19 @@ import uuid
 
 import model_registry as registry
 import execution_result
+import process_identity
 import zcode_tools
+import zcode_native_tools
+import runtime_paths
+import endpoint_access
+import endpoint_readiness
 
 HERE=Path(__file__).resolve().parent
 CONFIG='zcode.json'
 CATALOG='zcode-catalog.json'
 USAGE='zcode-usage.json'
-MODE='scoped-mcp-development-v1'
+MODE=zcode_native_tools.MODE
+LEGACY_MODE='scoped-mcp-development-v1'
 MODEL='account:zai-start-plan/GLM-5.3-Flash'
 
 
@@ -41,15 +47,17 @@ def _install(home,stamp):
     from workbuddy_executor import _asar_package
     root=Path(home);meta=_asar_package(root/'resources/app.asar')
     if meta.get('name')!='@zcode/desktop' or meta.get('version')!='3.16.3':
-        raise ValueError('ZCode 安装身份或版本未经核实；本版支持 3.16.3')
+        raise endpoint_readiness.DiagnosticError('version_unsupported','ZCode 安装身份或版本未经核实；本版支持 3.16.3')
     return {'version':meta['version'],'executable':str(root/'ZCode.exe'),
             'fingerprint':hashlib.sha256((root/'resources/glm/zcode.cjs').read_bytes()).hexdigest()}
 
 
 def installation(config):
     root=Path(config['home'])
-    if not root.is_absolute():raise ValueError('ZCode 安装目录需要绝对路径')
+    if not root.is_absolute():raise endpoint_readiness.DiagnosticError('installation_path_invalid','ZCode 安装目录需要绝对路径')
     paths=[root/'ZCode.exe',root/'resources/app.asar',root/'resources/glm/zcode.cjs']
+    if not all(p.is_file() for p in paths):
+        raise endpoint_readiness.DiagnosticError('installation_incomplete','ZCode 安装文件不完整')
     stamps=tuple((p.stat().st_size,p.stat().st_mtime_ns) for p in paths)
     return dict(_install(str(root.resolve()),stamps))
 
@@ -58,7 +66,7 @@ def catalog():
     path=Path(registry.HERE)/CATALOG
     if not path.exists():return {'models':[],'preferred':None,'updated_at':None}
     data=json.loads(path.read_text(encoding='utf-8'))
-    if not isinstance(data.get('models'),list):raise ValueError('ZCode 模型列表不可读')
+    if not isinstance(data,dict) or not isinstance(data.get('models'),list):raise ValueError('ZCode 模型列表不可读')
     return data
 
 
@@ -72,8 +80,8 @@ def catalog_model(code):
 
 
 def driver(job, *, on_event=None):
-    node=shutil.which('node')
-    if not node:raise ValueError('ZCode 桥接需要 Node 22 或更新版本')
+    node=runtime_paths.node_executable()
+    if node is None or not Path(node).is_file():raise ValueError('ZCode 桥接需要已配置的 Node 22 或更新版本')
     with tempfile.TemporaryDirectory(prefix='modeldesk-zcode-driver-') as folder:
         file=Path(folder)/'job.json';registry.write_json(file,job)
         process=subprocess.Popen([node,str(HERE/'agent-runtime/run-zcode.mjs'),str(file)],
@@ -144,14 +152,101 @@ def launch():
     return {'ok':True,'model_called':False,'message':'已请求打开 ZCode；原来运行的实例不会被关闭。若原实例未开启桥接，请任务结束后完全退出，再点击连接。'}
 
 
-def desktop_running(config):
+# Electron helper roles share the executable name; none of them is the main
+# program. A surviving crash reporter must not block a launch or pose as one.
+HELPERS={'crashpad-handler','renderer','gpu-process','utility','zygote','ppapi','ppapi-broker'}
+
+
+def _main_process(config):
+    """The first live main desktop process for this install, or ``None``.
+
+    Shares the helper filtering with every caller: crashpad/renderer/gpu
+    helpers are never the main program, and unknown command lines stay
+    conservative (treated as a potentially live user desktop).
+    """
     import psutil
     expected=Path(config['home'])/'ZCode.exe'
-    for process in psutil.process_iter(['name','exe']):
+    for process in psutil.process_iter(['name','exe','cmdline']):
         try:
-            if (process.info['name'] or '').casefold()=='zcode.exe' and process.info['exe'] and Path(process.info['exe']).resolve()==expected.resolve():return True
+            if (process.info['name'] or '').casefold()!='zcode.exe' or not process.info['exe'] or Path(process.info['exe']).resolve()!=expected.resolve():continue
+            args=process.info.get('cmdline')
+            if isinstance(args,list):
+                roles=[arg[len('--type='):] for arg in args if isinstance(arg,str) and arg.startswith('--type=')]
+                if len(roles)==1 and roles[0] in HELPERS:continue
+            return process
         except (psutil.Error,OSError):continue
-    return False
+    return None
+
+
+def desktop_state(config):
+    """``'running'``/``'absent'``/``'unknown'`` for the configured install.
+
+    Positive absence requires a readable process table: a ZCode-named row
+    whose executable cannot be read, or a row that errors during inspection,
+    leaves the answer ``unknown`` instead of proving the desktop gone.  Helper
+    filtering is shared with every caller; a readable helper-only table is
+    positive evidence the main program exited (a crash reporter may outlive
+    the GUI, never the reverse).
+    """
+    import psutil
+    expected=Path(config['home'])/'ZCode.exe'
+    state='absent'
+    for process in psutil.process_iter(['name','exe','cmdline']):
+        try:
+            info=process.info
+            name=info.get('name')
+            if not isinstance(name,str) or not name.strip():
+                state='unknown';continue
+            if name.casefold()!='zcode.exe':continue
+            exe=info.get('exe')
+            if not exe:
+                state='unknown';continue
+            if Path(exe).resolve()!=expected.resolve():continue
+            args=info.get('cmdline')
+            if isinstance(args,list):
+                roles=[arg[len('--type='):] for arg in args if isinstance(arg,str) and arg.startswith('--type=')]
+                if len(roles)==1 and roles[0] in HELPERS:continue
+            return 'running'
+        except (psutil.Error,OSError):
+            return 'unknown'
+    return state
+
+
+def desktop_running(config):
+    return desktop_state(config)=='running'
+
+
+def desktop_instance(config):
+    """Process identity of the live main desktop, or ``None`` when unreadable.
+
+    ``None`` is unknown evidence, never proof of death: callers that need an
+    alive/gone verdict must keep resources retained instead of guessing.
+    """
+    process=_main_process(config)
+    return None if process is None else process_identity.capture(process.pid)
+
+
+def instance_matches(recorded):
+    """``True``/``False``/``None``: the recorded desktop instance is alive/gone/unknown.
+
+    ``False`` requires positive evidence over a fully well-formed identity:
+    the pid has exited (``NoSuchProcess``) or now runs a different command
+    line or was created at a different time (pid reuse).  A malformed record
+    (missing fields, bad types, non-finite times, invalid digests) is unknown
+    no matter what the process table shows - it proves neither alive nor gone.
+    An unreadable process table stays ``None`` too; callers keep resources.
+    """
+    if not process_identity.well_formed(recorded):return None
+    import psutil
+    try:
+        process=psutil.Process(recorded['pid'])
+        created=process.create_time();cmdline=process.cmdline()
+    except psutil.NoSuchProcess:
+        return False
+    except (psutil.Error,OSError):
+        return None
+    verdict=process_identity.matches(recorded,recorded['pid'],created,cmdline)
+    return None if verdict is None else verdict
 
 
 def bridge_connected(config):
@@ -160,21 +255,27 @@ def bridge_connected(config):
     return sum(p.get('type')=='page' and p.get('url','').split('?')[0].casefold()==expected.casefold() for p in pages)==1
 
 
+def native_services_ready(config):
+    # Authorized connection/startup only. A debugger page may exist before
+    # React has published the native agent/model services. Never sends a prompt.
+    return any(event.get('type')=='ready' for event in driver({**config,'action':'ready'}))
+
+
 def ensure_connection(*,cancel_file=None,allow_auto=None):
     """Only used by explicit connect or an authorized queued task, never preflight."""
     if cancel_file and Path(cancel_file).exists():raise ValueError('ZCode 任务已取消，未请求模型')
     config=configuration();installation(config)
-    try:
-        if bridge_connected(config):return
-    except (OSError,ValueError):pass
-    if not config.get('auto_connect') or allow_auto is False:raise ValueError('ZCode 未连接或本任务未允许自动连接；请点击打开 / 连接 ZCode')
-    if desktop_running(config):raise ValueError('ZCode 已运行但未开启本机桥接；请在其任务结束后退出，再从卡片连接。未重启现有实例')
-    launch()
+    try:has_bridge=bridge_connected(config)
+    except (OSError,ValueError):has_bridge=False
+    if not has_bridge:
+        if not config.get('auto_connect') or allow_auto is False:raise ValueError('ZCode 未连接或本任务未允许自动连接；请点击打开 / 连接 ZCode')
+        if desktop_running(config):raise ValueError('ZCode 已运行但未开启本机桥接；请在其任务结束后退出，再从卡片连接。未重启现有实例')
+        launch()
     deadline=time.monotonic()+20
     while time.monotonic()<deadline:
         if cancel_file and Path(cancel_file).exists():raise ValueError('ZCode 任务已取消，未请求模型')
         try:
-            if bridge_connected(config):return
+            if bridge_connected(config) and native_services_ready(config):return
         except (OSError,ValueError):pass
         time.sleep(.4)
     raise ValueError('ZCode 已请求打开，桥接尚未就绪；未发送模型提示词，不自动重派')
@@ -187,13 +288,13 @@ def connect():
     if not connected:
         if desktop_running(config):raise ValueError('ZCode 已运行但没有可用桥接，请任务结束后退出，再从卡片打开。未重启程序')
         launch()
-        deadline=time.monotonic()+20
-        while time.monotonic()<deadline:
-            try:
-                if bridge_connected(config):connected=True;break
-            except (OSError,ValueError):pass
-            time.sleep(.4)
-        if not connected:raise ValueError('已请求打开 ZCode，桥接尚未就绪；可稍后再读取模型，不调用生成')
+    deadline=time.monotonic()+20
+    while time.monotonic()<deadline:
+        try:
+            if bridge_connected(config) and native_services_ready(config):break
+        except (OSError,ValueError):pass
+        time.sleep(.4)
+    else:raise ValueError('ZCode 桥接页面或原生服务尚未就绪；未发送模型提示词，不自动重启')
     return {'ok':True,'model_called':False,'catalog':refresh_catalog(),'message':'原生通道已连接，模型列表已读取；未调用模型生成'}
 
 
@@ -213,7 +314,7 @@ def usage_cache():
     path=Path(registry.HERE)/USAGE
     if not path.exists():return {'providers':{}}
     data=json.loads(path.read_text(encoding='utf-8'))
-    if not isinstance(data.get('providers'),dict):raise ValueError('ZCode 权益缓存不可读')
+    if not isinstance(data,dict) or not isinstance(data.get('providers'),dict):raise ValueError('ZCode 权益缓存不可读')
     return data
 
 
@@ -221,20 +322,44 @@ def availability():
     result={'name':'ZCode','engine':'zcode','ready':False,'installed':False,'version':None,
             'account_verified':False,'billing_source':'zcode-native-account','native_catalog':{'models':[]},
             'message':'请配置 ZCode，并通过本机桥接入口启动；不会使用 API 或其他渠道'}
+    stage='configuration_unreadable'
     try:
         config=configuration();result.update(configuration_values=config,access_mode=config['access_mode'])
+        if not config['home']:
+            raise endpoint_readiness.DiagnosticError('configuration_missing','尚未配置 ZCode 安装位置')
+        stage='installation_unavailable'
         info=installation(config);result.update(info,installed=True)
+        stage='connection_unknown';connection_unknown=False
         try:connected=bridge_connected(config)
-        except (OSError,ValueError):connected=False
-        running=False if connected else desktop_running(config)
-        data=catalog();valid=data.get('installation')==info['fingerprint'] and all(data.get('connection',{}).get(k)==config[k] for k in ('home','port'))
-        automatic=bool(config.get('auto_connect') and not running and not connected and valid)
-        state='connected' if connected else 'running_without_bridge' if running else 'closed'
+        except (OSError,ValueError):connected=False;connection_unknown=True
+        desktop='running' if connected else desktop_state(config)
+        running=desktop=='running'
+        stage='catalog_stale'
+        data=catalog();connection=data.get('connection')
+        valid=(data.get('installation')==info['fingerprint'] and isinstance(connection,dict)
+               and all(connection.get(k)==config[k] for k in ('home','port')))
+        automatic=bool(config.get('auto_connect') and desktop=='absent' and not connected and valid and not connection_unknown)
+        state='connected' if connected else 'unknown' if connection_unknown or desktop=='unknown' else 'running_without_bridge' if running else 'closed'
         message=('本机原生宿主可连接；账户授权在真实任务时核实' if connected else '原程序未开启桥接，请任务结束后退出并从卡片连接' if running else '任务启动前将自动打开 ZCode' if automatic else 'ZCode 未打开，请点击打开 / 连接')
+        code=('runtime_ready' if connected and valid else 'connection_unknown' if state=='unknown' else
+              'bridge_missing' if running and not connected else 'catalog_stale' if not valid else
+              'auto_connect_pending' if automatic else 'desktop_closed')
+        reasons=[] if code in {'runtime_ready','auto_connect_pending'} else [code]
+        if not valid and 'catalog_stale' not in reasons:reasons.append('catalog_stale')
         result.update(ready=valid and (connected or automatic),connected=connected,connection_state=state,
             auto_connect_pending=automatic,native_catalog=data,message=message if valid else '请先读取当前连接的原生模型列表',
-            usage={k:v for k,v in usage_cache()['providers'].items() if v.get('installation')==info['fingerprint']})
-    except (OSError,ValueError,KeyError,TypeError):pass
+            readiness=endpoint_readiness.runtime(code,issues=reasons))
+        if code not in {'runtime_ready','auto_connect_pending'}:
+            result['message']=result['readiness']['detail']+' '+result['readiness']['next_step']
+        # Optional quota display is not execution readiness. A damaged cache
+        # must not erase a successful installation/channel/catalogue precheck.
+        try:result['usage']={k:v for k,v in usage_cache()['providers'].items() if isinstance(v,dict) and v.get('installation')==info['fingerprint']}
+        except (OSError,ValueError,KeyError,TypeError):
+            result.update(usage={},usage_status='unavailable')
+    except (OSError,ValueError,KeyError,TypeError) as error:
+        code=error.code if isinstance(error,endpoint_readiness.DiagnosticError) else stage
+        result['readiness']=endpoint_readiness.runtime(code)
+        result['message']=result['readiness']['detail']+' '+result['readiness']['next_step']
     return result
 
 
@@ -253,6 +378,75 @@ def recovery_guard(state):
         raise ValueError('ZCode 原请求可能已送达或会话未关闭，不自动重发')
 
 
+def finalize_session(run):
+    """Targeted native-session finalization for one finished ZCode task.
+
+    Closes only this task's own dedicated session, or records positive
+    evidence that it is already gone (the pinned desktop instance exited,
+    the desktop is not running, or the native service reports the session
+    inactive).  It never sends a prompt, never enumerates other sessions and
+    never stops the desktop.  Controller resources and settlement stay with
+    the ``finalize_only`` recovery entry; this function only turns an
+    unconfirmed cleanup into confirmed, identity-bound evidence.
+    """
+    run=Path(run).resolve()
+    state=registry.read_task(run)
+    if state.get('engine')!='zcode':raise ValueError('仅支持 ZCode 任务的定向会话收尾')
+    import task_finalization
+    if state.get('status') not in task_finalization.TERMINAL|{'recovery_pending'}:
+        raise ValueError('任务尚未结束；不能定向关闭原生会话')
+    native=dict(state.get('zcode') or {})
+    if native.get('cleanup') in ('closed','not_created'):
+        return {'finalized':False,'reason':'cleanup_confirmed','cleanup':native.get('cleanup')}
+    sid=state.get('zcode_session_id')
+    if sid is not None and (not isinstance(sid,str) or
+            not sid.startswith('modeldesk-zcode-') or len(sid)==len('modeldesk-zcode-')):
+        raise ValueError('原会话身份无效；无法证明未创建，保留资源')
+    if sid is None:
+        # Write-order proof (run_task): the session id is persisted to the task
+        # record *before* any createSession can run, and the bridge creates a
+        # session only under that persisted id.  A terminal record without one
+        # therefore proves the session was never created - unless the record
+        # contradicts itself (creation started, a prompt marked attempted, or
+        # a malformed credential), which stays unknown instead of being
+        # guessed into a close confirmation.  prompt_attempted is never the
+        # basis here: a missing or null field proves nothing on its own.
+        cleanup=native.get('cleanup');attempted=native.get('prompt_attempted')
+        if cleanup not in (None,'not_created') or attempted is True or (attempted is not None and type(attempted) is not bool):
+            raise ValueError('任务记录无法证明未创建原生会话；保留资源')
+        evidence={'at':registry.now(),'method':'never_created',
+                  'basis':'no session id was ever persisted for this task'}
+        registry.patch_task(run,zcode={**native,'cleanup':'not_created','finalize':evidence})
+        return {'finalized':True,'closed':False,'method':'never_created','evidence':evidence}
+    config=configuration();installation(config)
+    snapshot=state.get('zcode_connection') or {}
+    if any(snapshot.get(k)!=config.get(k) for k in ('home','port')):
+        raise ValueError('ZCode 原连接配置已变化；不跨实例猜测会话状态，请先核对连接')
+    def confirm(method):
+        evidence={'at':registry.now(),'session_id':sid,'method':method}
+        registry.patch_task(run,zcode={**native,'cleanup':'closed','finalize':evidence},
+                            phase='定向收尾：原生会话已确认关闭')
+        return {'finalized':True,'closed':True,'method':method,'evidence':evidence}
+    recorded=state.get('zcode_instance')
+    if recorded is not None:
+        alive=instance_matches(recorded)
+        if alive is False:return confirm('instance_exited')
+        if alive is None:raise ValueError('桌面实例身份无法核实；保留资源，不猜测会话状态')
+    else:
+        # No pinned identity (legacy record, or capture already failed when
+        # the task ran): absence evidence must come from a *readable* process
+        # table, never from rows that could not be inspected.
+        presence=desktop_state(config)
+        if presence=='absent':return confirm('desktop_not_running')
+        if presence=='unknown':raise ValueError('桌面进程状态无法核实；保留资源，不猜测会话状态')
+    events=driver({**config,'action':'finalize','session_id':sid,
+                   'workspacePath':(state.get('workspace') or {}).get('path') or state.get('project')})
+    closed=next((e for e in events if e['type']=='closed' and e.get('session_id')==sid),None)
+    if closed:return confirm('session_inactive' if closed.get('inactive') else 'bridge_close')
+    errors='；'.join(str(e.get('message') or '') for e in events if e['type']=='error')[:400]
+    raise ValueError('原生会话关闭未确认；保留资源'+('：'+errors if errors else ''))
+
+
 def answer_text(snapshot):
     parts=[]
     for message in snapshot.get('messages') or []:
@@ -262,21 +456,33 @@ def answer_text(snapshot):
     return '\n\n'.join(parts)
 
 
+def tool_adapter(state=None):
+    value=MODE if state is None else state.get('zcode_tool_mode',LEGACY_MODE)
+    if value==MODE:return zcode_native_tools
+    if value==LEGACY_MODE:return zcode_tools
+    raise ValueError('ZCode 工具配置模式未知，未自动替换')
+
+
 def run_task(run,state,model,*,execute=None):
     import workflow_settings,execution_endpoints,delegation_policy,context_manager
+    import task_workspace
     run=Path(run).resolve();project=Path(state['project']).resolve();tracker=execution_result.Tracker('zcode')
     native={'prompt_attempted':False,'cleanup':'not_created'};status,error,answer='failed','','';events=[];before={};changed=[];hashes={};test=None
+    native_tools=False;adapter=zcode_tools;failure_category='unknown'
+    failure_code='PREPARATION_FAILED';failure_source='adapter'
     tracker.mark('prepare','running')
     def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
     try:
         if state.get('engine')!='zcode' or model.get('provider')!='zcode' or state['model_id']!=model_row_id(model['model']) or state['model']!=model['model']:
             raise ValueError('ZCode 原生模型与任务身份不匹配')
-        if run!=project/'.model-desk/runs'/state['id']:raise ValueError('任务不属于当前项目')
+        record,project=task_workspace.native_roots(run,state)
         settings=workflow_settings.snapshot();validate_task(state,settings);execution_endpoints.gate('zcode',model,settings)
         if state.get('route',{}).get('mode')=='auto' and not settings.get('enabled'):raise ValueError('协作开关已关闭')
         recovery_guard(state);config=configuration();info=installation(config)
         snapshot=state.get('zcode_connection') or {}
-        if any(snapshot.get(k)!=config.get(k) for k in ('home','port')) or state.get('zcode_tool_revision')!=zcode_tools.revision():raise ValueError('ZCode 原连接或保护版本已变化；旧任务不自动换版')
+        adapter=tool_adapter(state);native_tools=adapter is zcode_native_tools
+        if record!=project and not native_tools:raise ValueError('旧 ZCode 工具任务不支持隔离工作区；未自动换版')
+        if any(snapshot.get(k)!=config.get(k) for k in ('home','port')) or state.get('zcode_tool_revision')!=adapter.revision():raise ValueError('ZCode 原连接或保护版本已变化；旧任务不自动换版')
         access=state.get('zcode_access_mode')
         if access not in ('project','full') or snapshot.get('access_mode')!=access:raise ValueError('ZCode 原任务权限快照不一致')
         config={**config,'access_mode':access}
@@ -284,46 +490,78 @@ def run_task(run,state,model,*,execute=None):
         if (not isinstance(chosen,dict) or chosen.get('providerId','')+'/'+chosen.get('modelId','')!=state['model']):raise ValueError('ZCode 模型或思考强度快照不匹配')
         ensure_connection(cancel_file=run/'cancelled.flag',allow_auto=snapshot.get('auto_connect',False))
         if (run/'cancelled.flag').exists():raise ValueError('ZCode 任务已取消，未请求模型')
-        before={f:digest(project/f) for f in state.get('files') or []}
-        tool_job=zcode_tools.prepare(run,state,[Path.home()/name for name in ('.zcode','.ssh','.aws','.azure','.gnupg','.kube')]+[config['home']])
+        # Pin the desktop instance this task is about to use, before any prompt
+        # can be sent: targeted finalization and instance-change decisions bind
+        # to this identity instead of a bare port. None stays None (unknown).
+        instance=desktop_instance(config)
+        mapped=task_workspace.execution_files(state)
+        targets={f:project/name for f,name in zip(state.get('files') or [],mapped)}
+        before={f:digest(target) for f,target in targets.items()}
         sid='modeldesk-zcode-'+uuid.uuid4().hex
+        protected=[Path.home()/name for name in ('.zcode','.ssh','.aws','.azure','.gnupg','.kube')]+[config['home']]
+        tool_job=(adapter.prepare(run,state,protected,sid) if native_tools else adapter.prepare(run,state,protected))
+        native_job=adapter.load(tool_job) if native_tools else None
+        temp_dir=native_job.get('temp_dir') if native_job else None
         prompt=(run/'prompt.txt').read_text(encoding='utf-8')
         if state.get('zcode_handoff'):
             handoff=run/'continuation.txt'
             if hashlib.sha256(handoff.read_bytes()).hexdigest()!=state['zcode_handoff']['sha256']:raise ValueError('续接交接内容已变化')
             prompt+='\n\n以下为同项目原任务交接，仅供上下文，不改变本轮约束：\n'+handoff.read_text(encoding='utf-8')
-        prompt+='\n\n执行边界：仅使用 modeldesk_zcode 提供的文件和 PowerShell 工具；自行运行测试并报告真实结果。拒绝后停止，不换工具重试；不读写 .model-desk、认证及其他会话，不启用子代理或后台服务，不发布。临时文件可保留，无须为收尾清理。'
-        prompt+='\n业务文件：'+json.dumps(state.get('files') or [],ensure_ascii=False)
+        prompt+=('\n\n执行边界：使用 ZCode 自带的 Read/Glob/Grep/WebFetch/WebSearch'+('/Write/Edit/Bash' if state['kind']=='edit' else '')+' 原生工具，不加载 modeldesk_zcode MCP 工具。自行运行测试并报告真实退出码，普通文件缺失或编辑冲突按原生错误纠正；权限/保护拒绝后必须停止，不换工具重试。' if native_tools else '\n\n执行边界：仅使用 modeldesk_zcode 提供的文件和 PowerShell 工具；自行运行测试并报告真实结果。拒绝后停止，不换工具重试；')
+        prompt+='不读写 .model-desk、认证及其他会话，不启用子代理或后台服务，不发布。临时文件可保留，无须为收尾清理。'
+        prompt+=endpoint_access.scratch_prompt(state,temp_dir)
+        prompt+=(endpoint_access.scope_prompt(state,mapped,task_workspace.execution_files(state,'readonly_files'))
+                 or '\n业务文件：'+json.dumps(mapped,ensure_ascii=False))
         if state.get('test_command'):prompt+='\n必须原样执行的自测命令：'+state['test_command']
         job={**config,'action':'task','project':str(project),'session_id':sid,'selection':chosen,'kind':state['kind'],
              'python':sys_executable(),'tools_script':str(HERE/'zcode_tools.py'),'tool_job':str(tool_job),
              'prompt':prompt,'cancel_file':str(run/'cancelled.flag'),'timeout':state.get('timeout',0)}
+        if native_tools:
+            job.update(tool_mode=MODE,native_tools=native_job['tools'],native_profile=native_job['profile'])
+            job.pop('python',None);job.pop('tools_script',None)
+        if native_tools and zcode_native_tools.selftest_diagnostic_enabled(state):
+            # The assembled prompt lives only in the ephemeral driver job;
+            # persisting it for declared-selftest tasks answers "was the exact
+            # command ever delivered" without relying on the dispatch base.
+            (run/'prompt-final.txt').write_text(prompt,encoding='utf-8')
         registry.patch_task(run,status='running',phase='ZCode 正在连接',started_at=registry.now(),worker_pid=os.getpid(),
-            zcode_session_id=sid,zcode=native,executor_version=info['version'],billing_source='zcode-native-account',
+            zcode_session_id=sid,zcode_instance=instance,zcode=native,executor_version=info['version'],billing_source='zcode-native-account',
             native_credits_used=None,cost_cny=None,cost_settled_cny=None,model_calls=None,
-            sandbox_mode='scoped-mcp-tool-argument-guard',subagent_decision={'decision':'deny','reason':'工具白名单不含子代理'})
+            sandbox_mode='native-hooks-tool-argument-guard' if native_tools else 'scoped-mcp-tool-argument-guard',subagent_decision={'decision':'deny','reason':'工具白名单不含子代理'})
         last_progress=0
         def on_event(e):
-            nonlocal last_progress
+            nonlocal last_progress,failure_code
             if e['type']=='session_creating':native['cleanup']='pending'
             if e['type']=='connected':tracker.mark('prepare','completed');registry.patch_task(run,phase='ZCode 正在执行')
-            if e['type']=='prompt_attempted':native['prompt_attempted']=True;tracker.mark('execute','running')
+            if e['type']=='prompt_attempted':
+                native['prompt_attempted']=True;tracker.mark('execute','running');failure_code='NATIVE_EXECUTION_FAILED'
             if e['type']=='closed':native['cleanup']='closed'
             if e['type']=='error':native['outcome_unknown']=native['prompt_attempted']
             if e['type'] in ('native_event','heartbeat'):
+                if e.get('permission_denied') is True:native['permission_denied']=True
                 if time.monotonic()-last_progress<1:return
                 last_progress=time.monotonic()
                 try:
-                    proof=zcode_tools.Tools(tool_job).proof
-                    calls=[{'title':p['tool'],'status':p.get('status') or ('completed' if p['ok'] else 'failed'),'input_hash':p['input_hash'],'exit_code':p.get('exit_code')} for p in proof['events'][-20:]]
+                    proof=adapter.verify(tool_job,sid) if native_tools else adapter.Tools(tool_job).proof
+                    calls=(adapter.public_calls(proof)[-20:] if native_tools else [{'title':p['tool'],'status':p.get('status') or ('completed' if p['ok'] else 'failed'),'input_hash':p['input_hash'],'exit_code':p.get('exit_code')} for p in proof['events'][-20:]])
                     registry.patch_task(run,tool_calls=calls,phase='ZCode 正在执行'+(' · '+calls[-1]['title'] if calls else ''),last_progress_at=registry.now())
                 except (OSError,ValueError):pass
                 return
             registry.patch_task(run,zcode=dict(native),execution_evidence=tracker.snapshot())
-        events=(execute or driver)(job,on_event=on_event)
+        try:
+            events=(execute or driver)(job,on_event=on_event)
+        except Exception:
+            if native['prompt_attempted']:native['outcome_unknown']=True
+            raise
         errors=[e['message'] for e in events if e['type']=='error']
+        if errors and native['prompt_attempted']:native['outcome_unknown']=True
         final=next((e for e in events if e['type']=='result'),{})
         result=final.get('value')
+        if result is None and native['prompt_attempted']:native['outcome_unknown']=True
+        if final.get('permission_denied') is True or native.get('permission_denied'):
+            failure_category='permission_denied'
+            failure_code='TOOL_PERMISSION_DENIED'
+            raise ValueError('ZCode 原生会话报告工具权限拒绝；保留失败，不自动重试')
         if errors or result is None:raise ValueError('; '.join(errors) or 'ZCode 没有返回可核对终态')
         if final.get('terminal_event') in ('turn.failed','turn.cancelled') or result.get('session',{}).get('status') in ('error','running','waiting','paused'):
             raise ValueError('ZCode 原生执行没有正常完成，保留失败状态')
@@ -333,36 +571,73 @@ def run_task(run,state,model,*,execute=None):
         answer=answer_text(result)
         if not answer.strip():raise ValueError('ZCode 未返回最终答复，未宣称完成')
         tracker.mark('execute','completed');tracker.mark('verify','running')
-        proof=zcode_tools.Tools(tool_job).proof
-        if not proof['listed'] or proof['stopped']:raise ValueError('ZCode 工具尚未加载或本轮工具被拒绝')
+        failure_code='PROTECTION_EVIDENCE_UNCONFIRMED';failure_source='protection_verification'
+        proof=adapter.verify(tool_job,sid) if native_tools else adapter.Tools(tool_job).proof
+        if (proof.get('writes_paused') if native_tools else (not proof['listed'] or proof['stopped'])):
+            failure_category='permission_denied'
+            failure_code='TOOL_PERMISSION_DENIED';failure_source='adapter_tool'
+            raise ValueError('ZCode 原生工具保护已拒绝本轮' if native_tools else 'ZCode 工具尚未加载或本轮工具被拒绝')
         if any(p.get('status')=='in_progress' for p in proof['events']):raise ValueError('ZCode 工具尚未完成，不能宣称执行完成')
         if state.get('test_command'):
-            expected=hashlib.sha256(state['test_command'].encode()).hexdigest()
-            matches=[e for e in proof['events'] if e.get('command_hash')==expected]
-            last=matches[-1] if matches else {}
-            test={'source':'zcode-mcp-command','command_sha256':expected,'exit_code':last.get('exit_code'),
-                  'verified':last.get('ok') is True and last.get('exit_code')==0}
-            if not test['verified']:raise ValueError('ZCode 指定自测命令没有真实通过证据')
-        tracker.mark('verify','completed');status='completed'
+            test,blocking=execution_result.native_selftest(state,proof['events'],
+                'zcode-native-tools' if native_tools else 'zcode-mcp-command',native=native_tools)
+            expected=test['command_sha256']
+            detail=''
+            if native_tools and test['exit_code'] is None:
+                # Exact-hash acceptance never loosens; the opt-in diagnostic
+                # only classifies the miss with hash-only shape evidence.
+                summary=zcode_native_tools.selftest_diagnostic_summary(proof['events'],expected)
+                result_hashes=zcode_native_tools.native_result_command_hashes(result) if isinstance(result,dict) else []
+                summary['native_result_hits']=any(row['hash']==expected for row in result_hashes)
+                summary['native_result_commands']=len(result_hashes)
+                test['diag']=summary
+                hints=[]
+                if summary.get('trimmed_match') or summary.get('line_endings_match'):hints.append('命令已执行但存在尾部空白或换行符差异')
+                if summary.get('group_match'):hints.append('期望命令作为复合命令的分组出现')
+                if summary.get('unparsed_groups'):hints.append('存在无法解析分组的复合命令')
+                if summary.get('native_result_hits'):hints.append('原生会话结果含匹配命令而钩子未见')
+                if summary.get('bash_diag_events')==0:detail='；诊断：无带诊断的 Bash 事件'
+                elif hints:detail='；诊断：'+'；'.join(hints)+'（匹配仍按精确哈希）'
+                else:detail='；诊断：键入命令与指定命令不同（键入长度 %s）'%summary.get('typed_len')
+            if not test['verified']:
+                failure_code='TEST_FAILED' if type(test['exit_code']) is int and test['exit_code']!=0 else 'TEST_UNCONFIRMED'
+                failure_source='adapter_tool'
+                message='ZCode 指定自测命令没有真实通过证据'+detail
+                if blocking:raise ValueError(message)
+                tracker.fail('verify',failure_code,message,source='adapter_tool',category='test')
+        if test is None or test['verified']:tracker.mark('verify','completed' if test else 'not_requested')
+        status='completed'
     except Exception as exc:
         error=context_manager._redact(str(exc))[:1800]
-        tracker.fail(tracker.current,'ZCODE_EXECUTION_FAILED',error,source='adapter',category='unknown')
+        if native.get('outcome_unknown') is True and failure_code!='TOOL_PERMISSION_DENIED':
+            failure_code='OUTCOME_UNKNOWN';failure_source='adapter'
+        tracker.fail(tracker.current,failure_code,error,source=failure_source,category=failure_category)
     finally:
         tracker.mark('session_close','running')
         if native['cleanup']=='pending':status='failed';error=(error+'；原生会话关闭未确认，不能自动重发').strip('；');tracker.fail('session_close','SESSION_CLOSE_UNCONFIRMED',error,source='adapter')
         else:tracker.mark('session_close','completed' if native['cleanup']=='closed' else 'not_applicable')
         for f,old in before.items():
-            current=digest(project/f)
+            try:current=digest(targets[f])
+            except OSError:
+                status='failed';error=(error+'；成果文件无法核对，未宣称完成').strip('；')
+                tracker.fail('artifacts','ARTIFACT_CHECK_FAILED','成果文件无法核对，保留未确认状态',source='adapter')
+                continue
             if current!=old:changed.append(f);hashes[f]=current
         if (run/'cancelled.flag').exists():status='cancelled'
         if answer:(run/'answer.txt').write_text(answer,encoding='utf-8')
         proof=locals().get('proof') or {}
-        calls=[{'title':e['tool'],'status':'completed' if e['ok'] else 'failed','input_hash':e['input_hash'],
-                'exit_code':e.get('exit_code')} for e in proof.get('events',[])]
-        tracker.mark('artifacts','completed');tracker.mark('record','completed')
-        registry.patch_task(run,status=status,phase='执行完成' if status=='completed' else 'ZCode 执行失败',ended_at=registry.now(),
+        if not proof and 'tool_job' in locals():
+            try:proof=adapter.verify(tool_job,sid) if native_tools else adapter.Tools(tool_job).proof
+            except (OSError,ValueError):pass
+        calls=(adapter.public_calls(proof) if native_tools else [{'title':e['tool'],'status':'completed' if e['ok'] else 'failed','input_hash':e['input_hash'],
+                'exit_code':e.get('exit_code')} for e in proof.get('events',[])])
+        if not any(issue.get('code')=='ARTIFACT_CHECK_FAILED' for issue in tracker.snapshot().get('issues',[])):tracker.mark('artifacts','completed')
+        tracker.mark('record','completed')
+        registry.patch_task(run,status=status,phase=(
+            '执行结束，指定自测待核实' if test and test.get('verified') is False else '执行完成'
+            ) if status=='completed' else 'ZCode 执行失败',ended_at=registry.now(),
             zcode=native,answer=answer,error=error or None,changed_files=changed,file_hashes=hashes,test_result=test,
-            tool_calls=calls,record_protection=bool(proof.get('listed')),cost_cny=None,cost_settled_cny=None,native_credits_used=None,
+            tool_calls=calls,record_protection=bool(proof.get('listed') or proof.get('source')=='zcode-native-hooks'),cost_cny=None,cost_settled_cny=None,native_credits_used=None,
             summary='ZCode 原生执行结束；等待主脑独立验收，原生额度用量未返回',exit_code=0 if status=='completed' else 1,
             execution_evidence=tracker.snapshot())
         try:delegation_policy.record_executor(run,{'completed':status=='completed','test':test,'changed_files':changed})
@@ -378,8 +653,19 @@ def sys_executable():
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--run-id',required=True);args=parser.parse_args()
-    run=registry.task_dir(args.run_id);state=registry.read_task(run)
+    parser=argparse.ArgumentParser();parser.add_argument('--run-id',required=True)
+    parser.add_argument('--finalize-session',action='store_true',
+                        help='只确认/关闭本任务的原生专用会话并记录证据；不发送提示词，不释放控制器资源')
+    args=parser.parse_args()
+    run=registry.task_dir(args.run_id)
+    if args.finalize_session:
+        print(json.dumps(finalize_session(run),ensure_ascii=False))
+        return 0
+    state=registry.read_task(run)
+    if (run/'cancelled.flag').exists():
+        registry.patch_task(run,status='cancelled',phase='已停止执行',ended_at=registry.now(),
+                            zcode={'prompt_attempted':False,'cleanup':'not_created'})
+        return 1
     return run_task(run,state,registry.get_model(state['model_id']))
 
 if __name__=='__main__':raise SystemExit(main())

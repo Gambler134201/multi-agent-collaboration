@@ -80,8 +80,10 @@ try {
   emit({ type: 'record_protection', engine: 'pi', session_id: state.sessionId });
   await request('set_auto_retry', { enabled: false });
   if (fs.existsSync(job.cancel_file)) throw new Error('任务已取消');
+  const message=fs.readFileSync(job.prompt_file,'utf8');
   prompted = true;
-  const response = await request('prompt', { message: fs.readFileSync(job.prompt_file, 'utf8') });
+  emit({type:'prompt_attempted'});
+  const response = await request('prompt', { message });
   if (response?.disposition !== 'started') throw new Error('Pi 未开始本次任务：' + response?.disposition);
   cancelTimer = setInterval(() => {
     if (!cancelling && fs.existsSync(job.cancel_file)) {

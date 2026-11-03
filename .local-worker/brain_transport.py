@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import threading
+from http.client import HTTPException
 from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -24,8 +25,8 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 DEFAULT_BASE_URL = 'http://127.0.0.1:8765'
 CAPABILITY_HEADER = 'X-Brain-Capability'
 LOOPBACK_HOSTS = {'127.0.0.1', 'localhost', '::1'}
-READ_OPERATIONS = frozenset({'describe', 'candidates', 'route_preview', 'status', 'delivery', 'request_status', 'project_map'})
-MUTATING_OPERATIONS = frozenset({'dispatch', 'review', 'rework'})
+READ_OPERATIONS = frozenset({'describe', 'candidates', 'route_preview', 'status', 'delivery', 'request_status', 'project_map','plan_status','plan_preview'})
+MUTATING_OPERATIONS = frozenset({'dispatch', 'review', 'rework', 'integrate', 'accept_integration', 'finalize', 'reconcile_integration','plan_draft','plan_prepare','plan_resume','plan_handover'})
 MAX_BODY_BYTES = 5_000_000
 MAX_RESPONSE_BYTES = 5_000_000
 
@@ -139,14 +140,71 @@ def _valid_result(operation, data):
                 and isinstance(data.get('nodes'), list) and isinstance(data.get('edges'), list)
                 and data.get('read_only') is True)
     if operation == 'request_status':
-        return (isinstance(data.get('request_id'), str) and bool(data['request_id'])
+        valid=(isinstance(data.get('request_id'), str) and bool(data['request_id'])
                 and data.get('request_state') in {'completed', 'rejected', 'reserved',
-                                                  'unknown', 'not_found', 'task_found'}
+                                                  'unknown', 'not_found', 'task_found','plan_found'}
                 and data.get('read_only') is True and data.get('automatic_retry') is False)
+        if not valid:return False
+        if data.get('request_state')=='plan_found' and data.get('request_kind')!='plan':return False
+        if data.get('request_kind')=='plan' and ('plan' in data or data.get('request_state') in ('completed','plan_found')):
+            receipt=data.get('plan')
+            return (isinstance(receipt,dict) and isinstance(receipt.get('goal_id'),str) and bool(receipt['goal_id'])
+                    and receipt.get('action') in ('draft','prepare','resume','handover'))
+        return True
     if operation in ('dispatch', 'rework'):
         return isinstance(data.get('task'), dict) and bool(data['task'].get('task_id'))
+    if operation in ('plan_status','plan_preview'):
+        result=data.get('result')
+        valid=(data.get('operation')==operation and isinstance(data.get('goal_id'),str) and bool(data['goal_id'])
+               and isinstance(result,dict) and data.get('read_only') is True and result.get('read_only') is True)
+        if not valid:return False
+        if operation=='plan_status':
+            return result.get('goal_id')==data['goal_id'] and isinstance(result.get('project'),str) and isinstance(result.get('stages'),list)
+        document=result.get('document');definition=document.get('definition') if isinstance(document,dict) else None
+        goal=definition.get('goal') if isinstance(definition,dict) else None
+        return (isinstance(goal,dict) and goal.get('id')==data['goal_id']
+                and isinstance(result.get('digest'),str) and len(result['digest'])==64)
+    if operation.startswith('plan_'):
+        receipt=data.get('receipt')
+        return (data.get('operation')==operation and isinstance(data.get('request_id'),str)
+                and isinstance(receipt,dict) and isinstance(receipt.get('goal_id'),str) and bool(receipt['goal_id'])
+                and receipt.get('action')==operation.removeprefix('plan_'))
     if operation == 'review':
         return isinstance(data.get('receipt'), dict) and isinstance(data['receipt'].get('review'), dict)
+    if operation in ('integrate', 'accept_integration'):
+        integration = data.get('integration')
+        return (data.get('operation') == operation and isinstance(data.get('request_id'), str)
+                and bool(data['request_id']) and isinstance(integration, dict)
+                and isinstance(integration.get('name'), str) and bool(integration['name'])
+                and (integration.get('verdict') in {'passed', 'merge_conflict', 'check_failed'} or
+                     (operation == 'integrate' and isinstance(integration.get('queue'), dict)
+                      and type(integration['queue'].get('schema')) is int and integration['queue']['schema'] == 1
+                      and isinstance(integration['queue'].get('state'),str)
+                      and integration['queue'].get('state') in {'queued','preparing','merging','checking',
+                          'blocked','recovery_required','cancelled'}
+                      and integration.get('accepted') is False))
+                and type(integration.get('accepted')) is bool
+                and (operation != 'accept_integration' or
+                     (integration['accepted'] is True and integration['verdict'] == 'passed'
+                      and isinstance(integration.get('accepted_commit'), str)
+                      and bool(integration['accepted_commit']))))
+    if operation == 'reconcile_integration':
+        record=data.get('integration')
+        job=record.get('queue') if isinstance(record,dict) else None
+        receipt=job.get('reconciliation') if isinstance(job,dict) else None
+        return (data.get('operation')==operation and isinstance(data.get('request_id'),str)
+                and bool(data['request_id']) and data.get('executor_replayed') is False
+                and isinstance(record,dict) and isinstance(record.get('name'),str)
+                and bool(record['name']) and isinstance(receipt,dict)
+                and receipt.get('state') in {'not_started','not_held','needs_evidence','unknown','running','ready','settled'})
+    if operation == 'finalize':
+        result = data.get('result')
+        return (data.get('operation') == operation and isinstance(data.get('request_id'), str)
+                and bool(data['request_id']) and isinstance(result, dict)
+                and isinstance(result.get('task_id'), str) and bool(result['task_id'])
+                and isinstance(result.get('controller_finalization'), dict)
+                and result['controller_finalization'].get('state') == 'settled'
+                and result.get('executor_replayed') is False)
     if operation == 'delivery':
         return bool(data.get('task_id')) and 'status' in data
     if operation == 'candidates':
@@ -198,6 +256,12 @@ class BrainTransport:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 if len(raw) > MAX_RESPONSE_BYTES:
                     raise TransportError('主脑控制器响应过大，已拒绝')
+                # Bounded HTTPResponse.read(amt) may return syntactically valid
+                # JSON even when Content-Length bytes were not all received.
+                # Do not turn a partial transport response into a success.
+                remaining = getattr(response, 'length', None)
+                if type(remaining) is int and remaining > 0:
+                    raise ValueError('incomplete response body')
                 return response.status, _decode(raw)
         except HTTPError as error:
             try:
@@ -205,7 +269,7 @@ class BrainTransport:
             except Exception:
                 raw = b''
             return error.code, _decode(raw)
-        except (OSError, ValueError):
+        except (OSError, ValueError, HTTPException):
             if mutating:
                 raise OutcomeUnknown(
                     '请求已发往主脑控制器但响应丢失；未自动重试，结果可能未知。') from None
@@ -261,9 +325,15 @@ class BrainTransport:
         if not capability:
             raise NotConnected('尚未显式连接主脑控制器；请先调用 brain_connect。')
         mutating = operation in MUTATING_OPERATIONS
-        status, data = self._request(
-            'POST', '/api/brain/call', {'operation': operation, 'payload': body},
-            headers={CAPABILITY_HEADER: capability}, mutating=mutating)
+        try:
+            status, data = self._request(
+                'POST', '/api/brain/call', {'operation': operation, 'payload': body},
+                headers={CAPABILITY_HEADER: capability}, mutating=mutating)
+        except OutcomeUnknown as error:
+            error.operation = operation
+            if error.reference is None:
+                error.reference = body.get('request_id')
+            raise
         data = _scrub(data, capability)
         if status in (401, 403):
             with self._lock:
@@ -287,4 +357,43 @@ class BrainTransport:
                 raise OutcomeUnknown('变更响应结构无法确认；未自动重试，请核查原请求。', operation,
                                      reference=body.get('request_id'))
             raise TransportError('主脑控制器返回了意外的响应结构')
+        if operation=='request_status' and data.get('request_kind')=='plan':
+            public=self.context_public() or {};identity=public.get('owner') or {}
+            reference=identity.get('binding_key','')+'/'+body.get('request_id','')
+            if (not identity.get('binding_key') or data.get('request_id')!=body.get('request_id')
+                    or data.get('project')!=public.get('project') or data.get('owner')!=identity.get('id')
+                    or data.get('request_reference')!=reference
+                    or ('plan' in data and data['plan'].get('request_reference')!=reference)):
+                raise TransportError('计划请求查询返回了其他请求或归属')
+        if operation.startswith('plan_'):
+            mismatch=(data.get('goal_id')!=body.get('goal_id') if not mutating else False)
+            if not mutating:
+                public=self.context_public() or {};result=data['result']
+                project=(result.get('project') if operation=='plan_status' else result['document']['definition']['goal'].get('project'))
+                mismatch=mismatch or project!=public.get('project')
+            if mutating:
+                public=self.context_public() or {};identity=public.get('owner') or {}
+                receipt=data['receipt']
+                mismatch=(not identity.get('binding_key') or data.get('request_id')!=body.get('request_id') or data.get('owner')!=identity.get('id')
+                    or data.get('project')!=public.get('project') or
+                    receipt.get('request_reference')!=identity.get('binding_key','')+'/'+body.get('request_id',''))
+                if operation!='plan_draft':mismatch=mismatch or receipt.get('goal_id')!=body.get('goal_id',receipt.get('goal_id'))
+                if operation=='plan_handover':mismatch=mismatch or receipt.get('task_id')!=body.get('task_id')
+            if mismatch:
+                if mutating:raise OutcomeUnknown('计划回执与原请求或归属不符；未自动重试',operation,reference=body.get('request_id'))
+                raise TransportError('计划读取返回了其他目标')
+        if operation in ('integrate', 'accept_integration', 'finalize', 'reconcile_integration'):
+            mismatch = data['request_id'] != body.get('request_id')
+            if operation in ('accept_integration','reconcile_integration'):
+                mismatch = mismatch or data['integration']['name'] != body.get('name')
+                if operation == 'reconcile_integration':
+                    public=self.context_public() or {}
+                    binding=(public.get('owner') or {}).get('binding_key')
+                    actual=data['integration']['queue']['reconciliation'].get('request_reference')
+                    mismatch=mismatch or not binding or actual!=binding+'/'+body.get('request_id','')
+            elif operation == 'finalize':
+                mismatch = mismatch or data['result']['task_id'] != body.get('task_id')
+            if mismatch:
+                raise OutcomeUnknown('变更回执与原请求不匹配；未自动重试，请核查原请求。',
+                                     operation, reference=body.get('request_id'))
         return data

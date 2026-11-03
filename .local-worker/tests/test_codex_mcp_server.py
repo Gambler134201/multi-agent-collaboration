@@ -67,6 +67,18 @@ class MetadataTests(unittest.TestCase):
 
 
 class RouteTests(unittest.TestCase):
+    def test_integration_routes_match_existing_names_without_becoming_generic(self):
+        for name in ('queue-abc','release.1','a' * 40):
+            path='/api/integrations/'+name
+            self.assertEqual(desk.validate_request(path,'GET'),path)
+            for action in ('resume','cancel','reconcile'):
+                self.assertEqual(desk.validate_request(path+'/'+action,'POST'),path+'/'+action)
+        for method,path in [('GET','/api/integrations/..'),('GET','/api/integrations/'+ 'a'*41),
+                            ('POST','/api/integrations/x/accept'),('POST','/api/integrations/x/retry'),
+                            ('GET','/api/integrations/x/resume'),('POST','/api/integrations/x'),
+                            ('GET','/api/integrations/x%2Fy')]:
+            with self.assertRaises(desk.PanelError):desk.validate_request(path,method)
+
     def test_allowed_routes(self):
         for path in ("/api/state", "/api/workflow", "/api/codex-usage", "/api/session",
                      "/api/tasks/task-1", "/api/tasks/task_1/log"):
@@ -267,11 +279,11 @@ class ProxyTests(unittest.TestCase):
     def test_session_starts_the_service_exactly_once(self):
         state = {"started": 0}
 
-        def start():
+        def start(timeout):
             state["started"] += 1
 
         def workspace(timeout=3):
-            return str(desk.ROOT) if state["started"] else "D:\\other"
+            return str(desk.ROOT) if state["started"] else None
 
         with mock.patch.object(desk, "_start_service", side_effect=start), \
              mock.patch.object(desk, "service_workspace", side_effect=workspace):
@@ -281,18 +293,27 @@ class ProxyTests(unittest.TestCase):
 
     def test_running_service_is_reused_without_restart(self):
         started = []
-        with mock.patch.object(desk, "http_call", return_value=(200, {"workspace": str(desk.ROOT)})), \
+        with mock.patch.object(desk, "service_workspace", return_value=str(desk.ROOT)), \
              mock.patch.object(desk, "_start_service", side_effect=lambda: started.append(1)):
             self.assertTrue(desk.ensure_service())
         self.assertEqual(started, [])
 
     def test_foreign_service_on_the_port_is_rejected(self):
-        with mock.patch.object(desk, "http_call", return_value=(200, {"workspace": "D:\\other"})), \
-             mock.patch.object(desk, "_start_service", return_value=None):
-            self.assertFalse(desk.ensure_service(timeout=0))
+        with mock.patch.object(desk, "service_workspace", return_value="D:\\other"), \
+             mock.patch.object(desk, "_start_service") as start, self.assertRaises(desk.PanelError):
+            desk.ensure_service()
+        start.assert_not_called()
 
 
 class UiBundleTests(unittest.TestCase):
+    def test_task_graph_is_inlined_before_app_for_codex(self):
+        html = desk.build_workbench_html()
+        self.assertIn('ModelDeskTaskGraph', html)
+        self.assertIn('.tg-dialog', html)
+        self.assertNotIn('src="/task-graph.js"', html)
+        self.assertNotIn('href="/task-graph.css"', html)
+        self.assertLess(html.index('global.ModelDeskTaskGraph'), html.index('const taskGraphUI='))
+
     def test_result_assets_are_inlined_before_app_without_external_resources(self):
         html = desk.build_workbench_html()
         self.assertIn('ModelDeskExecutionResult', html)
@@ -300,6 +321,14 @@ class UiBundleTests(unittest.TestCase):
         self.assertNotIn('src="/execution-result.js"', html)
         self.assertNotIn('href="/execution-result.css"', html)
         self.assertLess(html.index('ModelDeskExecutionResult'), html.index('function renderDetail()'))
+
+    def test_task_status_assets_are_inline_and_available_before_app(self):
+        html = desk.build_workbench_html()
+        self.assertIn('ModelDeskTaskStatus', html)
+        self.assertIn('.md-task-status', html)
+        self.assertNotIn('src="/task-status.js"', html)
+        self.assertNotIn('href="/task-status.css"', html)
+        self.assertLess(html.index('ModelDeskTaskStatus'), html.index('function taskSummary('))
 
     def test_map_assets_are_inlined_in_bridge_map_app_order(self):
         with tempfile.TemporaryDirectory() as folder:

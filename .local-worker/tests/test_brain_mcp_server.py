@@ -327,7 +327,7 @@ class StdioProtocolTests(unittest.TestCase):
             self.assertEqual(initialized['result']['serverInfo']['name'], 'model-desk-brain')
             tools = {tool['name']: tool for tool in client.list_tools()}
             self.assertEqual(set(tools), set(brain.TOOLS))
-            self.assertEqual(len(tools), 12)
+            self.assertEqual(len(tools), 17)
             self.assertTrue(tools['brain_request_status']['annotations']['readOnlyHint'])
             for name, tool in tools.items():
                 self.assertFalse(tool['inputSchema'].get('additionalProperties', True),
@@ -463,6 +463,8 @@ class EndToEndLoopTests(unittest.TestCase):
         (run / 'answer.txt').write_text(answer, encoding='utf-8')
         policy.record_executor(run, {'completed': True, 'changed_files': ['a.py'],
                                      'test': {'exit_code': 0, 'output': 'ok'}})
+        import task_finalization
+        task_finalization.settle(run)
         return run
 
     def evidence(self):
@@ -616,6 +618,16 @@ class EndToEndLoopTests(unittest.TestCase):
         self.assertEqual(final['delivery_state'], 'accepted')
         # No dispatch happened on status/delivery/review reads beyond the two rounds.
         self.assertEqual(len(self.submitted), 2)
+        self.assertTrue(self.client.call('brain_integrate',{
+            'request_id':'loop-no-isolated-result','task_ids':[task_id],
+            'checks':[[sys.executable,'-c','raise AssertionError("must not run")']]})['isError'])
+        self.assertTrue(self.client.call('brain_accept_integration', {
+            'request_id': 'loop-no-integration-accept', 'name': 'missing-integration',
+            'criteria': self.evidence()})['isError'])
+        self.assertTrue(self.client.call('brain_finalize',{
+            'request_id':'loop-already-settled','task_id':task_id})['isError'])
+        self.assertTrue(self.client.call('brain_reconcile_integration',{
+            'request_id':'loop-no-queue-recovery','name':'missing-integration'})['isError'])
         # Controller capability/panel token never leak into the protocol payload.
         everything = json.dumps([payload(dispatch) for dispatch in
                                  (connected, preview, dispatched, status, delivery, returned,
@@ -627,7 +639,9 @@ class EndToEndLoopTests(unittest.TestCase):
         results = json.dumps(self.client.tool_responses, ensure_ascii=False)
         for capability in brain_gateway._CAPABILITIES:
             self.assertNotIn(capability, results)
-        self.assertEqual({entry['name'] for entry in self.client.tool_responses}, set(brain.TOOLS))
+        # The plan approval/resume protocol has its own real stdio/HTTP suite;
+        # this fixture covers the pre-existing single-task loop.
+        self.assertEqual({entry['name'] for entry in self.client.tool_responses}, set(brain.TOOLS)-{'brain_plan'})
         assert_native_projection(self, self.client.tool_responses)
 
 

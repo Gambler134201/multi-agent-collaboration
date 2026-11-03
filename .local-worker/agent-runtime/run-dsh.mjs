@@ -26,6 +26,8 @@ const verifyRecordProtection=async sessionId=>{
   const data=await readRecordProof();
   if(!data)throw new Error('工作台记录写入保护未在 DSH 中装载，已拒绝执行；请创建新任务');
   if((data.access_mode||'full')!==(job.access_mode||'full'))throw new Error('DSH 访问权限保护与任务快照不一致');
+  if(job.record_project&&normPath(data.record_project)!==normPath(job.record_project))throw new Error('DSH 原项目隔离保护未确认');
+  if(job.context_root&&normPath(data.context_root)!==normPath(job.context_root))throw new Error('DSH 自有只读上下文范围未确认');
   if(data.source!=='model-desk-record-protection'||data.probe!=='ok'||data.scope!=='global')throw new Error('工作台记录写入保护未在全局工具层生效，已拒绝执行');
   if(String(data.revision||'')!==recordRevision)throw new Error('工作台记录写入保护内容与派发记录不一致，已拒绝执行；请创建新任务');
   if(normPath(data.root)!==normPath(recordRoot))throw new Error('工作台记录写入保护的项目目录与任务不一致，已拒绝执行');
@@ -98,7 +100,9 @@ try{
   if(!modelIds.includes(expected)||status.models?.currentModelId!==expected)throw new Error('DSH 未选择指定模型，停止派发');
   await verifyRecordProtection(sessionId);
   if(fs.existsSync(job.cancel_file))throw new Error('任务已取消');
-  turn=runtime.startTurn({handle,text:fs.readFileSync(job.prompt_file,'utf8'),mode:'prompt',requestId:job.task_id,...(job.timeout>0?{timeoutMs:job.timeout*1000}:{})});
+  const text=fs.readFileSync(job.prompt_file,'utf8');
+  emit({type:'prompt_attempted'});
+  turn=runtime.startTurn({handle,text,mode:'prompt',requestId:job.task_id,...(job.timeout>0?{timeoutMs:job.timeout*1000}:{})});
   timer=setInterval(()=>{
     drainLedger();
     if(!stopping&&fs.existsSync(job.cancel_file)){stopping=true;turn.cancel({reason:'用户停止任务'}).catch(error=>emit({type:'cancel_error',text:error.message}));}

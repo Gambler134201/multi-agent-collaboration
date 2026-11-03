@@ -11,7 +11,9 @@ import context_manager
 import model_registry as registry
 import record_protection
 import endpoint_access
+import endpoint_readiness
 import runtime_paths
+import task_workspace
 
 HERE = Path(__file__).resolve().parent
 # Pi is the user's own install. MODEL_DESK_PI_HOME declares where it lives; the
@@ -53,6 +55,8 @@ def availability():
         message = (f'已检测到 Pi {version}，但缺少预期文件（{node} 或 {cli}）；'
                    f'请核对 {runtime_paths.PI_HOME_ENV} 是否指向完整安装根目录')
     return {'ready': ready, 'name': 'Pi Agent', 'engine': 'pi', 'version': version,
+            'readiness': endpoint_readiness.runtime('runtime_ready' if ready else
+                'configuration_missing' if home is None else 'version_unsupported' if not supported else 'installation_incomplete'),
             'executable': str(cli), 'node': str(node), 'transport': 'Pi RPC',
             'edit_sandbox_mode': 'danger-full-access', 'chat_sandbox_mode': 'read-only',
             'message': message}
@@ -69,6 +73,8 @@ def fingerprint(model, state, project):
     data = ['pi', availability()['version'], str(CLI), model['id'], model['model'], model['api_base'],
             model.get('max_input_tokens'), model.get('max_output_tokens'), model.get('thinking_level', 'default'),
             state['kind'], str(project), revision(), endpoint_access.task_mode(state)]
+    if endpoint_access.task_policy(state) is not None:
+        data.append([state['task_policy'],state.get('files') or [],state.get('readonly_files') or []])
     return hashlib.sha256(json.dumps(data, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -81,27 +87,38 @@ def prepare(run, state, model, relay):
     if not state.get('project') or not project.is_absolute() or not project.is_dir():
         raise ValueError('Pi 任务必须绑定已存在的项目绝对目录；不能猜测当前项目')
     project = project.resolve()
+    # Records, sessions and the context index stay owned by the record project;
+    # the task worktree (when present) is where all file work happens.
+    record, project = (task_workspace.execution_roots(state) if state.get('workspace')
+                       else (project, project))
+    if (state.get('workspace') or {}).get('created'):
+        record, project = task_workspace.native_roots(run, state)
+    execution_names = task_workspace.execution_files(state)
     if state['kind'] == 'edit':
-        record_protection.validate_files(state.get('files') or [], project)
-    before = {name: dsh_worker.digest(project / name) for name in state.get('files') or []}
-    identity = fingerprint(model, state, project)
+        record_protection.validate_files(execution_names, project)
+    before = {name: dsh_worker.digest(project / name) for name in execution_names}
+    identity = fingerprint(model, state, record)
     if state.get('connection_fingerprint') and state['connection_fingerprint'] != identity:
         raise ValueError('Pi 会话的模型、项目、执行器版本或保护策略已改变，请创建新任务')
     session_file = Path(state['pi_session_file']).resolve() if state.get('pi_session_file') else None
     # A continued session remains in the same project's own record tree.
     import project_storage
-    if session_file and not session_file.is_relative_to(project_storage.runs_dir(project).resolve()):
+    if session_file and not session_file.is_relative_to(project_storage.runs_dir(record).resolve()):
         raise ValueError('Pi 会话文件不属于当前项目的任务记录，已拒绝续接')
     if state.get('pi_session_id') and (not session_file or not session_file.is_file()):
         raise ValueError('Pi 原会话文件缺失，不能以空白会话冒充续接')
     index_path = context_manager.default_index_path(run)
     index = None
     try:
-        index, reused = context_manager.ensure_index(project, state.get('files') or [], index_path)
+        # Store context in the record project, index the actual execution tree.
+        index, reused = context_manager.ensure_index(project, execution_names, index_path)
         registry.patch_task(run, context_index=context_manager.index_summary(index, reused=reused, path=index_path))
     except Exception as exc:
         registry.patch_task(run, context_index_error=str(exc)[:300])
-    prompt, base = dsh_worker.build_agent_prompt(run, state, index=index, index_path=index_path, delegate=False)
+    prompt, base = dsh_worker.build_agent_prompt(run, {**state, 'files': execution_names,
+        'readonly_files':task_workspace.execution_files(state,'readonly_files')}, index=index, index_path=index_path, delegate=False)
+    if record != project:
+        prompt += '\n任务在独立工作区执行，所有相对文件路径以此为根：' + str(project) + '。不得修改原项目。'
     prompt = prompt.replace('DSH 工具层', 'Pi 工具层')
     prompt_path = run / 'pi-prompt.txt'
     prompt_path.write_text(prompt, encoding='utf-8')
@@ -121,6 +138,12 @@ def prepare(run, state, model, relay):
            'session_dir': str(run / 'pi-sessions'), 'session_id': state.get('pi_session_id'),
            'prompt_file': str(prompt_path), 'cancel_file': str(run / 'cancelled.flag'), 'api_base': relay.url,
            'proof_file': str(run / 'pi-proof.json'), 'revision': revision(), 'timeout': state.get('timeout', 0)}
+    if endpoint_access.task_policy(state) is not None:
+        job.update(task_policy=state['task_policy'],files=execution_names,
+                   readonly_files=task_workspace.execution_files(state,'readonly_files'))
+    if record != project:
+        job['record_project'] = str(record)
+        job['context_root'] = str(context_manager.context_dir(run))
     job_file = run / 'pi-job.json'
     (run / 'pi-sessions').mkdir(exist_ok=True)
     registry.write_json(job_file, job)
@@ -146,10 +169,18 @@ def verify(run, project, session_id):
     if Path(proof.get('root') or '').resolve() != project.resolve() or proof.get('source') != 'model-desk-pi-protection':
         raise ValueError('Pi 保护证据不属于当前项目')
     state = registry.read_task(run)
+    if proof.get('task_policy') != endpoint_access.task_policy(state):
+        raise ValueError('Pi 保护证据与任务写入范围不符')
+    if (state.get('workspace') or {}).get('created') and (
+            not proof.get('record_project') or Path(proof['record_project']).resolve() != Path(state['project']).resolve() or
+            not proof.get('context_root') or Path(proof['context_root']).resolve() != context_manager.context_dir(run).resolve()):
+        raise ValueError('Pi 保护证据缺少原项目隔离绑定')
     if proof.get('access_mode', 'full') != endpoint_access.task_mode(state):
         raise ValueError('Pi 访问权限保护与任务快照不一致')
     if proof.get('tools_guard') is not True or proof.get('kind') != state.get('kind') or proof.get('session_file') != state.get('pi_session_file'):
         raise ValueError('Pi 工具保护证据与任务模式或原会话文件不匹配')
+    import execution_result
+    execution_result.guard_problem(proof)
     return proof
 
 

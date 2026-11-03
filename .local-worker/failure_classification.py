@@ -64,6 +64,7 @@ REASON_LABELS = {
     'windows_task_save': 'Windows 任务或记录保存失败，不计模型质量',
     'record_write_error': '控制器记录写入失败，不计模型质量',
     'session_close_error': '任务会话关闭未确认，不计模型质量',
+    'request_outcome_unknown': '原生操作结果未知，不计模型质量，不授权重发',
     'user_budget_limit': '用户金额上限，不计模型质量',
     'user_call_limit': '用户请求次数上限，不计模型质量',
     'token_estimate_gate': '本地按保守/近似 token 估计提前拦截，不计模型质量',
@@ -138,7 +139,7 @@ _SYSTEM_RULES = (
     )),
 )
 
-SYSTEM_REASONS = frozenset(reason for reason, _ in _SYSTEM_RULES) | {'explicit_system', 'record_write_error', 'session_close_error'}
+SYSTEM_REASONS = frozenset(reason for reason, _ in _SYSTEM_RULES) | {'explicit_system', 'record_write_error', 'session_close_error', 'request_outcome_unknown'}
 QUALITY_REASONS = frozenset({'verified_quality_gap'})
 
 _CANCELLED_REASONS = frozenset({'cancelled'})
@@ -277,13 +278,12 @@ def classify(record):
     structured = not result_view['legacy']
     stage_failure = result_view['failure'] or {}
     stable_rules = {
-        ('TOOL_PERMISSION_DENIED', 'adapter_tool'): 'permission_denied',
-        ('RECORD_WRITE_FAILED', 'persistence'): 'record_write_error',
-        ('REVIEW_RECORD_FAILED', 'persistence'): 'record_write_error',
-        ('SESSION_CLOSE_UNCONFIRMED', 'adapter'): 'session_close_error',
-        ('SESSION_CLOSE_UNCONFIRMED', 'child_process'): 'session_close_error',
+        'permission_denied': 'permission_denied',
+        'record_error': 'record_write_error',
+        'cleanup_unconfirmed': 'session_close_error',
+        'outcome_unknown': 'request_outcome_unknown',
     }
-    stable_reason = stable_rules.get((stage_failure.get('code'), stage_failure.get('source')))
+    stable_reason = stable_rules.get(stage_failure.get('kind'))
     reason, hit = (None, None) if structured else _match_system(error_text)
     completed_review = (executor_status == 'completed'
                         and review_state in ('accepted', 'returned')

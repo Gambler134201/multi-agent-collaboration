@@ -43,6 +43,7 @@ MAX_CRITERIA = 20
 import delegation_policy as policy
 import model_registry as registry
 import execution_result
+import task_finalization
 import project_storage
 
 CONSEQUENTIAL_KEYS = ('architecture', 'security', 'authorization', 'project_isolation')
@@ -209,7 +210,9 @@ def delivery_packet(task_id, project=None, task=None):
             reasons.append('缺少本地 task.json，无法核对验收记录身份')
         if identity_fault:
             reasons.append('任务记录身份与请求不一致，验收不能成立')
-        reasons.extend(policy.acceptance_problems(review))
+        reasons.extend(policy.acceptance_problems(review,record or hint))
+        if task_finalization.view(record or hint)['state'] in {'pending', 'attention'}:
+            reasons.append('控制器收尾尚未确认，验收不能作为完整交付')
         if reasons:
             acceptance['independently_accepted'] = False
             acceptance['final_accepted'] = False
@@ -355,8 +358,9 @@ def delivery_packet(task_id, project=None, task=None):
         'task_id': task_id,
         'identity': identity,
         'execution': execution,
-        'execution_result': execution_result.project(
-            record, {'state': acceptance.get('state'), 'acceptance_valid': acceptance.get('trusted') is True}),
+        'controller_finalization': task_finalization.view(record or hint),
+        'execution_result': execution_result.project_with_context(
+            record, {'state': acceptance.get('state'), 'acceptance_valid': acceptance.get('trusted') is True}, run=run),
         'acceptance': acceptance,
         'criteria': criteria,
         'failed_criteria': failed,

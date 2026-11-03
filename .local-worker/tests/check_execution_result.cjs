@@ -65,6 +65,15 @@ const result = {
           checks += 2;
         }
         const attack = '<img src="https://invalid.example/x" onerror="globalThis.__attack=1">';
+        await page.evaluate(data=>{
+          document.querySelector('#fixture').innerHTML=ModelDeskExecutionResult.render(data);
+        },{...result,execution:{engine:'zcode',status:'completed'},
+          failure:{stage:'verify',code:'TEST_UNCONFIRMED',kind:'verification_unconfirmed'},
+          verification:{state:'unknown',exit_code:null},review:{state:'executor_completed',accepted:false}});
+        const gap=await page.locator('#fixture').textContent();
+        assert.ok(gap.includes('需关注')&&gap.includes('验证证据不足'));
+        assert.ok(!gap.includes('执行失败')&&!gap.includes('自测通过'));
+        checks+=2;
         await page.evaluate(data => {
           document.querySelector('#fixture').innerHTML = ModelDeskExecutionResult.render(data);
         }, {...result, failure: {...result.failure, message: attack},

@@ -28,6 +28,7 @@ import recovery_retry
 import record_protection
 import endpoint_access
 import runtime_paths
+import task_workspace
 import subagent_runtime
 import task_timing
 import execution_result
@@ -52,6 +53,23 @@ class ResultRecordError(OSError):
     """A known local evidence-write operation, separate from model execution."""
 
 
+class GuardRejected(RuntimeError):
+    """Bound runtime proof already recorded the actual protection refusal."""
+
+
+def verified_guard(run, project, recorded, engine):
+    if engine=='pi':
+        import pi_worker
+        proof=pi_worker.verify(run,project,recorded.get('pi_session_id'))
+    else:
+        proof=record_protection.verify_proof(run,project,recorded.get('dsh_session_id'))
+    if (recorded.get('workspace') or {}).get('created') and (
+            not proof.get('record_project') or Path(proof['record_project']).resolve()!=Path(recorded['project']).resolve() or
+            not proof.get('context_root') or Path(proof['context_root']).resolve()!=context_manager.context_dir(run).resolve()):
+        raise ValueError('执行保护证据缺少原项目隔离绑定，任务不视为完成')
+    return proof
+
+
 def availability():
     """Read-only DSH install check; a missing piece is reported, never replaced.
 
@@ -60,16 +78,21 @@ def availability():
     look at two different DSH installs.
     """
     cli = runtime_paths.dsh_cli(EXECUTABLE)
-    blocked = []
+    import endpoint_readiness
+    blocked = [];issues=[]
     if not EXECUTABLE.is_file():
+        issues.append('executable_missing')
         blocked.append(f'DSH 可执行文件未找到（请设置 {runtime_paths.DSH_EXE_ENV} 指向本机 '
                        f'“{runtime_paths.DSH_EXECUTABLE_NAME}”，或把它的目录加入 PATH）')
     if not NODE.is_file():
+        issues.append('node_missing')
         blocked.append(f'Node 未找到（请设置 {runtime_paths.NODE_EXE_ENV}，或把 Node 目录加入 PATH）')
     if not runtime_paths.acpx_runtime(RUNTIME).is_file():
+        issues.append('dependency_missing')
         blocked.append(f'本仓库的 acpx {runtime_paths.ACPX_VERSION} 依赖未安装'
                        f'（在 .local-worker{os.sep}agent-runtime 目录执行 pnpm install）')
     return {'ready': not blocked,
+            'readiness': endpoint_readiness.runtime(issues[0] if issues else 'runtime_ready',issues=issues),
             'name': 'DeepSeek Harness', 'transport': 'ACP', 'executable': str(EXECUTABLE),
             'acpx_version': runtime_paths.ACPX_VERSION, 'cli': str(cli), 'node': str(NODE),
             'message': '' if not blocked else '；'.join(blocked) + '；不会改用其他执行器',
@@ -80,7 +103,7 @@ def sandbox_mode(kind, access='full'):
     return endpoint_access.sandbox(kind, access)
 
 
-def fingerprint(model, kind, project, preset=None, access='full'):
+def fingerprint(model, kind, project, preset=None, access='full', task=None):
     data = [model['id'], model['api_base'], model['model'], model.get('max_input_tokens'), model.get('max_output_tokens'), kind, str(project)]
     if kind != 'edit' and access != 'full':
         data += ['access', access]
@@ -115,6 +138,9 @@ def fingerprint(model, kind, project, preset=None, access='full'):
                             or executor_adapter.installed_executor_version()
                             or model_capabilities.UNVERSIONED)
         data += ['subagent', policy, model_capabilities.capability_digest(block), executor_version]
+    if task is not None and endpoint_access.task_policy(task) is not None:
+        data += ['task-policy', task['task_policy'], task_workspace.execution_files(task),
+                 task_workspace.execution_files(task,'readonly_files')]
     return hashlib.sha256(json.dumps(data).encode()).hexdigest()
 
 
@@ -321,9 +347,13 @@ def build_agent_prompt(run, state, index=None, index_path=None, delegate=False):
     sections = ['\n\n' + context_manager.execution_constraints(delegate=delegate)]
     sections.append(context_manager.RECORD_PROTECTION_NOTE)
     if state.get('kind') == 'edit':
-        sections.append(context_manager.FILE_SCOPE_PREFIX
-                        + json.dumps(state.get('files') or [], ensure_ascii=False))
-        sections.append(context_manager.FILE_SCOPE_NOTE)
+        task_scope = endpoint_access.scope_prompt(state, state.get('files') or [], state.get('readonly_files') or [])
+        if task_scope is None:
+            sections.append(context_manager.FILE_SCOPE_PREFIX
+                            + json.dumps(state.get('files') or [], ensure_ascii=False))
+            sections.append(context_manager.FILE_SCOPE_NOTE)
+        else:
+            sections.append(task_scope)
         if state.get('test_command'):
             sections.append(context_manager.TEST_BY_CONTROLLER_NOTE)
         else:
@@ -353,16 +383,23 @@ def _prepare_dsh(run, state, model, relay):
     redact = lambda text: (str(text).replace(key, '[已隐藏]') if key else str(text)).replace(relay.token, '[已隐藏]')
     project = Path(state['project']) if state['project'] else run / 'workspace'
     project.mkdir(parents=True, exist_ok=True)
+    # Records, sessions and the context index stay owned by the record project;
+    # the task worktree (when present) is where all file work happens.
+    record, project = (task_workspace.execution_roots(state) if state.get('workspace')
+                       else (project, project))
+    if (state.get('workspace') or {}).get('created'):
+        record, project = task_workspace.native_roots(run, state)
+    execution_names = task_workspace.execution_files(state) if state.get('project') else list(state.get('files') or [])
     if state['kind'] == 'edit':
         # The workbench record directory is never a writable dispatch target: a
         # dispatch that names it is refused here, before any patch or session.
-        record_protection.validate_files(state.get('files') or [], project)
-    files = [(project / name).resolve() for name in state.get('files', [])]
+        record_protection.validate_files(execution_names, project)
+    files = [(project / name).resolve() for name in execution_names]
     before = {str(p.relative_to(project)): digest(p) for p in files}
     session_key = state.get('dsh_session_key') or 'desk-' + state['id']
     base_preset = preset_runtime.load(model, EXECUTABLE)
     access = endpoint_access.task_mode(state)
-    current_fingerprint = fingerprint(model, state['kind'], project, base_preset, access=access)
+    current_fingerprint = fingerprint(model, state['kind'], record, base_preset, access=access, task=state)
     if state.get('connection_fingerprint') and state['connection_fingerprint'] != current_fingerprint:
         raise ValueError('原会话的模型接口、Agent 预设、权限或项目已变更，请创建新任务')
     decision = subagent_decision(model, run, preset=base_preset,
@@ -377,6 +414,21 @@ def _prepare_dsh(run, state, model, relay):
         preset = base_preset
     patch = build_patch({**model, 'api_base': relay.url}, state['kind'], preset, subagent=allowed_subagent,
                         record_root=project, access=access)
+    contract=endpoint_access.task_policy(state)
+    if contract is not None:
+        # The fingerprint includes the frozen file contract, so a shared patch
+        # filename cannot carry a different task's readonly/write constraints.
+        for row in patch:
+            for plugin in row.get('insert', []):
+                if plugin.get('id')==record_protection.PLUGIN_ID:
+                    plugin['config'].update(task_policy=contract,kind=state['kind'],files=execution_names,
+                                            readonly_files=task_workspace.execution_files(state,'readonly_files'))
+    if record != project:
+        for row in patch:
+            for plugin in row.get('insert', []):
+                if plugin.get('id') == record_protection.PLUGIN_ID:
+                    plugin['config']['record_project'] = str(record)
+                    plugin['config']['context_root'] = str(context_manager.context_dir(run))
     patch[3]['config']['workspaceRoot'] = str(project)
     patch_path = HERE / 'dsh-home/worker-patches' / (current_fingerprint + '.yml')
     patch_path.parent.mkdir(parents=True, exist_ok=True)
@@ -384,13 +436,18 @@ def _prepare_dsh(run, state, model, relay):
     index_path = context_manager.default_index_path(run)
     index = None
     try:
-        index, index_reused = context_manager.ensure_index(project, state.get('files') or [], index_path)
+        # The index stays in the original task record but describes the tree
+        # the executor actually sees, including a frozen worktree baseline.
+        index, index_reused = context_manager.ensure_index(project, execution_names, index_path)
         registry.patch_task(run, context_index=context_manager.index_summary(
             index, reused=index_reused, path=index_path))
     except Exception as exc:  # the index is an aid; it must never stop execution
         registry.patch_task(run, context_index_error=str(exc)[:300])
-    prompt, base_prompt = build_agent_prompt(run, state, index=index, index_path=index_path,
+    prompt, base_prompt = build_agent_prompt(run, {**state, 'files': execution_names,
+        'readonly_files':task_workspace.execution_files(state,'readonly_files')}, index=index, index_path=index_path,
                                              delegate=allowed_subagent)
+    if record != project:
+        prompt += '\n任务在独立工作区执行，所有相对文件路径以此为根：' + str(project) + '。不得修改原项目。'
     registry.patch_task(run, **context_manager.prompt_fields(base_prompt, prompt))
     agent_prompt = run / 'dsh-prompt.txt'
     agent_prompt.write_text(prompt, encoding='utf-8')
@@ -403,6 +460,9 @@ def _prepare_dsh(run, state, model, relay):
            'record_revision': record_protection.revision(),
            'record_root': str(project),
            'subagent_ledger': str(ledger) if ledger else None}
+    if record != project:
+        job['record_project'] = str(record)
+        job['context_root'] = str(context_manager.context_dir(run))
     registry.write_json(run / 'dsh-job.json', job)
     env = {k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ('API_KEY', 'TOKEN', 'SECRET'))}
     env.update({'DSH_HOME': str(HERE / 'dsh-home'), 'DSH_WORKER_API_KEY': relay.token,
@@ -416,7 +476,7 @@ def _prepare_dsh(run, state, model, relay):
         bypass = ','.join(filter(None, [env.get('NO_PROXY', ''), urlparse(model['api_base']).hostname]))
         env['NO_PROXY'] = env['no_proxy'] = bypass
     registry.patch_task(run, status='running', phase='连接 DeepSeek Harness', engine='dsh',
-                        started_at=registry.now(), worker_pid=os.getpid(), project=str(project),
+                        started_at=registry.now(), worker_pid=os.getpid(), project=str(record),
                         dsh_session_key=session_key, connection_fingerprint=current_fingerprint,
                         sandbox_mode=sandbox_mode(state['kind'], access),
                         permission_mode='approve-all' if state['kind'] == 'edit' else 'approve-reads')
@@ -466,6 +526,7 @@ def _run_task(run, state, model, relay):
     tools = {}
     subagent_outputs = []
     result = None
+    prompt_attempted=False
     error = ''
     test = None
     verify_source = 'protection_verification'
@@ -497,13 +558,20 @@ def _run_task(run, state, model, relay):
                     log.write(line); log.flush()
                     continue
                 event_type = event.get('type')
+                if event_type == 'process' and type(event.get('pid')) is int and event['pid'] > 0:
+                    import process_identity
+                    registry.patch_task(run, child_pid=event['pid'],
+                                        child_process_identity=process_identity.capture(event['pid']))
                 if event_type == 'text_delta':
                     if event.get('stream') != 'thought':
                         answer += event.get('text', '')
                         log.write(event.get('text', '')); log.flush()
                 else:
                     log.write('\n' + json.dumps(event, ensure_ascii=False) + '\n'); log.flush()
-                if event_type == 'session':
+                if event_type == 'prompt_attempted':
+                    prompt_attempted=True
+                    registry.patch_task(run,executor_prompt_attempted=True)
+                elif event_type == 'session':
                     if engine == 'pi':
                         registry.patch_task(run, pi_session_id=event.get('session_id'), pi_session_file=event.get('session_file'))
                     else:
@@ -571,6 +639,22 @@ def _run_task(run, state, model, relay):
                                 fault_recovered_at=final_state.get('fault_recovered_at'),
                                 fault_evidence=recovery_retry.recovery_evidence(final_state))
         cancelled = (run / 'cancelled.flag').exists() or (result or {}).get('status') == 'cancelled'
+        record_proof=None
+        if not cancelled:
+            recorded=registry.read_task(run)
+            try:
+                record_proof=verified_guard(run,project,recorded,engine)
+            except (OSError,ValueError):
+                # A failed executor need not have a complete proof. Preserve
+                # its original error; a successful executor must verify below.
+                pass
+            refusal=execution_result.guard_problem(record_proof) if record_proof is not None else None
+            if refusal:
+                error_text='原生工具被工作台保护或任务权限拒绝；本轮已停止，不更换工具重试'
+                tracker.fail('execute','TOOL_PERMISSION_DENIED',error_text,source='adapter_tool',
+                             category='permission_denied',rule_id=refusal['rule_id'])
+                registry.patch_task(run,record_protection=True,record_proof=record_proof)
+                raise GuardRejected(error_text)
         if not cancelled and (process.returncode or not result or result.get('status') != 'completed'):
             raise RuntimeError(error or (result or {}).get('error', {}).get('message') or label + ' 未返回完成结果，请查看执行日志')
         if not cancelled and result.get('stopReason') not in {'end_turn', 'stop', None}:
@@ -581,13 +665,11 @@ def _run_task(run, state, model, relay):
             recorded = registry.read_task(run)
             # Verify successful delivery before accepting it; preserve the real
             # error above for failed/cancelled runs without claiming protection.
-            if engine == 'pi':
-                import pi_worker
-                record_proof = pi_worker.verify(run, project, recorded.get('pi_session_id'))
-            else:
+            if engine != 'pi':
                 proof = preset_runtime.verify(run, preset, recorded.get('dsh_session_id'))
                 registry.patch_task(run, preset_verified=True, preset_proof=proof)
-                record_proof = record_protection.verify_proof(run, project, recorded.get('dsh_session_id'))
+            if record_proof is None:
+                record_proof=verified_guard(run,project,recorded,engine)
             registry.patch_task(run, record_protection=True, record_proof=record_proof)
         tracker.mark('artifacts', 'running')
         changed = [name for name, previous in before.items() if digest(project / name) != previous]
@@ -647,7 +729,9 @@ def _run_task(run, state, model, relay):
         error_text = redact(exc)
         if outcome['executor_finished'] or isinstance(exc, ResultRecordError):
             tracker.fail('record', 'RECORD_WRITE_FAILED', error_text, source='persistence', category='recording')
-        else:
+        elif prompt_attempted and result is None and tracker.current=='execute' and not isinstance(exc,GuardRejected):
+            tracker.fail('execute','OUTCOME_UNKNOWN',error_text,source='adapter',category='unknown')
+        elif not isinstance(exc,GuardRejected):
             failed_stage = tracker.current if tracker.current in ('execute', 'verify', 'artifacts') else 'execute'
             failure_code = {'execute': 'EXECUTOR_ERROR', 'artifacts': 'ARTIFACT_SCAN_FAILED',
                             'verify': 'TEST_EXECUTION_ERROR' if verify_source == 'controller_test' else 'VERIFICATION_ERROR'}[failed_stage]
@@ -712,7 +796,7 @@ def _run_task(run, state, model, relay):
                     fields['error'] = '执行已结束，但任务子进程收尾未确认；不自动重发'
             if outcome['intended_status'] is not None and outcome['intended_status'] != 'cancelled' and not (run / 'cancelled.flag').exists():
                 try:
-                    record_review(run, outcome['executor_finished'] and not close_failed and bool(result) and result.get('status') == 'completed', test, changed)
+                    record_review(run, outcome['executor_finished'] and not close_failed and outcome['intended_status']=='completed', test, changed)
                 except Exception:
                     tracker.fail('record', 'REVIEW_RECORD_FAILED', '执行报告未能写入验收记录；不可声称验收通过',
                                  source='persistence', category='recording')

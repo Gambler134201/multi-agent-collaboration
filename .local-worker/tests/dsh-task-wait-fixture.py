@@ -1,6 +1,8 @@
 """Called by Node's private-pipe fixture: real MCP/HTTP/core, mocked executor."""
 import json
+from contextlib import suppress
 import os
+import psutil
 from pathlib import Path
 import sys
 import time
@@ -8,6 +10,8 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from test_brain_mcp_server import EndToEndLoopTests,StdioClient,payload,registry,panel
+import completion_wait
+import task_finalization
 
 
 def main():
@@ -20,6 +24,7 @@ def main():
     clean={k:v for k,v in environment.items() if not k.startswith('MODEL_DESK_DSH_WAKE_') and k!='MODEL_DESK_COMPLETION_HOST'}
     case=EndToEndLoopTests('runTest')
     owned_markers=[]
+    subscription=None
     with patch.dict(os.environ,clean,clear=True):case.setUp()
     try:
         case.client.close();case.project=project
@@ -63,6 +68,10 @@ def main():
             run=registry.task_dir(task_ids[1],str(project))
             registry.patch_task(run,status=scenario,phase='isolated fixture '+scenario,
                 ended_at=None if scenario=='recovery_pending' else registry.now())
+            # Dispatch now creates an explicit pending finalizer. A mocked
+            # executor's terminal status alone is not controller settlement.
+            if scenario in {'failed','cancelled'}:
+                task_finalization.settle(run)
         else:case.complete(task_ids[1])
         record=project/'.model-desk/notifications'/wait_id/'subscription.json'
         if scenario=='busy':
@@ -105,6 +114,17 @@ def main():
         print(json.dumps({'scenario':scenario,'formal_mcp':True,'mock_dispatches':len(task_ids),
             'completion_attempts':data['send_attempts'],'receipt':receipt['received'],'accepted':False,'real_models':False}))
     finally:
+        # A delivered receipt precedes process exit. The private watcher owns
+        # cwd/log handles on Windows until exit; await it before Node removes
+        # this fixture directory. Never kill an application or retry deletion.
+        if subscription and subscription.get('wait_id'):
+            owned=project/'.model-desk/notifications'/subscription['wait_id']/'subscription.json'
+            state=json.loads(owned.read_text(encoding='utf-8'))
+            if state.get('listener_status') in {'starting','listening','waiting_chat_idle'}:
+                completion_wait.stop(str(project),subscription['wait_id'])
+            if state.get('watcher_pid'):
+                with suppress(psutil.NoSuchProcess):
+                    psutil.Process(state['watcher_pid']).wait(timeout=8)
         with panel.ACTIVE_LOCK:
             for task_id in owned_markers:panel.ACTIVE.pop(task_id,None)
         case.tearDown()

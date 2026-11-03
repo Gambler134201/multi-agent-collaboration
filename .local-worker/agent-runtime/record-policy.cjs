@@ -16,8 +16,9 @@
  * This is a static, best-effort guard on the arguments the model supplied.  It
  * is not OS-level isolation: a terminal command whose target is computed at
  * runtime (variables, encoded text, an external program, a script file) cannot
- * be proven from the command text, and such commands are refused conservatively
- * only when they are unclassifiable *and* mention the protected directory.
+ * be proven from command text. Legacy/v1/v2 retain conservative text scanning;
+ * v3 checks only structured paths and a bounded direct-operand contract, never
+ * treating unsupported syntax as a proven violation.
  */
 
 const fs = require('fs');
@@ -223,6 +224,198 @@ function cwdFor(args, config) {
   return normalizePath(base);
 }
 
+/** Optional task-level contract; missing means legacy, malformed never means full.
+ * The controller freezes this independently of the deliverable file list.
+ */
+function taskPolicy(config) {
+  if(!Object.prototype.hasOwnProperty.call(config,'task_policy'))return null;
+  const p=config.task_policy;
+  if(!['edit','chat'].includes(config.kind)||!p||typeof p!=='object'||Array.isArray(p)||![1,2,3].includes(p.schema)
+    ||Object.keys(p).sort().join(',')!==(p.schema===1?'schema,write_scope':'deny_paths,home,schema,write_scope')
+    ||!['workspace','declared_files','read_only'].includes(p.write_scope)
+    ||(config.kind==='chat')!==(p.write_scope==='read_only'))throw Error('任务写入范围快照无效');
+  if(p.schema>=2&&(typeof p.home!=='string'||!path.isAbsolute(p.home)||!Array.isArray(p.deny_paths)
+    ||p.deny_paths.length>128||p.deny_paths.some(v=>typeof v!=='string'||!path.isAbsolute(v))))
+    throw Error('任务受保护路径声明无效');
+  for(const rows of [config.files,config.readonly_files])
+    if(!Array.isArray(rows)||rows.some(s=>typeof s!=='string'||!s.trim()))throw Error('任务文件声明无效');
+  return p;
+}
+
+function taskWriteReason(config,value) {
+  const contract=taskPolicy(config);if(!contract)return undefined;
+  if(contract.write_scope==='read_only')return '只读任务没有写入权限';
+  if(typeof value!=='string'||!value.trim())return undefined; // native argument error, not a scope refusal
+  const base=config.root||config.project;
+  const identities=v=>{
+    const lexical=resolveAgainst(base,v);
+    return [lexical,normalizePath(realpathDeep(lexical))];
+  };
+  const target=identities(value);
+  const matches=rows=>rows.some(v=>identities(v).some(p=>target.includes(p)));
+  if(matches(config.readonly_files))return '任务只读上下文不可修改';
+  if(contract.write_scope==='declared_files'&&!matches(config.files))return '文件未列入本任务可写范围';
+  return undefined;
+}
+
+/** Frozen path policy; no generic auth/token filename or payload-word guessing.
+ * All adapters consume this same matcher. v1 and legacy keep their old rules.
+ */
+function protectedPathChecker(config){
+  const p=taskPolicy(config);if(!p||p.schema<2)return null;
+  const base=config.root||config.project;
+  const roots=[...p.deny_paths,...(config.protected_roots||[]),
+    ...(p.schema===3?['.model-desk','.git'].map(n=>path.resolve(base,n)):[]),
+    ...['.codebuddy','.workbuddy','.codex','.dsh','.zcode'].map(n=>path.resolve(base,n))]
+    .flatMap(v=>[normalizePath(v),normalizePath(realpathDeep(v))]);
+  return (value,cwd=base,destructive=false)=>{
+    if(typeof value!=='string'||!value.trim())return undefined;
+    // File APIs commonly accept ~. Bind it to the declaring controller's home,
+    // not the hook subprocess's ambient user/profile environment.
+    if(/^~(?:[\\/]|$)/.test(value))value=p.home+value.slice(1);
+    const lexical=resolveAgainst(cwd,value),real=normalizePath(realpathDeep(lexical));
+    if([lexical,real].some(v=>hasProtectedComponent(v)||components(v).some(
+      n=>n.toLowerCase()==='.git'||/^\.env(?:\.|$)/i.test(n))))
+      return '工作台记录、Git 元数据或认证配置不作为执行目标';
+    if([lexical,real].some(v=>roots.some(root=>isEqualOrInside(v,root)
+      ||(destructive&&isEqualOrInside(root,v)))))
+      return '目标属于任务声明的受保护路径';
+    return undefined;
+  };
+}
+
+/** Reuse existing literal-cd analysis; this does not parse/execute shell code. */
+function terminalFacts(command,base){
+  const pending=[{command:terminalAnalysis(command),base}],contexts=[],locations=[],seen=new Set();
+  while(pending.length&&seen.size<32){
+    const item=pending.pop(),key=item.base+'\0'+item.command;
+    if(seen.has(key))continue;seen.add(key);
+    const change=leadingLocation(item.command,item.base);
+    if(!change||change.error){contexts.push(item);continue;}
+    for(const cwd of change.targets){locations.push(cwd);pending.push({command:change.remainder,base:cwd});}
+    if(!change.onSuccessOnly)pending.push({command:change.remainder,base:item.base});
+  }
+  return {contexts,locations:[...new Set(locations)],overflow:!!pending.length};
+}
+
+function directTerminalPolicy(config){return taskPolicy(config)?.schema===3;}
+
+/** v3 deliberately does NOT scan arbitrary words/quoted payloads for paths.
+ * This is a small direct-invocation contract, not a shell parser or safety
+ * proof. Unsupported syntax/options/programs yield no inferred targets. The
+ * native tool still receives the exact original command. Legacy stays below.
+ */
+function directTerminalTargets(command,base){
+  const targets=[];
+  if(typeof command!=='string'||command.length>16384)return targets;
+  const groups=commandGroups(command);
+  if(!groups)return targets;
+  let bases=[base],offset=0;
+  for(const group of groups){
+    const tail=command.slice(offset+group.length),separator=/^(?:&&|\|\||;)/.exec(tail)?.[0];
+    offset+=group.length+(separator?.length||0);
+    // Expansions, escapes, providers, pipelines and redirections are opaque.
+    if(/[`$%^|&<>(){}*?\[\]\r\n]/.test(group)){bases=[];continue;}
+    const raw=group.trim().match(/"[^"\r\n]*"|'[^'\r\n]*'|[^\s"']+/g)||[];
+    if(raw.join(' ')!==group.trim().replace(/\s+/g,' ')){bases=[];continue;}
+    const words=raw.map(stripQuotes),verb=(words.shift()||'').toLowerCase().replace(/\.exe$/,'');
+    const read=['cat','type','get-content','gc','get-item','test-path','get-childitem','gci','ls','dir'];
+    const remove=['rm','rmdir','rd','del','erase','remove-item','clear-content'];
+    const content=['set-content','add-content','out-file'];
+    const copy=['cp','copy','copy-item'],move=['mv','move','move-item','rename-item'];
+    const location=['cd','chdir','set-location','sl'];
+    if(verb==='git'){
+      if(['push','commit','merge','worktree','switch','checkout','reset','clean'].includes(words[0]))
+        targets.push({gitMutation:true});
+      continue;
+    }
+    if(['echo','write-output','write-host'].includes(verb))continue;
+    if(![...read,...remove,...content,...copy,...move,...location].includes(verb)){bases=[];continue;}
+    const values=[];let ended=false,valid=true;
+    const unary=new Set(['-force','-recurse','--force','--recursive','-f','-r','-rf','-fr','/s','/q','-raw','-hidden']);
+    for(let i=0;i<words.length;i++){
+      const word=words[i],flag=word.toLowerCase();
+      if(!ended&&flag==='--'){ended=true;continue;}
+      if(!ended&&['-path','-literalpath','-filepath','-destination'].includes(flag)){
+        if(!words[i+1]){valid=false;break;}values.push(words[++i]);continue;
+      }
+      if(!ended&&['-value','-exclude','-include','-filter','-encoding','-erroraction'].includes(flag)){
+        if(['-exclude','-include','-filter'].includes(flag)&&!read.includes(verb)){valid=false;break;}
+        if(!words[i+1]){valid=false;break;}i++;continue;
+      }
+      if(!ended&&unary.has(flag))continue;
+      if(!ended&&word.startsWith('-')){valid=false;break;}
+      values.push(word);
+    }
+    if(!valid||!values.length){if(location.includes(verb))bases=[];continue;}
+    let paths=values;
+    if(content.includes(verb))paths=values.slice(0,1); // remaining positionals are data
+    if((copy.includes(verb)||move.includes(verb))&&values.length!==2)continue;
+    if(location.includes(verb)&&values.length!==1){bases=[];continue;}
+    const rows=[];
+    for(let i=0;i<paths.length;i++)for(const cwd of (bases.length?bases:
+      path.isAbsolute(paths[i])||/^~(?:[\\/]|$)/.test(paths[i])?[base]:[]))rows.push({value:paths[i],base:cwd,
+      write:remove.includes(verb)||content.includes(verb)||move.includes(verb)||(copy.includes(verb)&&i===1),
+      destructive:remove.includes(verb)||move.includes(verb),location:location.includes(verb)});
+    targets.push(...rows);
+    if(location.includes(verb)){
+      // Only && confirms that cd succeeded before the next invocation. A
+      // failed/conditional/dynamic location is unknown, never guessed as cwd.
+      bases=separator==='&&'&&!paths.some(p=>p.startsWith('~'))
+        ?[...new Set(rows.map(r=>resolveAgainst(r.base,r.value)))]:[];
+    }
+  }
+  return targets;
+}
+
+function directTerminalReason(config,args){
+  const check=protectedPathChecker(config),base=cwdFor(args,config);
+  if(args.workdir&&args.cwd&&resolveAgainst(config.root,args.workdir)!==resolveAgainst(config.root,args.cwd))
+    return '工作目录参数 cwd 与 workdir 冲突；请报告主脑。';
+  for(const row of directTerminalTargets(args.command,base)){
+    if(row.gitMutation)return '执行任务不修改 Git 历史或向远端发布';
+    const reason=check(row.value,row.base,row.destructive);if(reason)return reason;
+    if(row.write){
+      const value=/^~(?:[\\/]|$)/.test(row.value)?config.task_policy.home+row.value.slice(1):row.value;
+      const scoped=taskWriteReason(config,resolveAgainst(row.base,value));if(scoped)return scoped;
+    }
+  }
+  return undefined;
+}
+
+function protectedArgumentsReason(config,name,args={}){
+  const check=protectedPathChecker(config);if(!check)return undefined;
+  const base=resolveAgainst(config.root||config.project,args.workdir||args.cwd||'.');
+  const read=['read','Read','grep','Grep','find','Glob','ls','NotebookRead'].includes(name)
+    ||(name==='str_replace_editor'&&args.command==='view');
+  const write=['write','edit','Write','Edit','MultiEdit','NotebookEdit'].includes(name)
+    ||(name==='str_replace_editor'&&!read);
+  const inspect=(value,cwd=base,destructive=false)=>{
+    // Existing controller-owned read-only context remains readable. A link out
+    // of that tree cannot use the exception.
+    if(read&&config.context_root&&typeof value==='string'){
+      const target=resolveAgainst(cwd,value),context=normalizePath(config.context_root);
+      if(isEqualOrInside(target,context)&&isEqualOrInside(normalizePath(realpathDeep(target)),
+          normalizePath(realpathDeep(context))))return undefined;
+    }
+    return check(value,cwd,destructive);
+  };
+  const locationReason=inspect(base);if(locationReason)return locationReason;
+  for(const value of ['path','file_path','filePath','notebook_path','target','directory'].map(k=>args[k])){
+    const reason=inspect(value,base,write);if(reason)return reason;
+  }
+  if(!['bash','pwsh','powershell','Bash','PowerShell'].includes(name)||typeof args.command!=='string')return undefined;
+  if(directTerminalPolicy(config))return directTerminalReason(config,args);
+  const facts=terminalFacts(args.command,base);
+  if(facts.overflow)return '复合命令过于复杂，无法核实工作目录；请报告主脑。';
+  for(const value of facts.locations){const reason=inspect(value);if(reason)return reason;}
+  for(const item of facts.contexts)for(const token of extractTokens(item.command)){
+    if(!looksLikeTarget(token)||/^[a-z]+:\/\//i.test(stripQuotes(token)))continue;
+    const reason=inspect(stripQuotes(token),item.base,DESTRUCTIVE_RE.test(item.command));if(reason)return reason;
+  }
+  return undefined;
+}
+
 /** Every path-shaped candidate inside a terminal command text. */
 function extractTokens(command) {
   const tokens = [];
@@ -334,6 +527,41 @@ function commandGroups(text) {
   return parts;
 }
 
+/** Analysis text only; the host still receives the original command. A whole
+ * literal output invocation has no filesystem target. Do not let several
+ * independent guards reinterpret its payload as a path or a destructive verb.
+ * This common subset works without guessing Bash/PowerShell/cmd: no expansion,
+ * escaped/concatenated quoting, unquoted operators, switches to another command,
+ * redirection or compound invocations. Anything else retains the old analysis.
+ * This is deliberately not a shell parser or a general read-only exemption.
+ */
+function terminalAnalysis(command) {
+  if(typeof command!=='string'||command.length>16384)return command;
+  if(/[\r\n`$%!^]/.test(command))return command;
+  const head=/^[ \t]*(?:echo|write-output|write-host)(?=[ \t]|$)/i.exec(command);
+  if(!head)return command;
+  let i=head[0].length;
+  while(i<command.length){
+    if(/[ \t]/.test(command[i])){i++;continue;}
+    if(command[i]==='"'){
+      i++;
+      while(i<command.length&&command[i]!=='"'){
+        if(command[i]==='\\'&&command[i+1]==='"')return command;
+        i++;
+      }
+      if(i===command.length)return command;
+      i++;
+      if(i<command.length&&!/[ \t]/.test(command[i]))return command;
+    }else{
+      const word=/^[A-Za-z0-9_./:+,=-]+/.exec(command.slice(i));
+      if(!word)return command;
+      i+=word[0].length;
+      if(i<command.length&&!/[ \t]/.test(command[i]))return command;
+    }
+  }
+  return 'echo MODEL_DESK_LITERAL_OUTPUT';
+}
+
 /** Only a leading literal location change is understood. This deliberately
  * does not interpret scripts, substitutions, providers or general shell code.
  * Semicolon/OR chains must also be checked at the old cwd: cd may fail.
@@ -442,7 +670,8 @@ function wildcardOverlaps(target, roots) {
 }
 
 function decideTerminal(args, config, budget = { remaining: 32 }) {
-  const command = args && typeof args.command === 'string' ? args.command : '';
+  if(directTerminalPolicy(config))return directTerminalReason(config,args||{});
+  const command = terminalAnalysis(args && typeof args.command === 'string' ? args.command : '');
   if (!command.trim()) return undefined;
   if (--budget.remaining < 0) return '复合命令过于复杂，无法核实工作目录；请报告主脑。';
   if (args.workdir && args.cwd && resolveAgainst(config.root, args.workdir) !== resolveAgainst(config.root, args.cwd)) {
@@ -545,7 +774,64 @@ module.exports = {
   isProvablyReadOnly,
   isGuardedTool,
   commandGroups,
+  taskPolicy,
+  taskWriteReason,
+  protectedPathChecker,
+  protectedArgumentsReason,
+  terminalFacts,
+  directTerminalPolicy,
+  directTerminalTargets,
+  directTerminalReason,
+  terminalAnalysis,
   leadingLocation,
   createGuard,
   decide,
 };
+
+// Fixed classification of actual guard refusals, shared by the four adapters.
+// Never persist the reason text: it can contain a private path or command.
+function denialCode(reason){
+  if(!reason)return null;
+  if(reason==='目标属于任务声明的受保护路径')return 'protected_data';
+  if(reason==='文件不属于本任务项目')return 'outside_project';
+  if(reason==='文件未列入本任务可写范围')return 'undeclared_write';
+  if(reason==='任务只读上下文不可修改')return 'readonly_file';
+  if(reason.startsWith('本轮工具已暂停'))return 'prior_denial';
+  if(reason==='本任务未授权此原生工具'||reason==='只读任务没有终端权限'||reason==='只读任务没有写入权限')return 'tool_not_allowed';
+  if(/记录|认证|其他任务|原生配置|硬链接/.test(reason))return 'protected_data';
+  return 'guard_denied';
+}
+function denialRule(reason){
+  if(!reason)return null;
+  if(reason==='目标属于任务声明的受保护路径')return 'protected_path';
+  if(reason.includes('工作区隔离')||reason.includes('任务隔离'))return 'workspace_isolation';
+  if(reason.startsWith('本轮工具已暂停'))return 'prior_denial';
+  if(reason==='终端不能访问原生配置目录'||reason==='原生配置目录不作为执行目标')return 'native_profile';
+  if(reason==='终端不能访问工作台记录或认证数据')return 'shell_protected_reference';
+  if(reason.includes('是工作台记录目录 .model-desk 的上级目录'))return 'record_ancestor';
+  if(reason.includes('位于工作台记录目录 .model-desk 内'))return 'record_target';
+  if(reason==='工作台记录、Git 元数据或认证配置不作为执行目标')return 'protected_file';
+  if(reason==='认证存储不作为执行目标')return 'credential_store';
+  if(reason==='运行账户配置不作为执行目标')return 'runtime_config';
+  if(reason==='不读取其他任务或会话材料')return 'other_task';
+  if(reason==='文件存在硬链接别名')return 'hardlink';
+  if(reason==='任务只读上下文不可修改')return 'readonly_file';
+  if(reason==='文件不属于本任务项目')return 'outside_project';
+  if(reason==='文件未列入本任务可写范围')return 'undeclared_write';
+  if(reason==='执行任务不修改 Git 历史或向远端发布')return 'git_mutation';
+  if(reason==='本任务终端须前台完成并返回退出结果')return 'background_job';
+  if(reason==='不能批准原生沙箱绕过')return 'sandbox_override';
+  if(reason==='递归清理目标包含未核实的变量或通配符，请保留临时文件并报告主脑')return 'unverified_recursive_cleanup';
+  if(reason==='目录检索范围包含原生配置；请选择更具体的文件')return 'profile_search';
+  if(reason==='搜索不包含记录或认证目录')return 'protected_search';
+  if(/工作目录|复合命令过于复杂/.test(reason))return 'unverified_location';
+  if(reason==='本任务未授权此原生工具'||reason==='只读任务没有终端权限'||reason==='只读任务没有写入权限')return 'tool_not_allowed';
+  return 'unclassified';
+}
+function guardDenial(tool,reason){
+  const known=['read','Read','grep','Grep','find','Glob','ls','NotebookRead','write','Write','edit','Edit',
+    'MultiEdit','NotebookEdit','str_replace_editor','bash','Bash','powershell','PowerShell','pwsh'];
+  return {schema:1,code:'TOOL_PERMISSION_DENIED',tool:known.includes(tool)?tool:'unknown',
+    reason_code:denialCode(reason),rule_id:denialRule(reason)};
+}
+Object.assign(module.exports,{denialCode,denialRule,guardDenial});

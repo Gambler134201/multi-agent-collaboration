@@ -34,11 +34,14 @@ class ZCodeTests(Base):
         self.enterContext(patch.object(engines,'availability',return_value={'ready':True}))
 
     def dispatch(self,**kw):
+        legacy=kw.pop('legacy',True)
         body={'kind':'edit','model_id':self.model['id'],'route_mode':'manual','project':str(self.project),
               'files':['a.py'],'prompt':'Write a.py and test','routing':{'acceptance':['fixture file']},'source':'codex',**kw}
         with patch.object(panel.EXECUTOR,'submit'):
             row=panel.submit_task(body)
-        return registry.read_task(registry.task_dir(row['id'])),registry.task_dir(row['id'])
+        run=registry.task_dir(row['id'])
+        if legacy:registry.patch_task(run,zcode_tool_mode=worker.LEGACY_MODE,zcode_tool_revision=tools.revision())
+        return registry.read_task(run),run
 
     def test_native_identity_and_default_preserved(self):
         import delegation_policy

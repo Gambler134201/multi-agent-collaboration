@@ -26,6 +26,7 @@ import workbuddy_worker as worker
 import workflow_settings
 import execution_result
 from test_stage_workflow import Base
+from test_task_workspace import git
 
 
 class IntegrationTests(Base):
@@ -137,6 +138,20 @@ class IntegrationTests(Base):
         self.assertEqual(registry.REGISTRY.read_bytes(), models)
         self.assertEqual(ep.snapshot(), endpoints)
 
+    def test_isolated_native_task_maps_absolute_files_and_preserves_original(self):
+        git(self.project,'init','-b','main');git(self.project,'config','user.name','fixture')
+        git(self.project,'config','user.email','fixture@example.com');git(self.project,'add','a.py','b.py')
+        git(self.project,'commit','-m','baseline')
+        absolute=str(self.project/'a.py');before=(self.project/'a.py').read_bytes()
+        task,run=self.dispatch(files=[absolute])
+        plan=panel.prepare_workspace_for_run(run,task);task=registry.read_task(run)
+        self.assertEqual(worker.run_task(run,task,registry.get_model(task['model_id']),client_factory=self.client()),0)
+        result=registry.read_task(run)
+        self.assertEqual(result['project'],str(self.project))
+        self.assertEqual(result['changed_files'],[absolute])
+        self.assertEqual((self.project/'a.py').read_bytes(),before)
+        self.assertEqual((Path(plan['path'])/'a.py').read_text(),'native fixture changed')
+
     def test_request_body_or_new_setting_cannot_elevate_an_old_task(self):
         task, run = self.dispatch(workbuddy_access_mode='full')
         self.assertEqual(task['workbuddy_access_mode'], 'project')
@@ -216,6 +231,7 @@ class IntegrationTests(Base):
                     data=native_tools.load(self.native_job)
                     registry.write_json(Path(self.native_job).parent/'workbuddy-native-proof.json', {
                         **{k:data[k] for k in ('task_id','project','nonce','revision','mode','access_mode')},
+                        **({'record_project':data['record_project']} if 'record_project' in data else {}),
                         'job_hash':hashlib.sha256(Path(self.native_job).read_bytes()).hexdigest(),
                         'session_id':self.session_id,'probe':'ok'})
                 if self.job:
@@ -336,19 +352,30 @@ class IntegrationTests(Base):
         self.assertIn('配置已变', registry.read_task(run)['error'])
         self.assertEqual(execution_result.project(registry.read_task(run))['failure']['stage'], 'prepare')
 
-    def test_declared_test_command_without_real_native_result_fails_not_assumed_success(self):
+    def test_declared_test_without_evidence_does_not_falsify_native_execution_or_test_success(self):
         with patch.object(panel.EXECUTOR, 'submit'):
             task=panel.submit_task(self.body(test_command='python -B -m unittest'))
         run=registry.task_dir(task['id'])
         worker.run_task(run, task, registry.get_model(task['model_id']), client_factory=self.client())
         row=registry.read_task(run)
-        self.assertEqual(row['status'],'failed')
+        self.assertEqual(row['status'],'completed')
         self.assertFalse(row['test_result']['verified'])
         self.assertIsNone(row['test_result']['exit_code'])
         view = execution_result.project(row)
         self.assertEqual(view['failure']['stage'], 'verify')
         self.assertEqual(view['verification']['state'], 'unknown')
         self.assertEqual(view['failure']['code'], 'TEST_UNCONFIRMED')
+        self.assertFalse(view['review']['accepted'])
+        self.assertIn('自测待核实',row['phase'])
+
+    def test_old_task_policy_keeps_strict_test_evidence_requirement(self):
+        with patch.object(panel.EXECUTOR,'submit'):
+            task=panel.submit_task(self.body(test_command='python -B -m unittest'))
+        run=registry.task_dir(task['id'])
+        task['task_policy']={'schema':1,'write_scope':'workspace'}
+        registry.write_json(run/'task.json',task)
+        worker.run_task(run,task,registry.get_model(task['model_id']),client_factory=self.client())
+        self.assertEqual(registry.read_task(run)['status'],'failed')
 
     def test_old_task_keeps_file_only_tools_and_does_not_receive_native_profile(self):
         task,run=self.dispatch()

@@ -14,7 +14,7 @@ LABELS = {'dsh': 'DeepSeek Harness', 'pi': 'Pi Agent', 'workbuddy': 'WorkBuddy',
 # another adapter's configuration. The legacy DSH storage key stays compatible
 # with existing task/session/evidence identities.
 CONFIGURATION = {
-    'zcode': {'description': 'ZCode 原生登录账户；指定模型与思考强度，文件/搜索/读图/公开网页/终端工具，支持带交接的新会话续接。无子代理和原会话直接复用。', 'model_fields': []},
+    'zcode': {'description': 'ZCode 原生登录账户；指定模型与思考强度，使用原生文件、搜索与终端工具，支持带交接的新会话续接。无子代理和原会话直接复用。', 'model_fields': []},
     'dsh': {'description': '按模型选择 DeepSeek Harness 的运行预设；更改后用于新的 DSH 会话。已有会话需要保持原配置。',
             'model_fields': [{'key': 'agent_preset', 'label': '运行预设', 'type': 'select',
                               'default': 'standard', 'provider_defaults': {'local': 'native'},
@@ -136,13 +136,28 @@ def availability(engine):
     return dsh_worker.availability()
 
 
+def public_availability(engine):
+    """Isolate a broken display probe, without granting execution readiness."""
+    import endpoint_readiness
+    if engine not in AGENTS:raise ValueError('未知执行 Agent')
+    try:
+        info=availability(engine)
+        if not isinstance(info,dict):raise ValueError('invalid availability')
+    except Exception:
+        # A raw native exception can contain private data. Preserve unknown
+        # without taking down the other cards or the legacy selected-agent view.
+        proof=endpoint_readiness.runtime('runtime_unknown')
+        info={'ready':False,'name':LABELS[engine],'engine':engine,'readiness':proof,'message':proof['detail']}
+    return info
+
+
 def public_agents():
-    return {engine: {**availability(engine), 'configuration': configuration(engine)} for engine in AGENTS}
+    return {engine:{**public_availability(engine),'configuration':configuration(engine)} for engine in AGENTS}
 
 
 def public_selection(settings):
     """Let a broken setting remain visible and repairable, without executing it."""
     try:
-        return selected(settings), availability(selected(settings))
+        return selected(settings), public_availability(selected(settings))
     except ValueError as error:
         return 'invalid', {'ready': False, 'message': str(error)}

@@ -1,0 +1,312 @@
+/*
+ * Model Desk · 任务状态展示组件样式（只读）
+ * ------------------------------------------------------------------
+ * 深浅主题兼容：颜色全部走 var(--…) 并带字面量兜底；320px 容器可读，
+ * 长文本/中文不产生横向溢出。不加载外部资源，无大面积亮色、巨型卡片、
+ * 固定定位或动画。
+ *
+ * 主题取值方式与 panel/execution-result.css 一致：
+ *   工作台主题由页面写入根节点 data-theme（light/dark），字面量兜底按
+ *   data-theme 走；只有宿主未写 data-theme 时才用系统偏好兜底，绝不用
+ *   系统偏好覆盖宿主已选主题。
+ *   宿主变量名取自 panel/style.css：--ink --ink-soft --muted --line
+ *   --line-strong --surface --inset --surface-hover --green --green-bg
+ *   --orange --orange-bg --red --red-bg
+ */
+
+.md-task-status,
+.md-task-badge {
+  /* 字面量兜底集合（宿主未定义变量时才用到）：默认深色工作台 */
+  --mdts-fg: #ededeb;
+  --mdts-fg-soft: #d6d5d2;
+  --mdts-muted: #aaa9a6;
+  --mdts-line: #383838;
+  --mdts-line-strong: #4b4b48;
+  --mdts-bg: #222222;
+  --mdts-bg-sub: #1c1c1c;
+  --mdts-ok: #75cca6;
+  --mdts-ok-bg: #1e2a24;
+  --mdts-warn: #e0a95f;
+  --mdts-warn-bg: #2c2318;
+  --mdts-err: #ef8b96;
+  --mdts-err-bg: #2e1e22;
+  --mdts-accent-bg: #2b2b2b;
+
+  /* 实际取值：宿主主题变量优先，缺失时落到上面的兜底集合 */
+  --mdts-c-fg: var(--ink, var(--mdts-fg));
+  --mdts-c-fg-soft: var(--ink-soft, var(--mdts-fg-soft));
+  --mdts-c-muted: var(--muted, var(--mdts-muted));
+  --mdts-c-line: var(--line, var(--mdts-line));
+  --mdts-c-line-strong: var(--line-strong, var(--mdts-line-strong));
+  --mdts-c-bg: var(--surface, var(--mdts-bg));
+  --mdts-c-bg-sub: var(--inset, var(--mdts-bg-sub));
+  --mdts-c-ok: var(--green, var(--mdts-ok));
+  --mdts-c-ok-bg: var(--green-bg, var(--mdts-ok-bg));
+  --mdts-c-warn: var(--orange, var(--mdts-warn));
+  --mdts-c-warn-bg: var(--orange-bg, var(--mdts-warn-bg));
+  --mdts-c-err: var(--red, var(--mdts-err));
+  --mdts-c-err-bg: var(--red-bg, var(--mdts-err-bg));
+  --mdts-c-accent-bg: var(--surface-hover, var(--mdts-accent-bg));
+}
+
+/* 宿主手动选择浅色：兜底集合换成浅色工作台取值 */
+[data-theme="light"] .md-task-status,
+[data-theme="light"] .md-task-badge {
+  --mdts-fg: #202020;
+  --mdts-fg-soft: #3b3b39;
+  --mdts-muted: #656565;
+  --mdts-line: #e3e3df;
+  --mdts-line-strong: #cfcfc9;
+  --mdts-bg: #ffffff;
+  --mdts-bg-sub: #f2f2ef;
+  --mdts-ok: #1a765d;
+  --mdts-ok-bg: #eaf7f1;
+  --mdts-warn: #8e5a14;
+  --mdts-warn-bg: #fff4e4;
+  --mdts-err: #c15361;
+  --mdts-err-bg: #fff0f2;
+  --mdts-accent-bg: #f2f2ef;
+}
+
+/* 宿主未写 data-theme 时才看系统偏好；已写 data-theme 时不覆盖宿主主题 */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .md-task-status,
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .md-task-badge {
+    --mdts-fg: #202020;
+    --mdts-fg-soft: #3b3b39;
+    --mdts-muted: #656565;
+    --mdts-line: #e3e3df;
+    --mdts-line-strong: #cfcfc9;
+    --mdts-bg: #ffffff;
+    --mdts-bg-sub: #f2f2ef;
+    --mdts-ok: #1a765d;
+    --mdts-ok-bg: #eaf7f1;
+    --mdts-warn: #8e5a14;
+    --mdts-warn-bg: #fff4e4;
+    --mdts-err: #c15361;
+    --mdts-err-bg: #fff0f2;
+    --mdts-accent-bg: #f2f2ef;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .md-task-status,
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .md-task-badge {
+    --mdts-fg: #ededeb;
+    --mdts-fg-soft: #d6d5d2;
+    --mdts-muted: #aaa9a6;
+    --mdts-line: #383838;
+    --mdts-line-strong: #4b4b48;
+    --mdts-bg: #222222;
+    --mdts-bg-sub: #1c1c1c;
+    --mdts-ok: #75cca6;
+    --mdts-ok-bg: #1e2a24;
+    --mdts-warn: #e0a95f;
+    --mdts-warn-bg: #2c2318;
+    --mdts-err: #ef8b96;
+    --mdts-err-bg: #2e1e22;
+    --mdts-accent-bg: #2b2b2b;
+  }
+}
+
+/* ---------- 状态区块 ---------- */
+
+.md-task-status {
+  /* 让内部布局按组件自身宽度重排，而不是按视口宽度 */
+  container-type: inline-size;
+  container-name: md-task-status;
+
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--mdts-c-fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.md-task-status *,
+.md-task-status *::before,
+.md-task-status *::after {
+  box-sizing: border-box;
+}
+
+.md-task-status__body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--mdts-c-line);
+  border-left: 2px solid var(--mdts-c-muted);
+  border-radius: 6px;
+  background: var(--mdts-c-bg);
+}
+
+.md-task-status--success .md-task-status__body { border-left-color: var(--mdts-c-ok); }
+.md-task-status--warning .md-task-status__body { border-left-color: var(--mdts-c-warn); }
+.md-task-status--danger .md-task-status__body { border-left-color: var(--mdts-c-err); }
+.md-task-status--accent .md-task-status__body { border-left-color: var(--mdts-c-line-strong); }
+
+.md-task-status__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.md-task-status__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* 状态圆点取 tone 色，颜色只由白名单 tone 类决定，与传入文本无关 */
+.md-task-status__label::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mdts-c-muted);
+}
+
+.md-task-status--success .md-task-status__label::before { background: var(--mdts-c-ok); }
+.md-task-status--warning .md-task-status__label::before { background: var(--mdts-c-warn); }
+.md-task-status--danger .md-task-status__label::before { background: var(--mdts-c-err); }
+.md-task-status--accent .md-task-status__label::before { background: var(--mdts-c-fg-soft); }
+
+.md-task-status__detail {
+  margin: 0;
+  min-width: 0;
+  color: var(--mdts-c-fg-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 事实行（可折行小标签） ---------- */
+
+.md-task-status__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.md-task-status__fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 6px;
+  border: 1px solid var(--mdts-c-line);
+  border-radius: 999px;
+  background: var(--mdts-c-bg-sub);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.md-task-status__fact-key {
+  color: var(--mdts-c-muted);
+  white-space: nowrap;
+}
+
+.md-task-status__fact-val {
+  min-width: 0;
+  color: var(--mdts-c-fg-soft);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 下一步 ---------- */
+
+.md-task-status__next {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 8px;
+  align-items: baseline;
+  padding-top: 4px;
+  border-top: 1px dotted var(--mdts-c-line);
+  min-width: 0;
+}
+
+.md-task-status__next-key {
+  color: var(--mdts-c-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.md-task-status__next-val {
+  min-width: 0;
+  color: var(--mdts-c-fg-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 列表/阶段标题小标签 ---------- */
+
+.md-task-badge {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 7px;
+  border: 1px solid var(--mdts-c-line);
+  border-radius: 999px;
+  background: var(--mdts-c-bg-sub);
+  color: var(--mdts-c-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.md-task-badge--success { color: var(--mdts-c-ok); border-color: currentColor; background: var(--mdts-c-ok-bg); }
+.md-task-badge--warning { color: var(--mdts-c-warn); border-color: currentColor; background: var(--mdts-c-warn-bg); }
+.md-task-badge--danger { color: var(--mdts-c-err); border-color: currentColor; background: var(--mdts-c-err-bg); }
+.md-task-badge--accent { color: var(--mdts-c-fg-soft); border-color: var(--mdts-c-line-strong); background: var(--mdts-c-accent-bg); }
+
+/* ---------- 窄侧栏自适应 ---------- */
+
+@container md-task-status (max-width: 26em) {
+  .md-task-status__body {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+
+  .md-task-status__facts {
+    gap: 3px 4px;
+  }
+}
+
+@container md-task-status (max-width: 17em) {
+  .md-task-status__next {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .md-task-status__next-key {
+    white-space: normal;
+  }
+}
+
+/* 不支持 container query 的宿主：按视口宽度做同样的降级 */
+@media (max-width: 21em) {
+  .md-task-status__body {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+
+  .md-task-status__next {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .md-task-status__next-key {
+    white-space: normal;
+  }
+}

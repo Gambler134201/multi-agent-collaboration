@@ -101,7 +101,7 @@ EXCLUDED_DIR_NAMES = frozenset({
     '.git', '.hg', '.svn', '.idea', '.vscode', 'venv', '.venv', 'env',
     'node_modules', '__pycache__', '.mypy_cache', '.pytest_cache', '.ruff_cache',
     '.tox', 'runs', 'dist', 'build', '.next', '.nuxt', '.cache', 'backups',
-    'dsh-home', 'agent-runtime', 'site-packages', '.codex',
+    'dsh-home', 'agent-runtime', 'site-packages', '.codex', '.zcode',
     '.tmp', 'tmp', 'target', 'coverage', '.coverage', '.nyc_output', 'vendor',
     # Workbench records: task DB/logs/handovers never enter the code index or a
     # dispatch context.  This is a default search exclusion, not an OS sandbox.

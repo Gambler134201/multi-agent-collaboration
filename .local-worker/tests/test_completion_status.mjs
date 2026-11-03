@@ -25,7 +25,9 @@ console.log('PASS completion status: waiting, stale listener, review, accepted, 
 
 const helpersStart=source.indexOf('function taskAccepted(');
 const helpersEnd=source.indexOf('function badge(',helpersStart);
-const helpers=vm.runInNewContext(source.slice(helpersStart,helpersEnd)+';({taskAccepted,taskDisplayStatus,taskDisplayPhase,duration})');
+// Exercise the legacy fallback explicitly; the shared summary component is
+// covered separately by test_task_status_component.cjs.
+const helpers=vm.runInNewContext(source.slice(helpersStart,helpersEnd)+';({taskAccepted,taskDisplayStatus,taskDisplayPhase,duration})',{taskSummary:()=>null});
 const interrupted={status:'recovery_pending',phase:'待恢复（面板重启，未自动重发）',
   started_at:'2026-10-16T10:00:00Z',ended_at:null,
   review:{state:'final_accepted',updated_at:'2026-10-16T10:07:00Z',final:{accepted_at:'2026-10-16T10:05:00Z'}}};

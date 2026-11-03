@@ -266,7 +266,7 @@ def _is_test(path):
 def query(project, *, file=None, query='', refresh=False, limit=MAX_FILES):
     """Validate one explicit project, hash its bounded code snapshot, then query."""
     root = Path(project_scope.normalize_project(project))
-    if any(part.casefold() in {'.model-desk', '.git', '.dsh', '.workbuddy', '.pi', '.ssh', '.aws', '.azure', '.gnupg'}
+    if any(part.casefold() in {'.model-desk', '.git', '.dsh', '.workbuddy', '.zcode', '.pi', '.ssh', '.aws', '.azure', '.gnupg'}
            for part in root.parts):
         raise ValueError('工作台记录、认证及宿主私有目录不提供代码地图')
     if not isinstance(query, str) or len(query) > 160:

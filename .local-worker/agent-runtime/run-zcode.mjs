@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {createHash} from 'node:crypto';
+import {requestedMode,assertTools,assertReceipt} from './zcode-session-contract.mjs';
 const job=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 const emit=value=>process.stdout.write(JSON.stringify(value)+'\n');
 const pages=await(await fetch(`http://127.0.0.1:${job.port}/json/list`,{signal:AbortSignal.timeout(5000)})).json();
@@ -27,12 +29,14 @@ const bootstrap=`(()=>{
   while(queue.length&&seen.size<20000){const f=queue.pop();if(!f||seen.has(f))continue;seen.add(f);const s=f.memoizedProps?.services;
     if(s?.zcodeAgentService&&s?.modelSelectionService){services=s;break;}queue.push(f.child,f.sibling);}
   if(!services)throw Error('ZCode native services not ready');
-  window.__modelDeskZCode={agent:services.zcodeAgentService,models:services.modelSelectionService,usage:services.usageStatsService};
+  window.__modelDeskZCode={agent:services.zcodeAgentService,models:services.modelSelectionService,usage:services.usageStatsService,hooks:services.hooksService};
   window.__modelDeskZCodeJobs??=new Map();return true;})()`;
 let scope=null,created=false,key=null,unsubscribed=false;
 try{
   await evaluate(bootstrap);
-  if(job.action==='quota'){
+  if(job.action==='ready'){
+    emit({type:'ready',model_prompt_sent:false});
+  }else if(job.action==='quota'){
     if(!['account:zai-start-plan','account:bigmodel-start-plan'].includes(job.provider))throw Error('此渠道尚未适配原生权益查询');
     const result=await evaluate(`(async()=>{const p=${JSON.stringify(job.provider)},s=window.__modelDeskZCode.usage;if(!s?.getEntitlementSnapshot)throw Error('Native entitlement service unavailable');
       const v=await s.getEntitlementSnapshot({includeSubscription:true,preferredProviderId:p,accountAccess:{type:'zhipu-account',family:p==='account:zai-start-plan'?'zai':'bigmodel',planKind:'start-plan'},allowDisabledPreferredProvider:true,requirePreferredProvider:true,allowEnvApiKey:false});
@@ -46,44 +50,93 @@ try{
       models:v.providers.flatMap(p=>p.models.map(m=>({providerId:p.providerId,modelId:m.modelId,
         reasoning:m.config?.optionSpecs?.reasoningLevel?.values||[],contextWindow:m.config?.properties?.contextWindow||0})))}})()`);
     emit({type:'catalog',...result});
-  }else if(job.action==='task'){
+  }else if(job.action==='finalize'){
+    // Targeted cleanup: close exactly this task's own session and report the
+    // evidence. Never creates a session, never sends a prompt, never stops
+    // the desktop; other sessions are not enumerated or touched.
+    const sid=String(job.session_id||'');
+    if(!sid.startsWith('modeldesk-zcode-'))throw Error('ZCode 原生会话身份无效；未做任何关闭');
+    const scope={sessionId:sid,...(job.workspacePath?{workspacePath:job.workspacePath}:{})};
+    const outcome=await evaluate(`(async()=>{try{await window.__modelDeskZCode.agent.closeSession(${JSON.stringify(scope)});return {closed:true};}catch(e){if(String(e.message).includes('Session is not active'))return {closed:true,inactive:true};throw e;}})()`);
+    emit({type:'closed',session_id:sid,session_active:false,...(outcome.inactive?{inactive:true}:{})});
+  }else if(job.action==='task'||job.action==='native_preflight'){
     if(job.cancel_file&&fs.existsSync(job.cancel_file))throw Error('ZCode 任务已取消；未请求模型');
     scope={workspacePath:job.project,sessionId:job.session_id};key=job.session_id;
     const literal=JSON.stringify(scope),id=JSON.stringify(key);
-    const names=['read_file','list_directory','search_files','read_image','fetch_url',...(job.kind==='edit'?['write_file','edit_file','run_command']:[])];
-    const params={...scope,mode:'yolo',model:job.selection,thoughtLevel:job.selection.options?.reasoningLevel,
+    const native=job.tool_mode==='zcode-native-v1';
+    const names=native?job.native_tools:['read_file','list_directory','search_files','read_image','fetch_url',...(job.kind==='edit'?['write_file','edit_file','run_command']:[])];
+    const mode=requestedMode(job.kind,native);
+    const checkProfile=()=>{
+      if(!native)return;
+      const profile=job.native_profile;
+      if(!profile||path.resolve(profile.path)!==path.resolve(job.project,'.zcode','config.json')||
+          createHash('sha256').update(fs.readFileSync(profile.path)).digest('hex')!==profile.sha256)throw Error('ZCode 原生 hook 配置变化；未请求模型');
+    };
+    checkProfile();
+    if(native){
+      assertTools(job.kind,names);
+      const profile=job.native_profile;
+      const trusted=await evaluate(`(async()=>{
+        const service=window.__modelDeskZCode.hooks;if(!service)throw Error('Native hooks service unavailable');
+        const profile=${JSON.stringify(profile)},scope=${literal};
+        const loaded=await service.loadHooks({scope:'project',workspacePath:scope.workspacePath});
+        const snapshot=loaded.workspaceHookSnapshot;
+        const canonical=p=>String(p).replace(/\\\\/g,'/').toLowerCase();
+        if(!snapshot||!Array.isArray(snapshot.sourceFiles)||!Array.isArray(snapshot.hooks))throw Error('Native hook snapshot unavailable');
+        const indexes=snapshot.sourceFiles.map((s,i)=>canonical(s.canonicalPath)===canonical(profile.path)?i:-1).filter(i=>i>=0);
+        const entries=snapshot.hooks.filter(h=>indexes.includes(h.sourceFileIndex)&&h.type==='process'&&h.command===profile.command&&JSON.stringify(h.args)===JSON.stringify(profile.args));
+        if(indexes.length!==1||entries.length!==4||profile.events.some(event=>entries.filter(e=>e.event===event&&e.configuredEnabled===true&&!e.matcher&&e.resolvedTimeoutMs===profile.timeout_ms).length!==1))throw Error('Native hook declarations do not match task');
+        for(const entry of entries){const result=await service.grantWorkspaceHookTrust({workspacePath:scope.workspacePath,bundleDigest:snapshot.bundleDigest,hookDeclarationDigest:entry.hookDeclarationDigest});if(result.accepted!==true)throw Error('Native hook trust was not accepted');}
+        return true;})()`);
+      if(trusted!==true)throw Error('ZCode 原生 hook 未确认');
+      emit({type:'native_hooks_ready',tools:names});
+    }
+    const params={...scope,mode,model:job.selection,thoughtLevel:job.selection.options?.reasoningLevel,
       persistence:'deferred',titleGenerationEnabled:false,dynamicWorkflowEnabled:false,
-      toolAllowlist:names.map(n=>'mcp__modeldesk_zcode__'+n),
-      mcpServers:[{name:'modeldesk_zcode',command:job.python,args:[job.tools_script,'--job',job.tool_job],env:[]}]};
+      toolAllowlist:native?names:names.map(n=>'mcp__modeldesk_zcode__'+n),
+      mcpServers:native?[]:[{name:'modeldesk_zcode',command:job.python,args:[job.tools_script,'--job',job.tool_job],env:[]}]};
     emit({type:'session_creating',session_id:key});
-    const bound=await evaluate(`(async()=>{const md=window.__modelDeskZCode,s=await md.agent.createSession(${JSON.stringify(params)});
-      const current=s.settings.model.current;if(current.providerId!==${JSON.stringify(job.selection.providerId)}||current.modelId!==${JSON.stringify(job.selection.modelId)})throw Error('Native model identity mismatch');
-      const mode=await md.agent.setMode({...${literal},mode:'yolo'});
-      if(mode.settings.mode.current!=='yolo')throw Error('Native tool mode not confirmed');
+    const opened=await evaluate(`(async()=>{const s=await window.__modelDeskZCode.agent.createSession(${JSON.stringify(params)});
+      return {session:{sessionId:s?.session?.sessionId},settings:{model:{current:s?.settings?.model?.current},mode:s?.settings?.mode}};})()`);
+    assertReceipt(opened,{stage:'createSession',mode,sessionId:key,selection:job.selection,transition:true});
+    const modeReceipt=await evaluate(`(async()=>{const s=await window.__modelDeskZCode.agent.setMode({...${literal},mode:${JSON.stringify(mode)}});
+      return {settings:{mode:s?.settings?.mode}};})()`);
+    assertReceipt(modeReceipt,{stage:'setMode',mode});
+    await evaluate(`(()=>{const md=window.__modelDeskZCode;
       const state={events:[],done:false,dispose:null};window.__modelDeskZCodeJobs.set(${id},state);
       state.dispose=md.agent.onDynamicSessionEvent({...${literal},deliveryKind:'desktop-continuous',includeSnapshot:false})(e=>{
         state.events.push(e);if(state.events.length>10000)state.events.shift();
-      });return {session_id:s.session.sessionId,model:current,mode:mode.settings.mode.current};})()`);
-    created=true;emit({type:'connected',...bound});
+      });return true;})()`);
+    created=true;emit({type:'connected',session_id:opened.session.sessionId,model:opened.settings.model.current,mode,readonly:native&&job.kind==='chat'});
+    checkProfile();
+    if(job.action==='native_preflight'){
+      if(!native)throw Error('原生预检不使用旧 MCP 工具');
+      emit({type:'preflight',native_tools:names,model_prompt_sent:false});
+    }else{
     if(job.cancel_file&&fs.existsSync(job.cancel_file))throw Error('ZCode 任务已取消；未请求模型');
     emit({type:'prompt_attempted'});
     await evaluate(`window.__modelDeskZCode.agent.sendPrompt({...${literal},content:${JSON.stringify(job.prompt)},modelSelection:${JSON.stringify(job.selection)}})`);
-    const started=Date.now();let done=false,terminal=null,lastHeartbeat=0;
+    const started=Date.now();let done=false,terminal=null,lastHeartbeat=0,permissionDenied=false;
     while(!done){
       if(job.cancel_file&&fs.existsSync(job.cancel_file)){await evaluate(`window.__modelDeskZCode.agent.stopSession(${literal})`);throw Error('ZCode 任务已取消');}
       if(job.timeout>0&&Date.now()-started>job.timeout*1000){await evaluate(`window.__modelDeskZCode.agent.stopSession(${literal})`);throw Error('ZCode 任务达到显式时限');}
       const events=await evaluate(`(()=>{const s=window.__modelDeskZCodeJobs.get(${id});if(!s)throw Error('owned event subscription lost');return s.events.splice(0)})()`);
       for(const e of events||[]){
         const ev=e.event||e,payload=ev.payload||ev.data||{};
-        emit({type:'native_event',event_type:ev.type||ev.kind,keys:Object.keys(ev).slice(0,15)});
+        const denied=(ev.type||ev.kind)==='permission.resolved'&&payload.decision==='deny';
+        permissionDenied ||= denied;
+        emit({type:'native_event',event_type:ev.type||ev.kind,keys:Object.keys(ev).slice(0,15),permission_denied:denied});
         if(['turn.completed','turn.failed','turn.cancelled'].includes(ev.type||ev.kind)){done=true;terminal=ev.type||ev.kind;}
       }
       if(Date.now()-lastHeartbeat>=1000){emit({type:'heartbeat'});lastHeartbeat=Date.now();}
       if(!done)await new Promise(r=>setTimeout(r,350));
     }
     const result=await evaluate(`(async()=>{const s=await window.__modelDeskZCode.agent.readSession(${literal});
-      return {session:s.session,projection:s.projection,messages:s.messages,settings:{model:s.settings.model.current}}})()`);
-    emit({type:'result',value:result,terminal_event:terminal});
+      return {session:s.session,projection:s.projection,messages:s.messages,settings:{model:s.settings?.model?.current,mode:s.settings?.mode}}})()`);
+    assertReceipt({...result,settings:{...result.settings,model:{current:result.settings?.model}}},
+      {stage:'readSession',mode,sessionId:key,selection:job.selection});
+    emit({type:'result',value:result,terminal_event:terminal,permission_denied:permissionDenied});
+    }
   }else throw Error('Unknown ZCode operation');
 }catch(error){emit({type:'error',message:String(error.message).slice(0,1800)});process.exitCode=1;}
 finally{

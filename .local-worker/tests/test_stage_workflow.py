@@ -261,6 +261,8 @@ class StageDispatchTests(Base):
         self.assertEqual(task['route']['requirements']['acceptance'], ['criterion one', 'criterion two'])
         self.assertEqual(row['stage']['status'], stage_store.DISPATCHED)
         self.assertEqual(row['stage']['active_task_id'], task['id'])
+        self.assertEqual(row['stage']['summary']['code'], 'queued')
+        self.assertEqual(row['stage']['tasks'][0]['execution_result']['summary']['label'], '等待执行')
 
     def test_fixed_stage_model_cannot_bypass_paid_only_scope(self):
         _, stage = self.goal_with_stage()
@@ -488,15 +490,21 @@ class ReworkSessionTests(Base):
 
     def test_concurrent_rework_dispatch_has_one_winner(self):
         self.prepare_returned()
+        availability=panel.dsh_worker.availability
 
         def dispatch(_):
             try:
-                return self.submit({'prompt': 'fix it', 'rework_of': 'parent', 'source': 'codex'})['id']
+                return panel.submit_task({'prompt': 'fix it', 'rework_of': 'parent', 'source': 'codex'})['id']
             except ValueError:
                 return None
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        # Patch once around all threads. Overlapping per-thread patches restore
+        # another thread's Mock and leak fake readiness into later test modules.
+        with mock.patch.object(panel.EXECUTOR,'submit'), \
+                mock.patch.object(panel.dsh_worker,'availability',return_value={'ready':True}), \
+                ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(dispatch, range(2)))
+        self.assertIs(panel.dsh_worker.availability,availability)
         winners = [row for row in results if row]
         self.assertEqual(len(winners), 1)
         self.assertEqual(policy.load(registry.task_dir('parent'))['rework']['dispatched_task_id'], winners[0])
@@ -606,9 +614,9 @@ class ReworkSessionTests(Base):
 class HandoverTests(Base):
     def accepted_task(self, name='source', stage_id=None):
         run = self.task(name)
-        self.accept_task(run)
         if stage_id:
             registry.patch_task(run, stage_id=stage_id)
+        self.accept_task(run)
         return run
 
     def test_handover_computes_real_hashes_and_never_treats_summary_as_evidence(self):

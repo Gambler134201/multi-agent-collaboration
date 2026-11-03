@@ -36,9 +36,7 @@ class DesktopTests(unittest.TestCase):
         (self.root / '.local-worker').mkdir(parents=True)
         (self.root / '打开模型工作台.ps1').write_bytes(b'# fixture native opener\n')
         (self.root / '启动模型面板.ps1').write_bytes(b'# fixture native starter\n')
-        for name in ('brain_mcp_server.py', 'brain_context.py', 'brain_transport.py', 'brain_gateway.py',
-                     'brain_requests.py', 'failure_classification.py', 'execution_result.py', 'project_map.py', 'context_manager.py', 'workflow_settings.py', 'host_balance.py',
-                     'completion_wait.py','desktop_notify.py','completion_host.py','dsh_notify.py','panel_service.py','powershell_runtime.py'):
+        for name in setup.RUNTIME_FILES:
             (self.root / '.local-worker' / name).write_bytes(b'# temporary fixture\n')
         self.home = self.base / 'dsh-home'
         self.profile = self.home / 'profiles' / 'desktop'
@@ -108,7 +106,7 @@ class DesktopTests(unittest.TestCase):
         with tarfile.open(self.folder / 'plugin.tgz') as archive:
             manifest = json.loads(archive.extractfile('package/package.json').read())
             client = archive.extractfile('package/client.mjs').read()
-        self.assertEqual(manifest['version'], '0.2.13')
+        self.assertEqual(manifest['version'], '0.2.19')
         self.assertEqual(set(manifest['files']), set(setup.FILES) - {'package.json'})
         self.assertEqual(manifest['exports']['./client'], './client.mjs')
         self.assertEqual(manifest['exports']['./account'], './account.cjs')
@@ -233,6 +231,54 @@ class DesktopTests(unittest.TestCase):
         self.assertIsNone(self.environment.value)
         self.assertTrue(self.uninstall()['reused'])
         self.assertEqual(len(self.commands), 2)
+
+    def asar_cli(self, root):
+        return root / 'resources' / 'app.asar' / 'dsh' / 'node_modules' / '@deepseek-ai' / 'dsh-desktop-host' / 'lib' / 'cli.js'
+
+    def unpacked_cli(self, root):
+        return root / 'resources' / 'app' / 'dsh' / 'node_modules' / '@deepseek-ai' / 'dsh-desktop-host' / 'lib' / 'cli.js'
+
+    def test_uninstall_accepts_in_place_unpack_and_records_the_drift(self):
+        self.probe.stop()
+        self.probe = mock.patch.object(setup, 'probe_dsh', return_value={
+            'version': setup.SUPPORTED_DSH, 'cli': str(self.asar_cli(self.base))}).start()
+        self.prepare()
+        self.install()
+        plans = []
+        def runner(plan, arguments):
+            plans.append(copy.deepcopy(plan))
+            self.runner(plan, arguments)
+        self.probe.stop()
+        self.probe = mock.patch.object(setup, 'probe_dsh', return_value={
+            'version': setup.SUPPORTED_DSH, 'cli': str(self.unpacked_cli(self.base))}).start()
+        self.uninstall(runner)
+        record = setup.receipt_for(self.folder)
+        self.assertEqual(record['state'], 'uninstalled')
+        self.assertEqual(record['host_drift'], {
+            'recorded_cli': str(self.asar_cli(self.base)), 'resolved_cli': str(self.unpacked_cli(self.base)),
+            'version': setup.SUPPORTED_DSH})
+        self.assertEqual(plans[0]['host']['cli'], str(self.unpacked_cli(self.base)))
+        self.assertFalse(setup.has_ours(self.read_manifest()))
+        self.assertIsNone(self.environment.value)
+
+    def test_uninstall_rejects_unpack_with_changed_version_or_install_root(self):
+        self.probe.stop()
+        self.probe = mock.patch.object(setup, 'probe_dsh', return_value={
+            'version': setup.SUPPORTED_DSH, 'cli': str(self.asar_cli(self.base))}).start()
+        self.prepare()
+        self.install()
+        self.probe.stop()
+        for resolved in ({'version': '9.9.9', 'cli': str(self.unpacked_cli(self.base))},
+                         {'version': setup.SUPPORTED_DSH, 'cli': str(self.asar_cli(self.base / 'elsewhere'))}):
+            self.probe = mock.patch.object(setup, 'probe_dsh', return_value=resolved).start()
+            with self.assertRaises(setup.SetupError):
+                self.uninstall()
+            self.probe.stop()
+        record = setup.receipt_for(self.folder)
+        self.assertEqual(record['state'], 'attention')
+        self.assertNotIn('host_drift', record)
+        self.assertEqual(len(self.commands), 1)
+        self.assertTrue(setup.has_ours(self.read_manifest()))
 
     def failed_without_package(self):
         self.prepare()
@@ -578,6 +624,60 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(registry.QueryValueEx.call_args.args[1], setup.ENV_NAME)
         self.assertEqual(registry.SetValueEx.call_args.args[1], setup.ENV_NAME)
         self.assertEqual(registry.DeleteValue.call_args.args[1], setup.ENV_NAME)
+
+
+class ProbeLayoutTests(unittest.TestCase):
+    """The official unpack of app.asar must probe and uninstall without forgery."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.executable = self.base / 'DSH.exe'
+
+    def cli_path(self, root, container):
+        return root / 'resources' / container / 'dsh' / 'node_modules' / '@deepseek-ai' / 'dsh-desktop-host' / 'lib' / 'cli.js'
+
+    def official_files(self, container, version=setup.SUPPORTED_DSH):
+        package = container / 'dsh' / 'node_modules' / '@deepseek-ai' / 'dsh' / 'package.json'
+        package.parent.mkdir(parents=True)
+        package.write_bytes(setup.json_bytes({'name': '@deepseek-ai/dsh', 'version': version}))
+        cli = self.cli_path(container.parent.parent, container.name)
+        cli.parent.mkdir(parents=True)
+        cli.write_bytes(b'official cli entry')
+        return cli
+
+    def test_unpacked_official_layout_probes_with_resolved_cli(self):
+        cli = self.official_files(self.base / 'resources' / 'app')
+        self.assertFalse((self.base / 'resources' / 'app.asar').exists())
+        self.assertEqual(setup.probe_dsh(self.executable),
+                         {'version': setup.SUPPORTED_DSH, 'cli': str(cli)})
+
+    def test_missing_layouts_refuse(self):
+        with self.assertRaises(setup.SetupError):
+            setup.probe_dsh(self.executable)
+
+    def test_wrong_version_refuses(self):
+        self.official_files(self.base / 'resources' / 'app', version='9.9.9')
+        with self.assertRaises(setup.SetupError):
+            setup.probe_dsh(self.executable)
+
+    def test_layout_drift_only_for_same_version_root_and_entry(self):
+        asar = str(self.cli_path(self.base, 'app.asar'))
+        app = str(self.cli_path(self.base, 'app'))
+        recorded = {'version': setup.SUPPORTED_DSH, 'cli': asar}
+        drift = setup.layout_drift(recorded, {'version': setup.SUPPORTED_DSH, 'cli': app})
+        self.assertEqual(drift, {'recorded_cli': asar, 'resolved_cli': app,
+                                 'version': setup.SUPPORTED_DSH})
+        self.assertIsNone(setup.layout_drift(recorded, {'version': '9.9.9', 'cli': app}))
+        self.assertIsNone(setup.layout_drift(recorded, {'version': setup.SUPPORTED_DSH, 'cli': asar}))
+        self.assertIsNone(setup.layout_drift(recorded, {'version': setup.SUPPORTED_DSH,
+                                                        'cli': str(self.cli_path(self.base / 'elsewhere', 'app'))}))
+        self.assertIsNone(setup.layout_drift(recorded, {'version': setup.SUPPORTED_DSH,
+                                                        'cli': str(self.cli_path(self.base, 'other'))}))
+        self.assertIsNone(setup.layout_drift({'version': setup.SUPPORTED_DSH, 'cli': 'fake-native-cli.js'},
+                                             {'version': setup.SUPPORTED_DSH, 'cli': app}))
+        self.assertIsNone(setup.layout_drift(recorded, {'version': setup.SUPPORTED_DSH}))
 
 
 ORIGINAL_CONTROLLER_CHECK = setup.controller_check

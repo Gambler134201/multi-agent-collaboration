@@ -89,10 +89,10 @@ class WorkBuddyExecutorTests(unittest.TestCase):
                      'resources/app.asar.unpacked/cli/dist/codebuddy-lite-wb.mjs']:
             p=self.root/name; p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(b'fixture')
         (self.root/'resources/app.asar.unpacked/cli/product.json').write_text(json.dumps({'productName':'WorkBuddy'}))
-        for version in ('5.8.2','5.8.3','5.8.4'):
+        for version in ('5.8.2','5.8.3','5.8.4','5.9.2','5.9.3','5.9.4'):
             with self.subTest(version=version), patch.object(wb,'_asar_package',return_value={
                     'name':'@genie/workbuddy-desktop','version':version}):
-                if version in wb.SUPPORTED_VERSIONS:
+                if version in ('5.8.2', '5.8.3', '5.9.2', '5.9.3'):
                     self.assertEqual(wb.installation(self.root)['version'],version)
                 else:
                     with self.assertRaises(ValueError):wb.installation(self.root)

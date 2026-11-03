@@ -1,5 +1,6 @@
 """Result meaning and negative evidence tests; no provider, filesystem or service."""
 from copy import deepcopy
+import hashlib
 from pathlib import Path
 import sys
 import unittest
@@ -10,6 +11,51 @@ import failure_classification
 
 
 class ResultTests(unittest.TestCase):
+    def test_bound_guard_refusal_shape_is_strict_and_message_independent(self):
+        data={'schema':1,'code':'TOOL_PERMISSION_DENIED','tool':'write',
+              'reason_code':'protected_data','rule_id':'record_target'}
+        self.assertIsNone(result.guard_problem({'message':'permission denied'}))
+        self.assertEqual(result.guard_problem({'guard_denial':data}),data)
+        for bad in [None,{}, {**data,'schema':True},{**data,'tool':'private/path'},
+                    {**data,'rule_id':'private/path'},{**data,'raw_command':'secret'},
+                    {**data,'tool':[]},{**data,'reason_code':{}}]:
+            with self.subTest(bad=bad),self.assertRaises(ValueError):
+                result.guard_problem({'guard_denial':bad})
+
+    def test_native_selftest_separates_evidence_gap_from_actual_failed_final_test(self):
+        import endpoint_access
+        task={'kind':'edit','task_policy':endpoint_access.policy_for_dispatch('edit'),'test_command':'node check.cjs'}
+        sha=hashlib.sha256(task['test_command'].encode()).hexdigest()
+        passed={'event':'PostToolUse','tool':'Bash','ok':True,'exit_code':0,'command_hash':sha}
+        for rows in [[],[{**passed,'command_hash':'different'}],[{**passed,'exit_code':False}],
+                     [{**passed,'event':'PreToolUse'}],[{**passed,'event':'PostToolUseFailure'}]]:
+            test,blocking=result.native_selftest(task,rows,'zcode-native-tools')
+            self.assertFalse(test['verified']);self.assertFalse(blocking)
+        test,blocking=result.native_selftest(task,[{**passed,'exit_code':2,'ok':False}],'zcode-native-tools')
+        self.assertFalse(test['verified']);self.assertTrue(blocking)
+        test,blocking=result.native_selftest(task,[{**passed,'exit_code':2,'ok':False},passed],'zcode-native-tools')
+        self.assertTrue(test['verified']);self.assertFalse(blocking)
+        for old in [{'kind':'edit','test_command':task['test_command']},
+                    {**task,'task_policy':{'schema':1,'write_scope':'workspace'}}]:
+            self.assertTrue(result.native_selftest(old,[],'zcode-native-tools')[1])
+        self.assertTrue(result.native_selftest(task,[],'zcode-mcp-command',native=False)[1])
+
+    def test_workspace_authority_never_claims_a_declared_scan_is_exhaustive(self):
+        task,_=self.task(task_policy={'schema':1,'write_scope':'workspace'},changed_files=[])
+        view=result.project(task)
+        self.assertEqual(view['artifacts']['state'],'unknown')
+        self.assertIn('未完整统计',view['artifacts']['scope_label'])
+        task.update(workspace={'commit':'a'*40},artifact_manifest={'source':'controller_git_diff','commit':'a'*40})
+        view=result.project(task)
+        self.assertEqual(view['artifacts']['state'],'none')
+        self.assertIn('按成果提交',view['artifacts']['scope_label'])
+
+    def test_pending_controller_blocks_complete_delivery_acceptance(self):
+        task, _ = self.task(controller_finalization={'schema':1,'state':'pending','note':'committing'})
+        view=result.project(task,{'state':'accepted','acceptance_valid':True})
+        self.assertEqual(view['controller_finalization']['state'],'pending')
+        self.assertFalse(view['review']['accepted'])
+
     def task(self, engine='pi', **values):
         tracker = result.Tracker(engine)
         tracker.mark('prepare', 'completed')
@@ -18,7 +64,7 @@ class ResultTests(unittest.TestCase):
                 'execution_evidence': tracker.snapshot(), **values}, tracker
 
     def test_all_engines_share_schema_and_no_auto_acceptance(self):
-        for engine in ('pi', 'dsh', 'workbuddy'):
+        for engine in ('pi', 'dsh', 'workbuddy', 'zcode'):
             task, _ = self.task(engine)
             view = result.project(task)
             self.assertEqual(view['schema_version'], 1)
@@ -93,6 +139,56 @@ class ResultTests(unittest.TestCase):
         self.assertEqual(view['failure']['stage'], 'temporary_cleanup')
         self.assertEqual(view['failure']['rule_id'], 'unverified_recursive_cleanup')
         self.assertEqual(len(view['issues']), 3)
+
+    def test_typed_problems_keep_primary_cause_and_raw_execution_status(self):
+        cases = [('execute', 'OUTCOME_UNKNOWN', 'adapter', 'outcome_unknown'),
+                 ('execute', 'TOOL_PERMISSION_DENIED', 'adapter', 'permission_denied'),
+                 ('verify', 'TEST_FAILED', 'adapter_tool', 'verification_failed'),
+                 ('verify', 'TEST_UNCONFIRMED', 'adapter_tool', 'verification_unconfirmed'),
+                 ('verify', 'PROTECTION_EVIDENCE_UNCONFIRMED', 'protection_verification', 'verification_unconfirmed'),
+                 ('verify', 'VERIFICATION_ERROR', 'protection_verification', 'verification_unconfirmed'),
+                 ('verify', 'TEST_EXECUTION_ERROR', 'controller_test', 'verification_unconfirmed'),
+                 ('session_close', 'SESSION_CLOSE_UNCONFIRMED', 'child_process', 'cleanup_unconfirmed'),
+                 ('record', 'RECORD_WRITE_FAILED', 'persistence', 'record_error')]
+        for engine in ('pi', 'dsh', 'workbuddy', 'zcode'):
+            for stage, code, source, kind in cases:
+                with self.subTest(engine=engine, code=code):
+                    task, tracker = self.task(engine, status='failed')
+                    tracker.fail(stage, code, 'fixture', source=source)
+                    tracker.fail('session_close', 'SESSION_CLOSE_UNCONFIRMED', 'later', source='adapter')
+                    task['execution_evidence'] = tracker.snapshot()
+                    before = deepcopy(task)
+                    view = result.project(task)
+                    self.assertEqual(view['failure']['kind'], kind)
+                    self.assertEqual(view['execution']['status'], 'failed')
+                    self.assertEqual(len(view['issues']), 2)
+                    self.assertFalse(view['review']['accepted'])
+                    self.assertEqual(task, before)
+
+    def test_prose_and_wrong_boundaries_cannot_claim_a_typed_problem(self):
+        for stage, code, source in [('execute', 'TEST_UNCONFIRMED', 'adapter_tool'),
+                                    ('verify', 'TEST_FAILED', 'persistence'),
+                                    ('verify', 'OUTCOME_UNKNOWN', 'adapter'),
+                                    ('execute', 'NEW_UNKNOWN_CODE', 'adapter')]:
+            task, tracker = self.task(status='failed')
+            tracker.fail(stage, code, 'permission denied outcome unknown', source=source, category='permission_denied')
+            evidence = tracker.snapshot()
+            evidence['issues'][0].update(kind='outcome_unknown', kind_label='forged')
+            task['execution_evidence'] = evidence
+            view = result.project(task)
+            self.assertEqual(view['failure']['kind'], 'unknown')
+            self.assertNotEqual(view['failure']['kind_label'], 'forged')
+
+    def test_unknown_send_is_excluded_from_quality_without_authorizing_retries(self):
+        task, tracker = self.task('zcode', status='failed',
+                                  zcode={'prompt_attempted': True, 'outcome_unknown': True, 'cleanup': 'closed'})
+        tracker.fail('execute', 'OUTCOME_UNKNOWN', 'fixture', source='adapter')
+        task['execution_evidence'] = tracker.snapshot()
+        finding = failure_classification.classify(task)
+        self.assertEqual(finding['reason'], 'request_outcome_unknown')
+        self.assertTrue(finding['system_excluded'])
+        import executor_contract
+        self.assertEqual(executor_contract.resend_decision('zcode', task)['verdict'], 'denied')
 
     def test_corrupt_version_engine_or_enum_never_promotes_evidence(self):
         task, _ = self.task()

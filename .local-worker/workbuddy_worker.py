@@ -13,6 +13,8 @@ import time
 import model_registry as registry
 import workbuddy_executor as wb
 import workbuddy_host_bridge as bridge
+import endpoint_access
+import endpoint_readiness
 
 MODEL = 'deepseek-v4.1-flash'
 MODEL_ROW = 'workbuddy-deepseek-flash'
@@ -110,10 +112,14 @@ def _installation(home, stamps):
 
 def installation(config):
     home = Path(config['home'])
+    if not home.is_absolute() or not home.is_dir():
+        raise endpoint_readiness.DiagnosticError('installation_path_invalid','WorkBuddy 安装目录无效')
     paths = [home / name for name in ('WorkBuddy.exe', 'resources/app.asar',
              'resources/app.asar.unpacked/cli/bin/codebuddy',
              'resources/app.asar.unpacked/cli/dist/codebuddy-lite-wb.mjs',
              'resources/app.asar.unpacked/cli/product.json')]
+    if not all(p.is_file() for p in paths):
+        raise endpoint_readiness.DiagnosticError('installation_incomplete','WorkBuddy 安装文件不完整')
     stamps = tuple((p.stat().st_mtime_ns, p.stat().st_size) for p in paths)
     return dict(_installation(str(home), stamps))
 
@@ -125,24 +131,31 @@ def availability():
                                'project_search': True, 'web': True, 'native_tools': True,
                                'subagents': False, 'session_reuse': False},
               'billing_source': 'workbuddy-native-account', 'message': ''}
+    stage='access_config_unreadable'
     try:
         import workbuddy_native_tools
         result['access_mode'] = workbuddy_native_tools.access_mode()
+        stage='configuration_unreadable'
         config = configuration()
         result['configuration_values'] = config
         if not config['home'] or not config['profile']:
-            raise ValueError('请配置 WorkBuddy 安装目录与当前用户原生配置目录；不会读取认证文件')
+            raise endpoint_readiness.DiagnosticError('configuration_missing','请配置 WorkBuddy 安装目录与当前用户原生配置目录；不会读取认证文件')
+        stage='installation_unavailable'
         info = installation(config)
+        stage='native_tools_unavailable'
         import workbuddy_native_tools
         result['tool_profile'] = workbuddy_native_tools.MODE
         result['native_tools'] = list(workbuddy_native_tools.TOOLS)
         result['tool_guard_revision'] = workbuddy_native_tools.revision()
         result.update(installed=True, version=info['version'], executable=info['executable'])
+        stage='native_channel_unavailable'
         bridge.select_channel(config['profile'], os.listdir('\\\\.\\pipe\\'))
-        result.update(ready=True, message='已发现指定账户的原生宿主；登录授权在实际任务时由 WorkBuddy 核实')
-    except (OSError, ValueError, wb.ProtocolError, KeyError):
-        result['message'] = ('请配置已验证版本的完整 WorkBuddy，并打开同一配置目录的 WorkBuddy、保持登录；'
-                             '不改用 API 或 Auto')
+        result.update(ready=True, message='已发现指定账户的原生宿主；登录授权在实际任务时由 WorkBuddy 核实',
+                      readiness=endpoint_readiness.runtime('runtime_ready'))
+    except (OSError, ValueError, wb.ProtocolError, KeyError, TypeError, wb.struct.error) as error:
+        code=error.code if isinstance(error,endpoint_readiness.DiagnosticError) else stage
+        result['readiness']=endpoint_readiness.runtime(code)
+        result['message']=result['readiness']['detail']+' '+result['readiness']['next_step']
     try:
         result['native_catalog'] = catalog()
     except ValueError as error:
@@ -252,20 +265,28 @@ def run_task(run, state, model, *, client_factory=None):
         if state.get('workbuddy_connection') and state['workbuddy_connection'] != config:
             raise ValueError('WorkBuddy 安装或账户配置已变；排队任务保留原来源，拒绝切换')
         info = installation(config)
-        project = Path(state['project']).resolve()
-        if run.parent != project / '.model-desk' / 'runs' or run.name != state['id']:
-            raise ValueError('WorkBuddy 任务记录不属于本项目')
-        files = (state.get('files') or []) if state['kind'] == 'edit' else []
-        readonly = state.get('readonly_files') or []
+        import task_workspace
+        record, project = task_workspace.native_roots(run, state)
+        if record != project and not native_mode:
+            raise ValueError('旧 WorkBuddy 文件工具任务不支持隔离工作区；未自动切换工具')
+        files = task_workspace.execution_files(state) if state['kind'] == 'edit' else []
+        readonly = task_workspace.execution_files(state, 'readonly_files')
         record_protection.validate_files(files + readonly, project)
-        before = {name: digest(project / name) for name in files}
+        targets = {name: project / mapped for name, mapped in zip(state.get('files') or [], files)}
+        before = {name: digest(target) for name, target in targets.items()}
         prompt = (run / 'prompt.txt').read_text(encoding='utf-8')
         legacy_boundary = ('\n\n工作边界：只使用所挂载的限定文件工具，不使用命令、网络、子代理或其他记录。'
                    '没有命令工具，不得声称已运行测试；请报告未验证项供主脑验收。'
                    '\n可修改文件：' + json.dumps(files, ensure_ascii=False) +
                    '\n额外只读文件：' + json.dumps(readonly, ensure_ascii=False))
         if native_mode:
-            prompt += ('\n\n工作边界：已加载 WorkBuddy 原生开发工具，可浏览项目、编辑列明文件、运行代码和测试。'
+            task_scope=endpoint_access.scope_prompt(state,files,readonly)
+            if task_scope is not None:
+                prompt += ('\n\n工作边界：使用 WorkBuddy 原生工具自主完成工作、测试和普通错误纠正。'
+                           '不读写 .model-desk、认证文件或其他聊天，不派生子代理、后台服务或擅自发布。'
+                           '权限/保护拒绝后停止报告，不换工具绕过；如实报告验证结果，主脑独立验收。'+task_scope)
+            else:
+                prompt += ('\n\n工作边界：已加载 WorkBuddy 原生开发工具，可浏览项目、编辑列明文件、运行代码和测试。'
                        '请自行测试并据真实输出修正；交付中区分已运行和未验证项，主脑随后独立验收。' +
                        ('业务目标为下列文件；完全访问允许必要的项目外普通文件操作。' if access == 'full' else
                         '只在本项目工作；只修改下列文件。') +
@@ -273,7 +294,7 @@ def run_task(run, state, model, *, client_factory=None):
                        '拒绝后停止并报告，不更换工具、改写命令或绕过权限。命令须前台返回结果，不启动常驻服务。'
                        '项目检索需排除 .model-desk、.git 和 .env；不擅自发布、推送或对外发消息。'
                        '\n可修改文件：' + json.dumps(files, ensure_ascii=False) +
-                       '\n额外只读文件：' + json.dumps(readonly, ensure_ascii=False))
+                           '\n额外只读文件：' + json.dumps(readonly, ensure_ascii=False))
             if state.get('test_command'):
                 prompt += '\n必须通过原生终端执行并报告这条测试命令的实际结果：' + state['test_command']
         else:
@@ -287,12 +308,19 @@ def run_task(run, state, model, *, client_factory=None):
             if expected_revision != native_tools.revision():
                 raise ValueError('WorkBuddy 原生工具保护版本已变；旧任务不能隐式换版')
             native_job = native_tools.prepare(run, project, state['id'], files, readonly, state['kind'],
-                                             access=access, protected_roots=[config['profile']])
+                                             access=access, protected_roots=[config['profile']], record_project=record)
+            native_data = native_tools.load(native_job)
+            if native_data.get('temp_dir'):
+                prompt += endpoint_access.scratch_prompt(state,native_data['temp_dir'])
             if access == 'full':
+                contract=endpoint_access.task_policy(state)
+                accounting=('隔离任务按实际成果提交核对业务改动；临时材料、忽略文件与外部路径不纳入该统计。'
+                            if contract and contract['write_scope']=='workspace' else
+                            '仅列出的业务文件进入自动改动统计，不能把该统计当作全盘写入审计。')
                 prompt += ('\n访问权限：用户明确开启完全访问。使用原生完全访问模式，允许访问项目外的普通文件，'
                            '包括本任务生成的临时截图；工作台记录、认证数据、原生配置目录和其他会话仍受保护。'
                            '优先在项目内完成任务；项目外修改需确为本任务必要，报告实际写入位置。'
-                           '仅列出的业务文件进入自动改动统计，不能把该统计当作全盘写入审计。')
+                           +accounting)
             else:
                 prompt += '\n访问权限：项目范围。截图与验证材料直接保存在项目内，不从系统临时目录读取或复制。'
             prompt += ('\n收尾要求：非必要的临时截图、测试脚本与缓存清理不是验收条件，'
@@ -379,19 +407,15 @@ def run_task(run, state, model, *, client_factory=None):
                 tracker.fail(denial_stage, 'TOOL_PERMISSION_DENIED', error, source='adapter_tool',
                              category='permission_denied', rule_id=denial['rule'] if denial else '')
             if state.get('test_command'):
-                expected = hashlib.sha256(state['test_command'].encode('utf-8')).hexdigest()
-                matched = [e for e in self_tests if e.get('command_hash') == expected]
-                test = matched[-1] if matched else {}
-                test_result = {'source': 'workbuddy-native-tools',
-                    'command_sha256': expected, 'exit_code': test.get('exit_code'), 'output': None,
-                    'call_id': test.get('call_id'), 'verified': bool(test.get('ok') and test.get('exit_code') == 0)}
+                test_result,blocking=execution_result.native_selftest(state,self_tests,'workbuddy-native-tools')
+                test_result['output']=None
                 registry.patch_task(run, test_result=test_result)
                 if test_result['verified']:
                     tracker.mark('verify', 'completed', '指定原生命令匹配且退出码为 0；不是独立验收', 'adapter_tool')
                 else:
-                    tracker.fail('verify', 'TEST_FAILED' if type(test.get('exit_code')) is int and test['exit_code'] != 0 else 'TEST_UNCONFIRMED',
+                    tracker.fail('verify', 'TEST_FAILED' if type(test_result.get('exit_code')) is int and test_result['exit_code'] != 0 else 'TEST_UNCONFIRMED',
                                  '指定测试失败或缺少可信结束证据', source='adapter_tool', category='test')
-                if status == 'completed' and (not test.get('ok') or test.get('exit_code') != 0):
+                if status == 'completed' and blocking:
                     status, error = 'failed', '没有核实指定测试命令成功结束；请主脑检查原生工具证据'
             else:
                 tracker.mark('verify', 'not_requested', '未指定测试命令；不将执行器自述记为测试通过')
@@ -441,7 +465,7 @@ def run_task(run, state, model, *, client_factory=None):
             tracker.mark('artifacts', 'running')
             try:
                 for name, old_hash in before.items():
-                    current = digest(project / name)
+                    current = digest(targets[name])
                     if current != old_hash:
                         changed.append(name); hashes[name] = current
                 tracker.mark('artifacts', 'completed', '仅核对任务声明文件的内容哈希')
@@ -459,7 +483,9 @@ def run_task(run, state, model, *, client_factory=None):
         except OSError:
             tracker.fail('record', 'RECORD_WRITE_FAILED', '答复记录写入失败；保留原始执行状态',
                          source='persistence', category='recording')
-        registry.patch_task(run, status=status, phase='执行完成' if status == 'completed' else 'WorkBuddy 执行失败',
+        registry.patch_task(run, status=status, phase=(
+            '执行结束，指定自测待核实' if test_result and test_result.get('verified') is False else '执行完成'
+            ) if status == 'completed' else 'WorkBuddy 执行失败',
             ended_at=registry.now(), workbuddy=dict(native), answer=answer, error=error or None,
             changed_files=changed, file_hashes=hashes, usage=result.get('usage'),
             tool_calls=native_tools.public_calls(result.get('native_tool_proof') or result.get('file_tool_proof')),
@@ -485,6 +511,8 @@ def main():
     run = registry.task_dir(args.run_id)
     state = registry.read_task(run)
     if (run / 'cancelled.flag').exists():
+        registry.patch_task(run, status='cancelled', phase='已停止执行', ended_at=registry.now(),
+                            workbuddy={'prompt_attempted':False,'cleanup':'not_created'})
         return 1
     return run_task(run, state, registry.get_model(state['model_id']))
 

@@ -203,6 +203,8 @@ def safe_load(run):
 def save(run, record):
     record['updated_at'] = registry.now()
     registry.write_json(review_path(run), record)
+    import approved_plan
+    approved_plan.notify_task(run)
     return record
 
 
@@ -284,6 +286,8 @@ def _require_record(run):
     record = load(run)
     if not is_delegated(task):
         raise ValueError('旧任务或非成果委派任务没有可追认的验收记录；请对新的委派任务记录验收，旧历史不能追认通过。')
+    if record is not None and record.get('task_id') != (task.get('id') or Path(run).name):
+        raise ValueError('验收记录与真实任务身份不一致；拒绝变更其他任务的证据')
     return (record or _blank(run, task)), task
 
 
@@ -306,7 +310,11 @@ def _compact_test(test):
     code = test.get('exit_code')
     if isinstance(code, bool) or not isinstance(code, int):
         code = None
-    return {'exit_code': code, 'ok': code == 0, 'excerpt': str(test.get('output') or '')[-800:]}
+    result={'exit_code':code,'ok':code==0,'excerpt':str(test.get('output') or '')[-800:]}
+    if 'verified' in test:
+        result['verified']=test['verified'] is True
+        result['ok']=result['ok'] and result['verified']
+    return result
 
 
 def _decision_rows(criteria):
@@ -378,7 +386,7 @@ def _resolve_acceptance(record, criteria):
     return resolved
 
 
-def acceptance_problems(record):
+def acceptance_problems(record, task=None):
     """Read-only coherence check for a record that claims acceptance.
 
     The writer (:func:`accept` / :func:`final_accept`) already refuses a pass
@@ -425,6 +433,9 @@ def acceptance_problems(record):
                                     _clean_text(entry.get('exit_code'), 20))
         if not independent:
             problems.append(name + ' 没有主脑独立证据（执行器自报不算）')
+    if task is not None:
+        try:require_result_binding(task,record)
+        except ValueError as error:problems.append(str(error))
     return problems
 
 
@@ -496,12 +507,60 @@ def record_executor(run, executor):
     return record
 
 
+def result_binding(task):
+    value={key:task.get(key) for key in ('id','project','model_id','engine','stage_id','goal_id')}
+    value.update(files=list(task.get('files') or []),readonly_files=list(task.get('readonly_files') or []),
+                 changed_files=list(task.get('changed_files') or []))
+    if 'task_policy' in task:value['task_policy']=task['task_policy']
+    plan=task.get('workspace') or {}
+    if plan.get('created'):
+        value['workspace']={key:plan.get(key) for key in ('path','branch','baseline','commit')}
+    return value
+
+
+def require_result_binding(task, record):
+    if not isinstance(record,dict) or record.get('task_id') != task.get('id'):
+        raise ValueError('验收记录与真实任务身份不一致')
+    expected=result_binding(task)
+    if ('workspace' in expected or 'result_binding' in record) and record.get('result_binding') != expected:
+        raise ValueError('验收所绑定的任务或成果提交已变化，不能沿用旧验收')
+
+
+def freeze_acceptance_result(run, task, *, takeover=False):
+    plan=task.get('workspace') or {}
+    if plan.get('created'):
+        import task_workspace
+        _record,execution=task_workspace.native_roots(run,task)
+        if takeover:
+            # Only the independently reviewing main brain invokes this path.
+            # Freeze its fixes on the task-owned branch, preserving raw failure.
+            try:
+                task_workspace.commit_task_results(execution,task['id'])
+                head=task_workspace._git(execution,'rev-parse','HEAD')
+                if head.returncode:raise ValueError('接管成果提交无法核实')
+                task=registry.patch_task(run,workspace={**plan,'commit':head.stdout.strip()},workspace_commit_error=None)
+                plan=task['workspace']
+            except (OSError,ValueError) as error:
+                registry.patch_task(run,workspace_commit_error=str(error)[:300])
+                import task_finalization
+                task_finalization.interrupt(run)
+                raise
+        head=task_workspace._git(execution,'rev-parse','HEAD')
+        if head.returncode or not plan.get('commit') or head.stdout.strip()!=plan['commit']:
+            raise ValueError('验收成果与控制器冻结的提交不一致')
+        dirty=task_workspace.acceptance_dirty_rows(run,task)
+        if dirty:raise ValueError('成果工作区还有未提交改动，不能沿用旧提交验收')
+    return result_binding(task)
+
+
 @serialized
 def accept(run, actor, criteria, notes='', authority=None, request_id=''):
     """Independently accept a completed executor result with per-condition evidence."""
     actor = _require_main(actor, authority)
     record, task = _require_record(run)
+    import task_finalization
     _require_brain_authority(task, authority)
+    task_finalization.require_settled(task)
     if record['state'] in ACCEPTED_STATES:
         raise ValueError('这个成果已经验收通过，不能重复追认。')
     if record['state'] == EXECUTOR_FAILED:
@@ -513,10 +572,13 @@ def accept(run, actor, criteria, notes='', authority=None, request_id=''):
         raise ValueError('尚未记录可判定的验收条件；请先用 --init 记录验收条件。')
     resolved = _resolve_acceptance(record, criteria)
     executor_test = (record.get('executor') or {}).get('test') or {}
+    if task.get('test_command') and executor_test.get('verified') is False and not _clean_text(notes):
+        raise ValueError('指定自测证据不足，验收需要主脑说明如何独立验证并附逐项证据。')
     if executor_test.get('exit_code') not in (0, None) and not _clean_text(notes):
         raise ValueError('执行器自报测试未通过，验收需要主脑给出说明并附独立证据。')
     _store_acceptance(record, resolved)
     record['state'] = ACCEPTED
+    record['result_binding']=freeze_acceptance_result(run,task)
     record['blocked_reason'] = ''
     record['reviewer_notes'] = _clean_text(notes, MAX_TEXT)
     record['decisions'].append({'at': registry.now(), 'actor': actor, 'action': 'accept',
@@ -541,7 +603,9 @@ def final_accept(run, actor, criteria, notes='', authority=None, request_id=''):
     """
     actor = _require_main(actor, authority)
     record, task = _require_record(run)
+    import task_finalization
     _require_brain_authority(task, authority)
+    task_finalization.require_settled(task)
     if record['state'] in ACCEPTED_STATES:
         raise ValueError('这个成果已经验收通过，不能重复追认。')
     if record['state'] not in {EXECUTOR_FAILED, BLOCKED, RETURNED}:
@@ -553,6 +617,7 @@ def final_accept(run, actor, criteria, notes='', authority=None, request_id=''):
     resolved = _resolve_acceptance(record, criteria)
     executor = record.get('executor') or {}
     executor_test = executor.get('test') or {}
+    record['result_binding']=freeze_acceptance_result(run,task,takeover=True)
     record['final'] = {
         'accepted_at': registry.now(),
         'actor': actor,
@@ -585,7 +650,9 @@ def request_rework(run, actor, failed_criteria, problems, boundaries, notes='',
     """Return the work with the failed conditions, the real problem and the boundary."""
     actor = _require_main(actor, authority)
     record, task = _require_record(run)
+    import task_finalization
     _require_brain_authority(task, authority)
+    task_finalization.require_settled(task)
     if record['state'] in DECIDED:
         raise ValueError('验收结论已经结束（验收通过或受阻），不能再次退回。')
     if record['state'] == RETURNED:
@@ -716,13 +783,15 @@ def release_rework_dispatch(run, child_id, reason='', authority=None):
     return save(run, record)
 
 
-def rework_prompt(record, deliverable=None, new_session=True):
+def rework_prompt(record, deliverable=None, new_session=True, extra_instructions=''):
     """Compact, non-solution rework brief keeping the original model and scope.
 
     By default the corrective round runs in a *new* execution Agent session: it carries the
     previous deliverable, the failure evidence and the correction scope instead
     of silently inheriting the old conversation.  ``new_session=False`` is the
-    explicit exception (``--reuse-session``).
+    explicit exception (``--reuse-session``).  ``extra_instructions`` carries the
+    main brain's steering for this corrective round (e.g. prompt-wording traps to
+    avoid) and is appended as an explicit override block.
     """
     rework = (record or {}).get('rework') or {}
     if not rework:
@@ -748,6 +817,9 @@ def rework_prompt(record, deliverable=None, new_session=True):
               '范围与边界：', str(rework.get('boundaries') or ''),
               '要求：先自行调查原因，再设计并修改，运行适当的测试；只改允许范围内的文件。'
               '完成后简短说明改动、可核验证据和未解决问题，不要重述整段任务或主脑聊天。']
+    extra = str(extra_instructions or '').strip()
+    if extra:
+        lines += ['主脑补充指令（本轮整改优先遵守；与上文冲突时以这里为准）：', extra[:2000]]
     return '\n'.join(lines)
 
 
@@ -761,13 +833,13 @@ def _failure_line(executor, test):
     return '；'.join(parts)
 
 
-def panel_summary(record):
+def panel_summary(record, task=None):
     if not record:
         return None
     rework = record.get('rework') or {}
     executor = record.get('executor') or {}
     test = executor.get('test') or {}
-    acceptance_valid = record.get('state') in ACCEPTED_STATES and not acceptance_problems(record)
+    acceptance_valid = record.get('state') in ACCEPTED_STATES and not acceptance_problems(record,task)
     return {'task_id': record.get('task_id'),
             'state': record.get('state'),
             'acceptance_valid': acceptance_valid,

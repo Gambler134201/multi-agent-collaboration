@@ -1,11 +1,11 @@
 # DSH 安装与使用
 
-更新于 2026-10-22。本指南描述当前入口；开发历史另见 [实现记录](DSH_BRAIN_PLUGIN.md)，版本与交付边界见 [发布说明](DSH_RELEASE.md)。也可将 [Agent 安装指南](AGENT_INSTALL.md) 交给自己的 Agent 执行。
+更新于 2026-11-03。本指南描述当前入口；开发历史另见 [实现记录](DSH_BRAIN_PLUGIN.md)，版本与交付边界见 [发布说明](DSH_RELEASE.md)。也可将 [Agent 安装指南](AGENT_INSTALL.md) 交给自己的 Agent 执行。
 
 ## 适用版本
 
 - Windows；维护者实测的 DSH 产品为 `0.2.1-rc.2`，Pi 执行器为 `1.3.0`。
-- 当前插件源码为 **0.2.11**。0.2.6 覆盖原生任务/通知闭环，0.2.10 的右侧入口和首轮状态信号已由用户确认；0.2.11 的无 Codex 环境隔离冷启动已通过。实际用户机器的独立冷启动、安装及主脑加载仍需单独验收，不从源码发布推定通过。
+- 当前插件源码为 **0.2.19**。0.2.6 覆盖原生任务/通知闭环，0.2.10 的右侧入口和首轮状态信号已由用户确认；0.2.11 的无 Codex 环境隔离冷启动已通过。实际用户机器的独立冷启动、安装及主脑加载仍需单独验收，不从源码发布推定通过。
 - DSH 主脑插件、DSH/Pi 执行器和工作台是不同组件。只安装一个 tgz 无法替代完整工作台；其他宿主或版本不由本次测试保证。
 
 ## 首次安装
@@ -19,7 +19,7 @@ $workbenchRoot = 'D:\Work\multi-agent-collaboration'
 $workbenchPython = Join-Path $workbenchRoot '.local-worker\venv\Scripts\python.exe'
 $dshExecutable = 'D:\Apps\DSH\DeepSeek Harness.exe'
 $dshHome = Join-Path $env:USERPROFILE '.dsh' # 自定义 DSH_HOME 时改成实际目录
-$installRecord = 'D:\ToolConfigs\ModelDesk\dsh-brain-0.2.11'
+$installRecord = 'D:\ToolConfigs\ModelDesk\dsh-brain-0.2.19'
 $installer = Join-Path $workbenchRoot '.local-worker\dsh_brain_desktop.py'
 
 & $workbenchPython $installer prepare --output $installRecord --workbench $workbenchRoot --python $workbenchPython --executable $dshExecutable --home $dshHome

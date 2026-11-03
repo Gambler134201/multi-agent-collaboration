@@ -90,6 +90,8 @@ function renderEndpointCards(){
     let status=!endpoint.enabled?badge('cancelled','已禁用'):!endpoint.ready?badge('unknown','执行器未就绪'):!group.some(m=>m.enabled)?badge('unknown','未配置可用模型'):badge('online','执行器就绪');
     if(endpoint.enabled&&endpoint.ready&&runtime.auto_connect_pending)status=badge('unknown','可自动连接');
     if(endpoint.selection_error)status=badge('failed','模型选择需修正');
+    const diagnostic=endpoint.diagnostic;
+    if(diagnostic?.schema===1)status=badge(diagnostic.code==='endpoint_disabled'?'cancelled':diagnostic.precheck_passed&&diagnostic.code!=='auto_connect_pending'?'online':'unknown',diagnostic.label||'就绪状态待核对');
     const name=native?(model?.name?.replace(/^(?:WorkBuddy|ZCode)\s*·\s*/,'')||'尚未选择原生模型'):model?.name||(group.length?'按任务选择':'尚未配置模型');
     const modelCode=model?.model||`${group.length} 个已配置模型`;
     const wallet=endpoint.id==='zcode'?renderZcodeWallet(endpoint):native?`<div class="endpoint-wallet"><div><span>${escapeText(endpoint.name)} 原生额度</span><strong>未同步</strong></div><small>使用登录账户原生额度</small></div>`:model?.billing?`<div class="endpoint-wallet endpoint-billing"><div class="endpoint-wallet-source">${escapeText(providerNames[model.provider]||model.provider)} API 账户余额</div>${renderBilling(model)}</div>`:`<div class="endpoint-wallet"><div><span>${model?.provider==='local'?'账户余额':'账户余额'}</span><strong>${model?.provider==='local'?'不适用':model?'暂不支持查询':'按任务模型显示'}</strong></div><small>${model?.provider==='local'?'本地运行，不经云端账户扣费':model?'此服务暂无余额读取适配':'展开设置查看模型及各自余额'}</small></div>`;
@@ -97,7 +99,8 @@ function renderEndpointCards(){
       <div class="endpoint-head"><div class="endpoint-mark" aria-hidden="true">${({pi:'Pi',dsh:'DSH',workbuddy:'WB',zcode:'ZC'})[endpoint.id]}</div><div><h3>${escapeText(endpoint.name)}</h3><span class="subtle">${native?'登录账户模型 / 原生额度':'API / 本地模型'}</span></div></div>
       <div class="endpoint-enable-row"><span class="subtle">${escapeText(runtime.version||'版本未确认')}${runtime.access_mode?' · '+(runtime.access_mode==='full'?'完全访问':'项目范围'):''}</span><button type="button" role="switch" aria-checked="${endpoint.enabled}" aria-label="启用${escapeText(endpoint.name)}" class="endpoint-toggle" data-endpoint-toggle="${endpoint.id}" ${endpointSaving||!data.readable?'disabled':''}><span class="endpoint-switch" aria-hidden="true"></span>${endpoint.enabled?'已启用':'已禁用'}</button></div>
       <div class="endpoint-current"><span class="label">${native?'指定原生模型':'当前模型 · 自动路由'}</span><strong>${escapeText(name)}</strong><div class="model-code">${escapeText(modelCode)}</div></div>
-      ${wallet}<div class="endpoint-status">${status}<span class="subtle">${jobs.length?`${jobs.length} 个本项目活动任务`:native?'原生账户 · 以派发预检为准':model?.last_check?.ok?'最近连接测试通过':'未验证当前连接'}</span></div>
+      ${wallet}<div class="endpoint-status">${status}<button type="button" class="text-button" data-endpoint-diagnose="${endpoint.id}" aria-haspopup="dialog">查看诊断</button></div>
+      ${jobs.length?`<p class="field-hint">${jobs.length} 个本项目活动任务 · 当前诊断不改变任务状态</p>`:''}
       <button type="button" class="button secondary endpoint-expand" data-endpoint-expand="${endpoint.id}" aria-haspopup="dialog" aria-controls="endpoint-dialog">参数设置<span aria-hidden="true">↗</span></button>
       </article>`;
   }).join('')+(data.unassigned_models?.length?`<section class="endpoint-unassigned"><h3>需修正归属的模型</h3><p class="field-hint">无效的默认 Agent 不会被自动归到其他执行端。</p>${data.unassigned_models.map(m=>`<div>${escapeText(m.name)} ${endpointModelAction(m,'edit','修正配置')}</div>`).join('')}</section>`:''));
@@ -122,6 +125,10 @@ function renderEndpointDialog(){
   $('endpoint-dialog-title').textContent=row.name+' · 参数设置';
   $('endpoint-preset-scope').textContent='统一应用于 '+row.name+' 执行端下的所有模型，包括后续添加或切换的模型。';
   setMarkup($('endpoint-connections'),endpointConnections(row));
+  const d=row.diagnostic,proof=d?.schema===1;
+  setMarkup($('endpoint-diagnostics'),proof?`<p class="field-hint">只读本地预检 · 不调用模型，不自动修复设置</p><h3>${escapeText(d.label)}</h3><p>${escapeText(d.detail)}</p>
+    ${(d.issues||[]).length?`<ul class="endpoint-diagnostic-issues">${d.issues.map(i=>`<li><strong>${escapeText(i.label)}</strong><p>${escapeText(i.detail)}</p><p><b>处理建议：</b>${escapeText(i.next_step)}</p></li>`).join('')}</ul>`:`<p><b>下一步：</b>${escapeText(d.next_step)}</p>`}
+    <p class="field-hint">${escapeText(d.note)}</p>`:'<h3>诊断信息暂不可用</h3><p>当前后台未提供结构化诊断；请核对配套后台版本与工具连接。这里不会发送模型测试请求。</p>');
 }
 function openEndpointDialog(id){
   activeEndpoint=id;
@@ -138,6 +145,7 @@ function openEndpointDialog(id){
 }
 function setEndpointTab(tab){
   $('endpoint-preset-panel').hidden=tab!=='preset';$('endpoint-model-panel').hidden=tab!=='models';
+  $('endpoint-diagnostic-panel').hidden=tab!=='diagnostics';
   document.querySelectorAll('[data-endpoint-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.endpointTab===tab)));
 }
 
@@ -164,6 +172,7 @@ function setupEndpointCards(){
     if(button.hasAttribute('data-native-refresh'))saveEndpoint('workbuddy',{refresh_native_models:true});
     if(button.dataset.endpointToggle){const row=state.execution_endpoints?.rows.find(e=>e.id===button.dataset.endpointToggle);if(row)saveEndpoint(row.id,{enabled:!row.enabled});}
     if(button.dataset.endpointExpand)openEndpointDialog(button.dataset.endpointExpand);
+    if(button.dataset.endpointDiagnose){openEndpointDialog(button.dataset.endpointDiagnose);setEndpointTab('diagnostics');}
     if(button.dataset.endpointAdd)openModel(null,button.dataset.endpointAdd);
     if(button.dataset.endpointParameters){const id=button.dataset.endpointParameters,row=state.execution_endpoints.rows.find(e=>e.id===id);$('agent-settings-open').onclick();$('agent-settings-agent').value=id;$('agent-settings-model').value=row?.model?.id||row?.models?.[0]?.id||'';renderAgentSettings();}
   });
@@ -262,8 +271,19 @@ if(isDshHost){
   if(note)note.textContent='模型、DSH 登录账户余额与每日预算总账全局共享';
 }
 let viewEpoch=0;
+const approvedPlanUI=window.ModelDeskApprovedPlan?.create({api,getView:()=>({...projectView}),toast});
 const projectMapUI=window.ModelDeskProjectMap?.create({api,getView:()=>({...projectView}),getTasks:()=>state.tasks||[],toast});
 if($('project-map-open'))$('project-map-open').onclick=()=>projectMapUI?projectMapUI.open():toast('项目地图资源尚未加载，请刷新工作台。',true);
+const integrationQueueUI=window.ModelDeskIntegrationQueue?.create({api,getView:()=>({...projectView}),
+  getData:()=>pollFailure?{...state.integrations,available:false,error:'连接已中断，显示内容需要重新核对。'}:state.integrations,toast});
+if($('integration-queue-open'))$('integration-queue-open').onclick=()=>integrationQueueUI?integrationQueueUI.open():toast('集成队列资源未加载，请重新打开工作台。',true);
+const taskGraphUI=window.ModelDeskTaskGraph?.create({
+  getView:()=>({...projectView}),
+  getData:()=>({tree:state.tree,tasks:state.tasks,error:pollFailure?'工作台连接中断，数据可能过期。':state.treeError}),
+  onTask:id=>{selectedTask=id;detailTab='result';renderTasks();renderDetail();$('task-detail').scrollIntoView({block:'start',behavior:'instant'});},
+  onIntegration:name=>integrationQueueUI?.open({name}),toast
+});
+if($('task-graph-open'))$('task-graph-open').onclick=()=>taskGraphUI?taskGraphUI.open():toast('任务关系资源尚未加载，请刷新工作台。',true);
 let recentProjects=[];
 let knownProjects=[];
 const bookmarkedProjects=new Set();
@@ -411,9 +431,12 @@ function projectEmptyState(){
 }
 function viewHeader(view=projectView){return btoa(unescape(encodeURIComponent(JSON.stringify(view)))).replace(/\+/g,'-').replace(/\//g,'_');}
 function renderProjectView(){
+  approvedPlanUI?.scopeChanged();
   const bound=projectView.mode==='project'&&!!projectView.project;
   const mapButton=$('project-map-open');
   if(mapButton){mapButton.disabled=!bound;mapButton.title=bound?'查看当前项目的代码、符号和静态导入关系':'请先选择一个明确项目';}
+  if($('task-graph-open'))$('task-graph-open').disabled=!bound;
+  if($('integration-queue-open'))$('integration-queue-open').disabled=!bound;
   const name=$('project-view-name'),row=$('project-path-row'),path=$('project-view-path'),sw=$('project-view-switch'),status=$('project-view-status');
   if(bound){
     name.textContent=projectBaseName(projectView.project)||projectView.project;
@@ -438,6 +461,8 @@ function renderProjectView(){
 function changeProjectView(view){
   if(JSON.stringify(view)===JSON.stringify(projectView))return;
   projectMapUI?.onProjectChange();
+  taskGraphUI?.onProjectChange();
+  integrationQueueUI?.onProjectChange();
   projectView=view;viewEpoch++;projectPathPinned=false;closeProjectMenu();resetProjectStorage();savePanelBinding();selectedTask=null;detailPrompt='';promptTask=null;continuingTask=null;
   pendingAction=null;stageGoal=null;detailTab='result';taskFilter='all';treeOpen.clear();observabilityLoading.clear();goalsExpanded=false;
   // Project switch invalidates this dialog: no stale preview token, no stale selection, no stale confirmation.
@@ -518,7 +543,30 @@ function toast(message, error=false) {
   toastTimer = setTimeout(() => $('toast').hidden=true, error ? 7000 : 3500);
 }
 function clock(value) { return value ? new Date(value).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '—'; }
+function taskSummary(task) {
+  const summary=task?.execution_result?.summary;
+  return window.ModelDeskTaskStatus?.valid(summary)?summary:null;
+}
+function taskProgressBadge(task, fallback) {
+  return window.ModelDeskTaskStatus?.badge(taskSummary(task))||fallback;
+}
+function renderTaskProgress(task) {
+  return window.ModelDeskTaskStatus?.render(taskSummary(task))||'';
+}
+function renderTaskIntegrations(task) {
+  const integration=task?.execution_result?.integration;
+  if(!integration||!Array.isArray(integration.records)||!integration.records.length)return '';
+  const labels=window.ModelDeskIntegrationQueue?.labels||{awaiting_review:'等待集成验收',accepted:'集成已验收',conflict:'集成存在冲突',check_failed:'集成检查未通过'};
+  return `<details class="obs-sub"><summary>集成记录（${integration.records.length} 份）</summary><p class="field-hint">${escapeText(integration.detail||'')}</p><div class="tree-facts">${integration.records.slice(0,8).map(row=>`<button type="button" class="text-button" data-integration-open="${escapeText(row?.name||'')}">${escapeText(row?.name||'未命名')} · ${escapeText(labels[row?.state]||'状态待核对')}</button>`).join('')}</div>${integration.records.length>8?'<p class="field-hint">这里只展示前 8 份；其余请通过正式状态接口分别核对。</p>':''}</details>`;
+}
 function taskAccepted(task) {
+  // Prefer the shared projection's verified review, never cached review_state.
+  if(task.execution_result?.schema_version===1&&task.execution_result?.review)
+    return task.execution_result.review.accepted===true;
+  if(Object.hasOwn(task,'controller_finalization')){
+    const finalization=task.execution_result?.controller_finalization;
+    if(finalization?finalization.state!=='settled':task.controller_finalization?.schema!==1||task.controller_finalization?.state!=='settled')return false;
+  }
   return ['accepted','final_accepted'].includes(task.review?.state)&&task.review?.acceptance_valid!==false;
 }
 function taskDisplayStatus(task) {
@@ -527,7 +575,8 @@ function taskDisplayStatus(task) {
   return taskAccepted(task)&&['completed','failed','cancelled','recovery_pending'].includes(task.status)?'completed':task.status;
 }
 function taskDisplayPhase(task) {
-  if(taskAccepted(task)&&taskDisplayStatus(task)==='completed')return task.review.state==='final_accepted'?'主脑接管完成 · 独立验收通过':'任务已完成 · 独立验收通过';
+  const summary=taskSummary(task);if(summary)return summary.label;
+  if(taskAccepted(task)&&taskDisplayStatus(task)==='completed')return (task.review?.state||task.execution_result?.review?.state)==='final_accepted'?'主脑接管完成 · 独立验收通过':'任务已完成 · 独立验收通过';
   return task.phase||'';
 }
 function duration(task) {
@@ -871,8 +920,8 @@ function renderObservability(taskId){
   const single=forecast.single_request_output?`任务请求目标 ${numberText(forecast.single_request_output.task_target)} · 模型最大输出 ${numberText(forecast.single_request_output.model_ceiling)}`:'未取得';
   const childAggregate=boundary.children?.aggregate?`聚合已结算 ${money(boundary.children.aggregate.settled_cny)}（${numberText(boundary.children.aggregate.settled_calls)} 次）`:'未取得';
   const scope=obs.file_scope||{};
-  const scopeFiles=(scope.readonly_files||scope.files||[]).map(escapeText).join('、')||'未记录';
-  const scopeText=scope.mode==='readonly_context'?`只读上下文：${scopeFiles} · 只读权限由 kind/engine 沙箱保证，不是可修改文件`:scope.mode==='modifiable'?`可修改：${scopeFiles}`:'未记录文件范围';
+  const scopeFiles=((scope.mode==='readonly_context'?scope.readonly_files:scope.files)||[]).map(escapeText).join('、')||'未记录';
+  const scopeText=scope.mode==='readonly_context'?`只读上下文：${scopeFiles} · 只读权限由 kind/engine 沙箱保证，不是可修改文件`:scope.mode==='deliverables'?`预期交付：${scopeFiles} · 可在授权范围内创建必要辅助文件`:scope.mode==='modifiable'?`明确文件范围：${scopeFiles}`:'未记录文件范围';
   return `<div class="obs-grid">
     <div><span class="label">已结算费用</span><span class="value">${settled} · ${numberText(cost.settled_calls)} 次</span></div>
     <div><span class="label">未知 / 未结算</span><span class="value">待核对 ${numberText(cost.unknown_calls)} 次 · 未结算预留（审计）${unsettled}${costUnknownNote?` · ${escapeText(costUnknownNote)}`:''}</span></div>
@@ -908,15 +957,17 @@ function renderDelivery(entry){
 function renderTreeTask(task){
   const reviewState=task.review_state;
   const displayStatus=taskDisplayStatus({...task,review:{state:reviewState}});
-  const accepted=displayStatus==='completed'&&['accepted','final_accepted'].includes(reviewState);
+  const accepted=task.execution_result?taskAccepted(task):displayStatus==='completed'&&['accepted','final_accepted'].includes(reviewState);
   const review=reviewState?`<div class="tree-facts"><span>验收（真实 review.json）：<strong>${escapeText(task.review_label||reviewState)}</strong></span><span>执行器完成不等于验收通过</span></div>`:task.review_error?`<p class="obs-unknown">验收记录无法读取，不能当作已验收：${escapeText(task.review_error)}</p>`:'<p class="obs-unknown">尚未记录独立验收结论；执行器完成不代表验收通过。</p>';
   const treeFiles=(task.files||[]).filter(Boolean);
-  const fileScope=treeFiles.length?`<div class="tree-facts"><span>文件范围（${task.files_readonly?'只读上下文 · chat':'可修改 · edit'}）：${treeFiles.map(escapeText).join('、')}</span>${task.files_readonly?'<span>只读权限由 kind/engine 沙箱保证，不是可修改文件</span>':''}</div>`:'';
+  const fileScope=treeFiles.length?`<div class="tree-facts"><span>文件清单（${task.files_readonly?'只读上下文':task.task_policy?.write_scope==='workspace'?'预期交付 · 可创建必要辅助文件':'明确文件范围'}）：${treeFiles.map(escapeText).join('、')}</span>${task.files_readonly?'<span>只读权限由 kind/engine 沙箱保证，不是可修改文件</span>':''}</div>`:'';
   return `<details class="task-node" data-task="${escapeText(task.task_id)}"${treeOpen.has('task:'+task.task_id)?' open':''}>
-    <summary><span class="task-title">${escapeText(task.title||task.task_id)}</span>${badge(taskStatusClass(displayStatus),accepted?'已完成':task.status)}${reviewState?badge(reviewStatusClass(reviewState),task.review_label||reviewState):''}<span class="task-meta">${escapeText(task.model_name||task.model||task.model_id||'—')} · ${escapeText(task.kind||'—')}</span></summary>
+    <summary><span class="task-title">${escapeText(task.title||task.task_id)}</span>${taskProgressBadge(task,badge(taskStatusClass(displayStatus),accepted?'已完成':task.status))}${!taskSummary(task)&&reviewState?badge(reviewStatusClass(reviewState),task.review_label||reviewState):''}<span class="task-meta">${escapeText(task.model_name||task.model||task.model_id||'—')} · ${escapeText(task.kind||'—')}</span></summary>
     <div class="task-body">
       <div class="tree-facts"><span>任务 ${escapeText(task.task_id)}</span><span>${escapeText(engineNames[task.engine]||'执行器')} 会话：${escapeText(task.pi_session_id||task.dsh_session_id||'未记录')}</span><span>会话标识：${escapeText(task.dsh_session_key||'—')}</span><span>父任务：${escapeText(task.parent_task_id||'—')}</span>${task.request_output_tokens?`<span>请求输出目标：${escapeText(task.request_output_tokens)} tokens</span>`:''}</div>
-      ${review}
+      ${renderTaskProgress(task)}
+      ${renderTaskIntegrations(task)}
+      ${taskSummary(task)?'':review}
       ${fileScope}
       <details class="obs-sub"><summary>可信观测（费用/用量/计量/上下文/失败/预测）</summary>${renderObservability(task.task_id)}</details>
       <details class="obs-sub"><summary>子代理（${escapeText((task.children_state||{}).state||'未验证')}）</summary>${renderChildren(task)}</details>
@@ -929,8 +980,9 @@ function renderStage(stage,readOnly=false){
   const canCancel=!readOnly&&!['accepted','final_accepted','cancelled'].includes(stage.status);
   const canRequeue=!readOnly&&['failed','blocked','recovery_pending','cancelled','executor_completed'].includes(stage.status);
   return `<details class="stage-node" data-stage="${escapeText(stage.id)}"${treeOpen.has('stage:'+stage.id)?' open':''}>
-    <summary><span class="stage-title">${escapeText(String(stage.ordinal||''))}. ${escapeText(stage.title)}</span>${badge(stageStatusClass(stage.status),stage.status_label||stage.status)}<span class="stage-meta">${escapeText(stage.kind_label||stage.kind||'')}</span><span class="stage-meta">依赖 ${deps.length}</span></summary>
+    <summary><span class="stage-title">${escapeText(String(stage.ordinal||''))}. ${escapeText(stage.title)}</span>${window.ModelDeskTaskStatus?.badge(stage.summary)||badge(stageStatusClass(stage.status),stage.status_label||stage.status)}<span class="stage-meta">${escapeText(stage.kind_label||stage.kind||'')}</span><span class="stage-meta">依赖 ${deps.length}</span></summary>
     <div class="stage-body">
+      ${window.ModelDeskTaskStatus?.render(stage.summary)||''}
       <div class="tree-facts"><span>目标：${escapeText(stage.objective||'—')}</span><span>会话策略：${escapeText(stage.session_policy==='reuse_session'?'显式复用会话':'新会话')}</span><span>会话标识：<strong>${escapeText(stage.session_key||'未建立')}</strong></span></div>
       <details class="obs-sub"><summary>前置依赖与就绪（${readiness.ready?'就绪':'未就绪'}）</summary><div class="tree-facts"><span>${escapeText((readiness.reasons||[]).join('；')||'无阻塞')}</span><span>依赖状态：${escapeText(deps.map(dep=>`${dep}=${dependencyStates[dep]||'未知'}`).join('，')||'无')}</span></div></details>
       <details class="obs-sub"><summary>成果交接与代码 hash（${delivery.deliveries.length} 份）</summary>${delivery.deliveries.length?delivery.deliveries.map(renderDelivery).join(''):'<p class="obs-unknown">尚无已独立验收的成果交接。</p>'}${(delivery.warnings||[]).map(item=>`<p class="obs-unknown">${escapeText(JSON.stringify(item))}</p>`).join('')}</details>
@@ -941,6 +993,7 @@ function renderStage(stage,readOnly=false){
 function renderGoal(goal,readOnly=false){
   const stages=goal.stages||[];
   const actions=readOnly?[]:[`<button data-goal-action="stage" data-id="${escapeText(goal.id)}">＋ 新建阶段</button>`];
+  if(!readOnly&&goal.status==='active')actions.push(`<button data-goal-action="plan" data-id="${escapeText(goal.id)}">批准计划 / 推进状态</button>`);
   if(!readOnly&&goal.status==='active')actions.push(`<button data-goal-action="complete" data-id="${escapeText(goal.id)}">标记完成</button>`,`<button data-goal-action="cancel" data-id="${escapeText(goal.id)}">取消目标</button>`);
   return `<details class="goal-node${readOnly?' goal-node-readonly':''}" data-goal="${escapeText(goal.id)}"${treeOpen.has('goal:'+goal.id)?' open':''}>
     <summary><span class="goal-title">${escapeText(goal.title)}</span>${badge(goalStatusClass(goal.status),goal.status_label||goal.status)}<span class="goal-meta">阶段 ${goal.accepted_count||0}/${goal.stage_count||0}</span>${goal.project?`<span class="goal-meta">${escapeText(goal.project)}</span>`:''}</summary>
@@ -1099,9 +1152,9 @@ function renderTasks() {
   const tasks=state.tasks.filter(task=>taskFilter==='all'||(taskFilter==='active'?['running','queued','recovery_pending'].includes(taskDisplayStatus(task)):taskFilter==='failed'?['failed','cancelled'].includes(taskDisplayStatus(task)):taskDisplayStatus(task)===taskFilter));
   const scroll=$('task-list').scrollTop;
   setMarkup($('task-list'),tasks.length ? tasks.map(task=>`<button class="task-row ${escapeText(taskDisplayStatus(task))} ${selectedTask===task.id?'selected':''}" data-task-id="${escapeText(task.id)}">
-    <span class="task-icon" aria-hidden="true">${({completed:'✓',running:'↗',queued:'◷',failed:'!',cancelled:'−',recovery_pending:'◷'})[taskDisplayStatus(task)]||'·'}</span>
+    <span class="task-icon" aria-hidden="true">${taskSummary(task)?({success:'✓',warning:'◷',danger:'!',accent:'↗',neutral:'·'})[taskSummary(task).tone]||'·':({completed:'✓',running:'↗',queued:'◷',failed:'!',cancelled:'−',recovery_pending:'◷'})[taskDisplayStatus(task)]||'·'}</span>
     <div><div class="task-title">${escapeText(task.title)}</div><div class="task-meta"><span>${escapeText(task.model_name||task.model)}</span><span>·</span><span>${task.source==='codex'?'Codex 分派':task.source==='brain'?'主脑分派':task.source==='panel'?'手动分派':'命令行'}</span><span>·</span><span>${escapeText(taskDisplayPhase(task))}</span>${task.completion_wait?`<span>· ${escapeText(completionWaitText(task))}</span>`:''}</div></div>
-    <span class="task-right">${badge(taskDisplayStatus(task),taskAccepted(task)&&taskDisplayStatus(task)==='completed'?'已完成':undefined)}${task.review?badge(reviewStatusClass(task.review.state),task.review.label):''}<small>${escapeText(duration(task))}</small></span></button>`).join('') : (()=>{const empty=projectEmptyState();return `<div class="empty"><div class="empty-symbol">✧</div><strong>${escapeText(empty.title)}</strong><p>${escapeText(empty.body)}</p></div>`;})());
+    <span class="task-right">${taskProgressBadge(task,badge(taskDisplayStatus(task),taskAccepted(task)&&taskDisplayStatus(task)==='completed'?'已完成':undefined))}${!taskSummary(task)&&task.review?badge(reviewStatusClass(task.review.state),task.review.label):''}<small>${escapeText(duration(task))}</small></span></button>`).join('') : (()=>{const empty=projectEmptyState();return `<div class="empty"><div class="empty-symbol">✧</div><strong>${escapeText(empty.title)}</strong><p>${escapeText(empty.body)}</p></div>`;})());
   $('task-list').scrollTop=scroll;
 }
 function renderDetail() {
@@ -1116,15 +1169,18 @@ function renderDetail() {
   const phases=['已分派',task.kind==='chat'?'模型生成':'模型执行',independentlyAccepted?'独立验收通过':task.status==='failed'?'执行失败':task.status==='cancelled'?'已停止':pendingRecovery?'待恢复（未自动重发）':task.kind==='chat'?'回复完成':'结果待验收'];
   const usage=task.usage_live?.usage||task.usage;
   const thinking=thinkingInfo(state.models.find(m=>m.id===task.model_id),task);
-  setMarkup($('task-detail'),`<div class="detail-head"><div><h3>${escapeText(task.title)}</h3><p>${escapeText(task.model_name)} · ${escapeText(engineNames[task.engine]||'历史执行器')} · ${task.kind==='chat'?'咨询 / 分析':'修改项目文件'} · ${clock(task.started_at||task.created_at)}</p></div>${active?`<button class="button secondary" id="stop-task">停止任务</button>`:pendingRecovery?'<button class="button primary" id="recover-task">恢复执行（需确认）</button>':hasAgentSession(task)?`<button class="button secondary" id="continue-task">${task.engine==='zcode'?'继续任务（新会话）':'继续会话'}</button>`:badge(taskDisplayStatus(task),independentlyAccepted?'已完成':undefined)}</div>
+  setMarkup($('task-detail'),`<div class="detail-head"><div><h3>${escapeText(task.title)}</h3><p>${escapeText(task.model_name)} · ${escapeText(engineNames[task.engine]||'历史执行器')} · ${task.kind==='chat'?'咨询 / 分析':'修改项目文件'} · ${clock(task.started_at||task.created_at)}</p></div>${active?`<button class="button secondary" id="stop-task">停止任务</button>`:pendingRecovery?'<button class="button primary" id="recover-task">恢复执行（需确认）</button>':hasAgentSession(task)?`<button class="button secondary" id="continue-task">${task.engine==='zcode'?'继续任务（新会话）':'继续会话'}</button>`:taskProgressBadge(task,badge(taskDisplayStatus(task),independentlyAccepted?'已完成':undefined))}</div>
     <div class="detail-body"><div class="phase-track">${phases.map((phase,i)=>`${i?'<span class="phase-arrow">→</span>':''}<span class="phase-item ${i<phaseIndex?'done':i===phaseIndex?'current':''}">${escapeText(phase)}</span>`).join('')}</div>
     <div class="detail-facts"><div><span class="label">当前状态</span><span class="value">${escapeText(displayPhase)} · ${escapeText(duration(task))}</span></div><div><span class="label">${task.kind==='chat'?'Token 用量':'项目文件夹'}</span><span class="value">${task.kind==='chat'?(usage?.total_tokens?`${usage.total_tokens.toLocaleString()} tokens${task.cost_unknown_calls>0?`（另有 ${task.cost_unknown_calls} 次未返回用量，未知；不是全目标总量）`:''}`:'服务端尚未返回用量'):escapeText(task.project||'—')}</span></div></div>
-    ${window.ModelDeskExecutionResult?.render(task.execution_result)||''}
+    ${renderTaskProgress(task)}
+     ${renderTaskIntegrations(task)}
+     ${window.ModelDeskExecutionResult?.render(task.execution_result)||''}
+    ${['completed','failed','cancelled'].includes(task.status)&&task.controller_finalization?.state==='attention'?`<p class="session-note">控制器收尾需要核对；仅检查成果与资源，不调用模型、不重新执行任务。${task.brain||task.owner?'请由原主脑会话调用 brain_finalize。':''}</p>${task.brain||task.owner?'':'<button class="button secondary" id="finalize-task">核对控制器收尾</button>'}`:''}
     ${task.completion_wait?`<p class="session-note" role="status">${escapeText(completionWaitText(task))}</p>`:''}
     ${independentlyAccepted&&task.status==='recovery_pending'?'<p class="session-note">原执行器曾中断，历史记录予以保留；本任务已由主脑接管完成并通过独立验收，无需恢复原执行。</p>':''}
     ${pendingRecovery?`<section class="route-note recovery-note" aria-label="待恢复"><strong>待恢复 · 不会自动重发</strong>${task.recovery?.reason?`<p>原因：${escapeText(task.recovery.reason)}</p>`:''}<p class="field-hint">执行是否完成、工具副作用与实际费用都未知；原任务、模型、项目、文件范围与已记录进度都保留。核对改动影响后，点“恢复执行（需确认）”会用<b>同一个任务记录</b>继续（不创建新记录，也不会自动验收）。</p></section>`:''}
     ${task.review?`<section class="route-note" aria-label="独立验收"><strong>${escapeText(task.review.label)}</strong><small>自动整改 ${task.review.rework_count??'—'} / ${task.review.max_auto_rework??1} 次</small>${task.review.problems?`<p>退回原因：${escapeText(task.review.problems)}</p>`:''}${task.review.blocked_reason?`<p>受阻原因：${escapeText(task.review.blocked_reason)}</p>`:''}${task.review.error?`<p>${escapeText(task.review.error)}</p>`:''}${task.review.reviewer_notes?`<p>${escapeText(task.review.reviewer_notes)}</p>`:''}${task.review.criteria?.length?`<ul>${task.review.criteria.map(c=>`<li>${escapeText(c.text)} · ${escapeText({pass:'通过',fail:'未通过',unknown:'待检查'}[c.status]||c.status)}</li>`).join('')}</ul>`:''}</section>`:!active?'<p class="session-note">尚未记录独立验收结论；执行状态不代表质量验收。</p>':''}
-    ${task.kind==='edit'&&task.changed_files?.length?`<div><span class="label">已修改文件</span><div class="chips">${task.changed_files.map(f=>`<span class="chip">${escapeText(f)}</span>`).join('')}</div></div>`:''}
+    ${task.kind==='edit'&&task.changed_files?.length?`<div><span class="label">${task.execution_result?.artifacts?.attribution==='task_commit'?'任务提交中的文件变更':'观察到的文件变化（未证明由执行器写入）'}</span><div class="chips">${task.changed_files.map(f=>`<span class="chip">${escapeText(f)}</span>`).join('')}</div></div>`:''}
     ${task.kind==='chat'&&task.files?.length?`<div><span class="label">只读上下文文件</span><div class="chips">${task.files.map(f=>`<span class="chip">${escapeText(f)}</span>`).join('')}</div><p class="field-hint">这些文件用于代码索引与交接文件范围；只读权限由 kind/engine 沙箱保证，不是可修改文件。</p></div>`:''}
     ${task.route?`<div class="route-note"><strong>${task.route.mode==='auto'?'自动路由':'手动指定'}</strong> · ${escapeText(task.route.reason)}<small>${task.route.requirements?.assessment?escapeText(task.route.requirements.assessment)+' · ':''}${task.engine==='workbuddy'?'原生底层请求次数未返回':`${task.model_calls||0} 次模型请求`} · ${taskCostText(task)}${task.route.budget_cny?' / '+money(task.route.budget_cny):''}${task.budget_error?' · '+escapeText(task.budget_error):''}</small></div>`:''}
     ${task.engine==='workbuddy'?`<p class="session-note">WorkBuddy 原生会话 · ${task.workbuddy_tool_mode==='native-development-v1'?(task.workbuddy_access_mode==='full'?'完全访问 · 原生开发工具':'项目范围 · 原生开发工具'):'限定文件工具'} · 清理状态：${escapeText(task.workbuddy?.cleanup||'待核实')} · ${escapeText(task.workbuddy_session_id||'会话待确认')}</p>`:''}
@@ -1161,7 +1217,8 @@ const panelVisible=()=>!document.hidden;
 function hasLiveWork(){
   const rows=[...(state.tasks||[])];
   if(Array.isArray(state.execution_activity?.tasks))rows.push(...state.execution_activity.tasks);
-  return rows.some(row=>['queued','running','dispatching'].includes(row?.status));
+  return rows.some(row=>['queued','running','dispatching'].includes(row?.status)) ||
+    (state.integrations?.records||[]).some(row=>['preparing','merging','checking'].includes(row?.state));
 }
 function pollIntervalMs(){
   if(pollFailure)return pollPolicy.retryMs;               // a failed poll retries promptly
@@ -1221,13 +1278,13 @@ async function refreshState() {
       state.treeError=null;state.tree=nextTree;
     }catch(error){if(error.stale)return;state.treeError=error.message;}
     renderGoals();
-    pollFailure=false;markPollData();
+    pollFailure=false;taskGraphUI?.update();integrationQueueUI?.update();markPollData();
     setMarkup($('sync'),'<span class="dot"></span>实时同步');$('sync').classList.remove('offline');$('last-sync').textContent=`最近同步 ${clock(state.server_time)} · 数据保存在本机`;
   } catch(error){if(error.stale)return;
     if(projectView.mode==='project'&&/项目目录不存在|项目路径不是目录|项目目录解析后不是目录/.test(error.message)){
       changeProjectView({mode:'unbound',project:null});toast('原绑定目录已不可用，请重新选择项目目录',true);return;
     }
-    pollFailure=true;
+    pollFailure=true;taskGraphUI?.update();integrationQueueUI?.update();
     setMarkup($('sync'),'<span class="dot"></span>连接已中断');$('sync').classList.add('offline');$('last-sync').textContent=error.message||'无法连接本地面板，请运行启动脚本。';}finally{if(epoch!==viewEpoch)refresh();}
 }
 let modelSavedConnectionDraft='';
@@ -1275,7 +1332,7 @@ function renderThinkingNote(){
 }
 function taskAgentHint(){
   const nativeModel=state.models.find(m=>m.id===$('task-model').value);
-  if($('task-route').value!=='auto'&&nativeModel?.provider==='zcode')return `使用 ZCode 登录账户 ${nativeModel.model}；受控文件与 PowerShell 自测，主脑独立验收。套餐额度可只读刷新；支持带交接的新会话续接，子代理及原会话直接复用未开放。`;
+  if($('task-route').value!=='auto'&&nativeModel?.provider==='zcode')return `使用 ZCode 登录账户 ${nativeModel.model}；原生文件、搜索与终端自测，主脑独立验收。套餐额度可只读刷新；支持带交接的新会话续接，子代理及原会话直接复用未开放。`;
   if($('task-route').value!=='auto'&&nativeModel?.provider==='workbuddy')return `使用 WorkBuddy 登录账户 ${nativeModel.model}；原生开发工具与终端自测，主脑独立验收。子代理/续接未开放，积分与实际请求数未知。`;
   const control=$('task-engine'),selected=control.value,automatic=$('task-route').value==='auto';
   if(continuingTask)return `继续使用原任务的 ${engineNames[continuingTask.engine]||continuingTask.engine}、原模型与原会话；当前模型偏好不会迁移已有任务。`;
@@ -1306,7 +1363,7 @@ function taskFields(){
   if(automatic&&!inheritanceAllowed.includes(control.value))control.value='model_default';
   if(editing&&control.value==='direct')control.value='model_default';
   if(!editing&&control.value==='aider')control.value='model_default';
-  $('task-project').required=true;$('task-files').required=editing;
+  $('task-project').required=true;$('task-files').required=editing&&($('task-write-scope')?.value==='declared_files'||control.value==='aider');
   updateTaskAgentHint();
 }
 function routeFields(){
@@ -1326,6 +1383,8 @@ function taskBody(){
   const native=body.route_mode!=='auto'&&['workbuddy','zcode'].includes(state.models.find(m=>m.id===body.model_id)?.provider);
   if(native){body.request_output_tokens=null;}
   const engine=$('task-engine').value;
+  const writeScope=$('task-write-scope')?.value;
+  if(!continuingTask&&body.kind==='edit'&&writeScope)body.write_scope=writeScope;
   if(!continuingTask&&engine&&engine!=='model_default')body.engine=engine;
   return body;
 }
@@ -1346,11 +1405,19 @@ function openTask(parent=null) {
   $('task-route').value=parent?'manual':state.workflow?.enabled?'auto':'manual';$('task-route').disabled=!!parent;
   if(parent?.route?.requirements){const r=parent.route.requirements;$('task-category').value=r.category;$('task-complexity').value=r.complexity;$('task-input-estimate').value=r.input_tokens;$('task-output-estimate').value=r.output_tokens;$('task-calls-estimate').value=r.expected_calls;}
   $('task-request-output').value=parent?.request_output_tokens??'';
+  if($('task-write-scope')){
+    $('task-write-scope').value=parent?.task_policy?.write_scope==='declared_files'?'declared_files':'';
+    $('task-write-scope').disabled=!!parent;
+    $('task-write-scope').options[0].textContent=parent
+      ?(parent.task_policy?.write_scope==='workspace'?'沿用原任务：工作范围内自主执行':'沿用历史任务原有规则')
+      :'按执行端默认 · 原生 Agent 自主执行';
+  }
   for(const id of ['task-model','task-kind','task-engine','task-project','task-files','task-request-output'])$(id).disabled=!!parent;
   $('task-session-hint').textContent=parent?.engine==='zcode'?'使用带交接的新 ZCode 会话，保留原模型、思考强度、项目、权限与文件范围；不直接复用原生旧会话。':parent?`继续同一 ${engineNames[parent.engine]||parent.engine} 会话，保留原任务 Agent/模型/项目；任务结束后可以继续追问。`:'默认按所选模型的默认 Agent 新建独立会话；任务结束后可以继续追问。';
   routeFields();updateTaskOutputHint();$('task-dialog').showModal();
 }
 $('add-model').onclick=()=>openModel();$('add-model-small').onclick=()=>openModel();$('new-task').onclick=()=>openTask();
+if($('task-write-scope'))$('task-write-scope').onchange=()=>taskFields();
 function renderAgentSettings(){
   const engine=$('agent-settings-agent').value,info=registeredAgents()[engine],schema=info?.configuration;
   const fields=schema?.model_fields||[],model=state.models.find(m=>m.id===$('agent-settings-model').value);
@@ -1505,15 +1572,25 @@ $('task-form').onsubmit=async event=>{event.preventDefault();const button=event.
   selectedTask=task.id;detailTab='result';$('task-dialog').close();taskFilter='all';document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('active',b.dataset.filter==='all'));toast('任务已分派');await refresh();
 }catch(error){$('task-error').textContent=error.message;}finally{button.disabled=false;}};
 $('task-list').onclick=event=>{const row=event.target.closest('[data-task-id]');if(!row)return;selectedTask=row.dataset.taskId;detailTab='result';renderTasks();renderDetail();};
+$('task-detail').addEventListener('click',event=>{const button=event.target.closest('[data-integration-open]');if(button)integrationQueueUI?.open({name:button.dataset.integrationOpen});});
 $('task-detail').onclick=async event=>{const tab=event.target.closest('[data-tab]');if(tab){detailTab=tab.dataset.tab;renderDetail();return;}if(event.target.closest('#continue-task')){openTask(state.tasks.find(t=>t.id===selectedTask));return;}if(event.target.closest('#recover-task')){const id=selectedTask;const task=state.tasks.find(t=>t.id===id);const reason=task?.recovery?.reason||'面板重启时任务未完成';if(!window.confirm(`恢复执行同一个任务记录？\n\n原因：${reason}\n\n不会自动重发，也不会创建新记录；执行完成情况与工具副作用未知，请自行核对改动。\n\n确认恢复？`))return;try{await api(`/api/tasks/${encodeURIComponent(id)}/recover`,{confirm:true});toast('已按原任务记录重新排队；未创建新记录。');await refresh();}catch(error){toast(error.message,true);}return;}if(event.target.closest('#stop-task')){try{await api(`/api/tasks/${encodeURIComponent(selectedTask)}/cancel`,{});toast('已停止。线上服务是否继续计算取决于服务端的取消机制。');await refresh();}catch(error){toast(error.message,true);}}};
 $('workflow-toggle').onchange=async()=>{const button=$('workflow-toggle');const enabled=button.checked;button.disabled=true;try{await api('/api/workflow',{enabled});toast(enabled?'协作已开启，后续任务使用自动路由':'协作已关闭，运行中的任务继续执行');}catch(error){toast(error.message,true);}finally{button.disabled=false;await refresh();}};
-$('workflow-settings').onclick=()=>{const w=state.workflow;$('workflow-scope').value=scopeValue();$('workflow-scope-hint').textContent=scopeHintText();$('workflow-paid').checked=!!w.paid_allowed;$('workflow-enforce-budget').checked=w.enforce_paid_budget!==false;$('workflow-enforce-calls').checked=w.enforce_model_call_limit!==false;updateBudgetInputs();$('workflow-task-budget').value=w.task_budget_cny;$('workflow-daily-budget').value=w.daily_budget_cny;$('workflow-max-calls').value=w.max_model_calls;$('workflow-form-error').textContent='';workflowSavedDraft=JSON.stringify(workflowDraft());workflowDirtyHint();$('workflow-dialog').showModal();};
+$('workflow-settings').onclick=()=>{const w=state.workflow;$('workflow-scope').value=scopeValue();$('workflow-scope-hint').textContent=scopeHintText();$('workflow-paid').checked=!!w.paid_allowed;$('workflow-enforce-budget').checked=w.enforce_paid_budget!==false;$('workflow-enforce-calls').checked=w.enforce_model_call_limit!==false;updateBudgetInputs();$('workflow-task-budget').value=w.task_budget_cny;$('workflow-daily-budget').value=w.daily_budget_cny;$('workflow-max-calls').value=w.max_model_calls;$('workflow-max-parallel').value=String(w.max_parallel_tasks||1);$('workflow-form-error').textContent='';workflowSavedDraft=JSON.stringify(workflowDraft());workflowDirtyHint();$('workflow-dialog').showModal();};
 let workflowSavedDraft='';
-function workflowDraft(){return {model_scope:$('workflow-scope').value,paid_allowed:$('workflow-paid').checked,enforce_paid_budget:$('workflow-enforce-budget').checked,enforce_model_call_limit:$('workflow-enforce-calls').checked,task_budget_cny:Number($('workflow-task-budget').value),daily_budget_cny:Number($('workflow-daily-budget').value),max_model_calls:Number($('workflow-max-calls').value)};}
+$('task-detail').addEventListener('click',async event=>{
+  const button=event.target.closest('#finalize-task');if(!button)return;
+  button.disabled=true;
+  try{
+    const result=await api(`/api/tasks/${encodeURIComponent(selectedTask)}/recover`,{confirm:true,finalize_only:true});
+    toast(result.controller_finalization?.state==='settled'?'控制器收尾已核对；未重新调用模型':'收尾仍需处理，请查看任务详情',result.controller_finalization?.state!=='settled');
+    await refresh();
+  }catch(error){toast(error.message,true);}finally{button.disabled=false;}
+});
+function workflowDraft(){return {model_scope:$('workflow-scope').value,paid_allowed:$('workflow-paid').checked,enforce_paid_budget:$('workflow-enforce-budget').checked,enforce_model_call_limit:$('workflow-enforce-calls').checked,task_budget_cny:Number($('workflow-task-budget').value),daily_budget_cny:Number($('workflow-daily-budget').value),max_model_calls:Number($('workflow-max-calls').value),max_parallel_tasks:Number($('workflow-max-parallel').value)};}
 function workflowDirtyHint(){const hint=$('workflow-save-status');if(hint){const dirty=JSON.stringify(workflowDraft())!==workflowSavedDraft;hint.textContent=dirty?'有未保存的修改 · 点击保存设置才会生效':'修改后请点击保存设置才会生效';hint.classList.toggle('unsaved',dirty);}}
 $('workflow-form').addEventListener('input',workflowDirtyHint);
 $('workflow-scope').onchange=()=>{$('workflow-scope-hint').textContent=scopeHintText($('workflow-scope').value);workflowDirtyHint();};
-$('workflow-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{await api('/api/workflow',{model_scope:$('workflow-scope').value,paid_allowed:$('workflow-paid').checked,enforce_paid_budget:$('workflow-enforce-budget').checked,enforce_model_call_limit:$('workflow-enforce-calls').checked,task_budget_cny:Number($('workflow-task-budget').value),daily_budget_cny:Number($('workflow-daily-budget').value),max_model_calls:Number($('workflow-max-calls').value)});$('workflow-dialog').close();toast('执行模型范围与预算限制已保存；执行中的任务不受影响，排队任务在启动前按新范围检查');await refresh();}catch(error){$('workflow-form-error').textContent=error.message;}finally{button.disabled=false;}};
+$('workflow-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{await api('/api/workflow',{model_scope:$('workflow-scope').value,paid_allowed:$('workflow-paid').checked,enforce_paid_budget:$('workflow-enforce-budget').checked,enforce_model_call_limit:$('workflow-enforce-calls').checked,task_budget_cny:Number($('workflow-task-budget').value),daily_budget_cny:Number($('workflow-daily-budget').value),max_model_calls:Number($('workflow-max-calls').value),max_parallel_tasks:Number($('workflow-max-parallel').value)});$('workflow-dialog').close();toast('执行模型范围与预算限制已保存；执行中的任务不受影响，排队任务在启动前按新范围检查');await refresh();}catch(error){$('workflow-form-error').textContent=error.message;}finally{button.disabled=false;}};
 $('task-model').onchange=()=>{updateTaskOutputHint();updateTaskAgentHint();};
 $('new-goal').onclick=()=>{if(projectView.mode==='unbound'){toast('请先选择项目目录',true);return;}$('goal-form').reset();$('goal-project').value=projectView.mode==='project'?projectView.project:'';$('goal-error').textContent='';$('goal-dialog').showModal();};
 $('goal-form').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('goal-error').textContent='';try{await api('/api/goals',{title:$('goal-title').value.trim(),objective:$('goal-objective').value.trim(),project:$('goal-project').value.trim()});$('goal-dialog').close();toast('目标已创建');await refresh();}catch(error){$('goal-error').textContent=error.message;}finally{button.disabled=false;}};
@@ -1541,6 +1618,7 @@ $('goals-tree').onclick=async event=>{
   const goalButton=event.target.closest('[data-goal-action]');
   if(goalButton){const id=goalButton.dataset.id;const action=goalButton.dataset.goalAction;const goal=(state.tree?.goals||[]).find(item=>item.id===id);
     if(action==='stage'){openStage(id,goal?.title);return;}
+    if(action==='plan'){approvedPlanUI?approvedPlanUI.open(id):toast('计划资源尚未加载，请重新打开工作台',true);return;}
     if(action==='complete'){try{await api(`/api/goals/${encodeURIComponent(id)}/status`,{status:'completed'});toast('目标已标记完成');await refresh();}catch(error){toast(error.message,true);}return;}
     if(action==='cancel'){openAction({type:'goal-cancel',id,title:'取消目标',message:`取消「${goal?.title||id}」？取消后不能改回，阶段也不会再自动派发。`,confirm:'取消目标',field:false});return;}
   }

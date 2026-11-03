@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dsh_worker
@@ -12,8 +13,21 @@ import model_registry as registry
 
 class PresetTests(unittest.TestCase):
     def test_named_definitions_and_shared_restrictions(self):
-        native = presets.load({'provider': 'local'}, dsh_worker.EXECUTABLE)
-        standard = presets.load({'provider': 'deepseek'}, dsh_worker.EXECUTABLE)
+        # Unit checks must not depend on an installed DSH or personal Native
+        # bundle. Actual installed declarations have separate runtime checks.
+        def declaration_bytes(name):
+            plugins=[{'id':'persona','config':{'complete':True}},
+                     {'id':'delegation','disabled':False},
+                     {'id':'tool-web','disabled':False},
+                     {'id':'tool-pwsh','disabled':presets.JS('false')}]
+            if name=='standard':plugins.append({'id':'planning'})
+            rows=[{'insert':[{'name':'@deepseek-ai/dsh-agent-preset',
+                              'config':{'id':name,'plugins':plugins}}]}]
+            return presets.yaml.dump(rows,Dumper=presets.Dumper).encode('utf-8')
+        with patch.object(presets,'_standard_sources',return_value=(declaration_bytes('standard'),b'[]')), \
+                patch.object(presets,'_preset_bytes',side_effect=lambda name,archive:declaration_bytes(name)):
+            native = presets.load({'provider': 'local'}, Path('fixture-install/DeepSeek Harness.exe'))
+            standard = presets.load({'provider': 'deepseek'}, Path('fixture-install/DeepSeek Harness.exe'))
         self.assertEqual(native['id'], 'native')
         self.assertEqual(standard['id'], 'standard')
         native_rows = native['declaration']['config']['plugins']

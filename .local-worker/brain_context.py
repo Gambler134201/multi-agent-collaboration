@@ -36,8 +36,8 @@ ROLES = ('brain', 'executor')
 SESSION_BINDINGS = ('host_verified', 'user_bound', 'unknown')
 IDENTITY_STATES = ('verified', 'declared', 'unknown')
 
-READ_OPERATIONS = frozenset({'describe', 'candidates', 'route_preview', 'status', 'delivery', 'request_status', 'project_map'})
-MUTATING_OPERATIONS = frozenset({'dispatch', 'review', 'rework'})
+READ_OPERATIONS = frozenset({'describe', 'candidates', 'route_preview', 'status', 'delivery', 'request_status', 'project_map','plan_status','plan_preview'})
+MUTATING_OPERATIONS = frozenset({'dispatch', 'review', 'rework', 'integrate', 'accept_integration', 'finalize', 'reconcile_integration','plan_draft','plan_prepare','plan_resume','plan_handover'})
 OPERATIONS = READ_OPERATIONS | MUTATING_OPERATIONS
 
 SAFE_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}$')

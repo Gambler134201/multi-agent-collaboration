@@ -469,12 +469,21 @@ def _read_goal(store, goal_id):
     return goal, stages
 
 
+def _public_goal_data(goal):
+    """List/tree responses do not duplicate a full frozen plan per refresh."""
+    data=dict(goal['data']);plan=data.get('approved_plan')
+    if isinstance(plan,dict):
+        data['approved_plan']={k:plan[k] for k in ('schema','revision','digest','status','observations','last_problem') if k in plan}
+        goal={**goal,'data':data}
+    return goal
+
+
 def _finish_goal(goal, stages):
     goal['stages'] = [stage_view(item['id'], conn_stages=stages, goal_status=goal['status'])
                       for item in stages]
     goal['status_label'] = {'active': '进行中', 'completed': '已完成', 'cancelled': '已取消'}[goal['status']]
     goal['note'] = STAGES_NOTE
-    return goal
+    return _public_goal_data(goal)
 
 
 def get_goal(goal_id, project=None):
@@ -534,7 +543,7 @@ def list_goals(project=None):
             summary = counts.get(goal['id'])
             goal['stage_count'] = int(summary['total']) if summary else 0
             goal['accepted_count'] = int(summary['accepted'] or 0) if summary else 0
-            seen[goal['id']] = goal
+            seen[goal['id']] = _public_goal_data(goal)
     return sorted(seen.values(), key=lambda row: str(row.get('created_at') or ''), reverse=True)
 
 
@@ -771,7 +780,7 @@ def _readiness(conn, stage):
             'status': stage['status'], 'status_label': STAGE_LABELS.get(stage['status'], stage['status'])}
 
 
-def claim_dispatch(stage_id, task_id, actor='main', mode='auto', project=None):
+def claim_dispatch(stage_id, task_id, actor='main', mode='auto', project=None, *, plan_proof=None, model_id=None, engine=None, brain=None, authority=None):
     """Atomically reserve one task for a stage.  Only one claimer can win.
 
     Raises ValueError when prerequisites are not accepted, when the stage is not
@@ -786,6 +795,9 @@ def claim_dispatch(stage_id, task_id, actor='main', mode='auto', project=None):
     with connection(store) as conn, _transaction(conn):
         with conn:
             stage = _stage(conn, stage_id)
+            if plan_proof is not None:
+                import approved_plan
+                approved_plan.validate_claim(conn,stage,plan_proof,model_id=model_id,engine=engine,brain=brain,authority=authority)
             if stage['active_task_id'] == task_id and stage['status'] in ACTIVE_STATES:
                 return stage
             if stage['active_task_id'] and stage['status'] in ACTIVE_STATES:
@@ -931,6 +943,11 @@ def _latest_task(stage, project=None):
 def _state_from_task(task, record):
     if record is not None:
         state = record.get('state')
+        if state in ACCEPTED_STATES:
+            import task_finalization
+            if (delegation_policy.acceptance_problems(record,task)
+                    or task_finalization.view(task or {})['state'] in ('pending','attention')):
+                return EXECUTOR_COMPLETED
         if state == delegation_policy.ACCEPTED:
             return ACCEPTED
         if state == getattr(delegation_policy, 'FINAL_ACCEPTED', 'final_accepted'):
@@ -1207,6 +1224,7 @@ def stage_view(stage_id, conn_stages=None, goal_status=None, project=None):
 
 def _decorate_stage(stage, ready, project=None):
     tasks = []
+    integration_cache = {}
     for task_id in stage['task_ids']:
         entry = {'task_id': task_id}
         try:
@@ -1239,6 +1257,11 @@ def _decorate_stage(stage, ready, project=None):
         else:
             entry['review_state'] = None
             entry['review_label'] = None
+        if state:
+            import execution_result
+            entry['execution_result'] = execution_result.project_with_context(
+                state, delegation_policy.panel_summary(record, state),
+                review_error=review_error, integration_cache=integration_cache, run=run)
         tasks.append(entry)
     delivery = stage_delivery(stage, project)
     stage = {
@@ -1251,6 +1274,8 @@ def _decorate_stage(stage, ready, project=None):
         'delivery': delivery,
         'note': STAGES_NOTE,
     }
+    import task_status
+    stage['summary'] = task_status.stage_summary(stage, ready, tasks)
     return stage
 
 

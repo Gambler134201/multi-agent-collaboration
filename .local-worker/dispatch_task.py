@@ -61,11 +61,15 @@ def packet_for(task):
 def wait_for_task(request, task_id, progress=False, verbose=False):
     """Poll locally until terminal; default output is the compact final result."""
     last_phase = None
+    import task_finalization
     try:
         while True:
             task = read_task_state(request, task_id)
-            if task['status'] not in {'queued', 'running'}:
+            settlement = task_finalization.view(task)
+            if task['status'] not in {'queued', 'running'} and not (
+                    task['status'] in task_finalization.TERMINAL and settlement['state'] == 'pending'):
                 result = {k: task.get(k) for k in ('id', 'status', 'model', 'engine', 'summary', 'error', 'changed_files', 'test_result', 'dsh_session_id', 'pi_session_id')}
+                result[task_finalization.FIELD] = settlement
                 if not verbose:
                     result['summary'] = str(result.get('summary') or '')[:1200]
                     if isinstance(result.get('test_result'), dict):
@@ -85,7 +89,7 @@ def wait_for_task(request, task_id, progress=False, verbose=False):
                           f'核对改动后可按原任务记录显式恢复（{result["recovery"]["resume"]}）。',
                           file=sys.stderr)
                 print(json.dumps(result, ensure_ascii=False), flush=True)
-                return 0 if task['status'] == 'completed' else 1
+                return 0 if task['status'] == 'completed' and settlement['state'] != 'attention' else 1
             phase = task.get('phase') or ''
             phase = '执行 Agent 处理中' if phase.startswith('工具：') else phase
             if progress and (task['status'], phase) != last_phase:
@@ -155,6 +159,9 @@ def main():
     parser.add_argument('--kind', choices=['chat', 'edit'], default='edit')
     parser.add_argument('--project')
     parser.add_argument('--files', nargs='+', default=[])
+    parser.add_argument('--write-scope', choices=['workspace','declared_files'],
+                        help='新原生任务默认自主执行；显式限定可写文件时使用 declared_files')
+    parser.add_argument('--readonly-files', nargs='+', default=None)
     operation = parser.add_mutually_exclusive_group(required=True)
     operation.add_argument('--task-file', type=Path)
     operation.add_argument('--wait-task', help='只读等待已有任务 ID，不创建或重新派发')
@@ -180,6 +187,7 @@ def main():
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', args.wait_task):
             parser.error('--wait-task 需要有效的原任务 ID')
         if any((args.model_id, args.route, args.routing_file, args.preview, args.project, args.files,
+                args.write_scope is not None, args.readonly_files,
                 args.title, args.test_cmd, args.timeout, args.continue_task, args.rework_of,
                 args.reuse_session, args.stage, args.request_output_tokens,
                 args.engine is not None, args.kind != 'edit')):
@@ -232,6 +240,8 @@ def main():
             'continue_task': args.continue_task or None, 'rework_of': args.rework_of or None,
             'reuse_session': bool(args.reuse_session), 'stage_id': args.stage or None,
             'request_output_tokens': args.request_output_tokens}
+    if args.write_scope is not None:body['write_scope']=args.write_scope
+    if args.readonly_files is not None:body['readonly_files']=args.readonly_files
     if args.engine is None:
         body.pop('engine')  # The service resolves its saved default once, at submission.
     if args.stage:

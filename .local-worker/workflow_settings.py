@@ -22,6 +22,7 @@ DEFAULTS = {
     "task_budget_cny": 1.0,
     "daily_budget_cny": 5.0,
     "max_model_calls": 6,
+    "max_parallel_tasks": 1,
     # Global execution-model scope.  Absent in older files, where the default
     # "all" preserves the previous routing behaviour without user action.
     "model_scope": model_scope.DEFAULT_SCOPE,
@@ -31,10 +32,10 @@ DEFAULTS = {
 SETTINGS_NAME = "workflow.json"
 LOCK_NAME = "workflow.lock"
 
-FIELDS = ("version", "enabled", "paid_allowed", "enforce_paid_budget", "enforce_model_call_limit", "task_budget_cny", "daily_budget_cny", "max_model_calls", "model_scope", "execution_agent")
+FIELDS = ("version", "enabled", "paid_allowed", "enforce_paid_budget", "enforce_model_call_limit", "task_budget_cny", "daily_budget_cny", "max_model_calls", "max_parallel_tasks", "model_scope", "execution_agent")
 BOOL_FIELDS = ("enabled", "paid_allowed", "enforce_paid_budget", "enforce_model_call_limit")
 MONEY_FIELDS = ("task_budget_cny", "daily_budget_cny")
-INT_FIELDS = ("max_model_calls",)
+INT_FIELDS = ("max_model_calls", "max_parallel_tasks")
 ENUM_FIELDS = {"model_scope": model_scope.SCOPES, "execution_agent": execution_engines.AGENTS}
 KNOWN_FIELDS = FIELDS
 
@@ -93,8 +94,9 @@ def _validate_values(values):
         value = values.get(field, DEFAULTS[field])
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{field} 需要是整数")
-        if not 1 <= value <= 30:
-            raise ValueError(f"{field} 需要在 1 到 30 之间")
+        upper = 8 if field == 'max_parallel_tasks' else 30
+        if not 1 <= value <= upper:
+            raise ValueError(f"{field} 需要在 1 到 {upper} 之间")
         out[field] = int(value)
 
     # The scope enum is validated strictly: a typo or a non-string value is

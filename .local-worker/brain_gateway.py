@@ -36,8 +36,14 @@ OP_PROJECT_MAP = 'project_map'
 OP_DELIVERY = 'delivery'
 OP_REVIEW = 'review'
 OP_REWORK = 'rework'
+OP_INTEGRATE = 'integrate'
+OP_ACCEPT_INTEGRATION = 'accept_integration'
+OP_FINALIZE = 'finalize'
+OP_RECONCILE_INTEGRATION = 'reconcile_integration'
 OPERATIONS = (OP_DESCRIBE, OP_CANDIDATES, OP_PREVIEW, OP_DISPATCH,
-               OP_STATUS, OP_DELIVERY, OP_REVIEW, OP_REWORK, OP_REQUEST_STATUS, OP_PROJECT_MAP)
+               OP_STATUS, OP_DELIVERY, OP_REVIEW, OP_REWORK, OP_REQUEST_STATUS, OP_PROJECT_MAP, OP_INTEGRATE, OP_ACCEPT_INTEGRATION, OP_FINALIZE, OP_RECONCILE_INTEGRATION)
+PLAN_OPERATIONS=('plan_status','plan_preview','plan_draft','plan_prepare','plan_resume','plan_handover')
+OPERATIONS+=PLAN_OPERATIONS
 
 _LOCK = threading.RLock()
 _CAPABILITIES = {}
@@ -114,6 +120,12 @@ def handle(operation, payload, capability):
         raise BrokerError(str(error)) from None
     if not isinstance(payload, dict):
         raise BrokerError('操作参数需要是对象')
+    if operation in PLAN_OPERATIONS:
+        import brain_plan
+        import brain_requests
+        try:return brain_plan.execute(context,operation.removeprefix('plan_'),payload)
+        except brain_requests.UnknownOutcome:raise
+        except ValueError as error:raise BrokerError(str(error)) from None
     handler = {
         OP_DESCRIBE: _describe,
         OP_CANDIDATES: _candidates,
@@ -125,6 +137,10 @@ def handle(operation, payload, capability):
         OP_DELIVERY: _delivery,
         OP_REVIEW: _review,
         OP_REWORK: _rework,
+        OP_INTEGRATE: _integrate,
+        OP_ACCEPT_INTEGRATION: _accept_integration,
+        OP_FINALIZE: _finalize,
+        OP_RECONCILE_INTEGRATION: _reconcile_integration,
     }.get(operation)
     if handler is None:
         raise BrokerError('未知的主脑操作；只允许固定的协作接口')
@@ -319,6 +335,26 @@ def _request_status(context, payload):
             result['note'] = '原请求匹配多个任务，保持未知；未选择任务、修写记录或重派。'
             return result
         state = row.get('state') if row else None
+        if row and row.get('kind')=='plan':
+            import brain_plan
+            receipt=row.get('receipt') if state=='completed' else brain_plan.recover(context,request_id)
+            if receipt:
+                result['plan']=receipt
+                result['request_state']='completed' if state=='completed' else 'plan_found'
+            elif state in ('reserved','unknown','rejected'):result['request_state']=state
+            return result
+        if state == 'completed' and row.get('kind') in {'integrate','accept_integration','finalize','reconcile_integration'}:
+            result['request_state']='completed'
+            result['finalization' if row['kind']=='finalize' else 'integration']=row.get('receipt') or {}
+            receipt=row.get('receipt') or {}
+            if row['kind']=='integrate' and receipt.get('queue'):
+                import integration_queue
+                current=integration_queue.get(context.project,receipt.get('name'))
+                if current and current.get('request_reference')==receipt.get('request_reference'):
+                    for task_id in current.get('task_ids') or []:_task(context,task_id)
+                    result['integration']=current
+                    result['integration_status']=integration_queue.observe(current)
+            return result
         if state == 'rejected':
             if not matches:
                 result['request_state'] = 'rejected'
@@ -401,10 +437,7 @@ def _candidates(context, payload):
 
     def agent_ready(engine):
         if engine not in ready:
-            try:
-                ready[engine] = execution_engines.availability(engine)
-            except Exception as error:
-                ready[engine] = {'ready': False, 'message': str(error)[:300]}
+            ready[engine] = execution_engines.public_availability(engine)
         return ready[engine]
 
     rows = []
@@ -497,10 +530,16 @@ def _candidates(context, payload):
                         % (default_model, default_row['selectable_reason'] or '状态未就绪'))
     else:
         default_note = '手动默认模型在范围内；省略 model_id 时仍使用该默认模型。'
+    endpoints=execution_endpoints.public_rows(data.get('models') or [],settings,agents=ready,controls=endpoint_controls)
+    # Share the diagnosis, not a second copy of every model, native catalogue,
+    # quota cache and installation path in the model-facing tool response.
+    endpoint_diagnostics={**{k:endpoints[k] for k in ('readable','error')},
+        'rows':[{k:r[k] for k in ('id','enabled','ready','diagnostic')} for r in endpoints['rows']]}
     return {'models': rows, 'default_model': default_model,
+            'execution_endpoints':endpoint_diagnostics,
             'workflow': {key: settings.get(key) for key in
                          ('enabled', 'readable', 'model_scope', 'paid_allowed',
-                          'enforce_paid_budget', 'enforce_model_call_limit', 'execution_agent')},
+                          'enforce_paid_budget', 'enforce_model_call_limit', 'execution_agent','max_parallel_tasks')},
             'default_model_scope_ok': bool(default_row and default_row['scope_ok']),
             'default_model_note': default_note,
             'paid_allowed': paid_allowed,
@@ -592,7 +631,7 @@ def _preview(context, payload):
 
 
 def _dispatch(context, payload):
-    allowed = ('request_id', 'prompt', 'model_id', 'kind', 'files', 'acceptance',
+    allowed = ('request_id', 'prompt', 'model_id', 'kind', 'files', 'readonly_files', 'write_scope', 'acceptance',
                'title')
     _keys(payload, allowed, required=('request_id', 'prompt'))
     request_id = brain_context.clean_request_id(payload.get('request_id'))
@@ -605,8 +644,6 @@ def _dispatch(context, payload):
     files = payload.get('files') or []
     if not isinstance(files, list) or len(files) > 30 or any(not isinstance(item, str) or not item.strip() for item in files):
         raise BrokerError('文件范围需要是 0 到 30 个非空字符串')
-    if kind == 'edit' and not files:
-        raise BrokerError('修改任务至少需要一个项目内文件；不会猜测文件范围')
     acceptance = _string_list(payload.get('acceptance'), '验收条件', 1, 20)
     model_id = _text(payload.get('model_id'), 80)
     title = _text(payload.get('title'), 100)
@@ -614,6 +651,15 @@ def _dispatch(context, payload):
                        'files': [item.strip() for item in files],
                        'model_id': model_id, 'acceptance': acceptance,
                        'title': title}
+    if 'write_scope' in payload:
+        import endpoint_access
+        endpoint_access.policy_for_dispatch(kind,payload['write_scope'])
+        journal_payload['write_scope']=payload['write_scope']
+    if 'readonly_files' in payload:
+        readonly=payload['readonly_files']
+        if not isinstance(readonly,list) or len(readonly)>30 or any(not isinstance(v,str) or not v.strip() for v in readonly):
+            raise BrokerError('只读文件需要是最多 30 个非空路径')
+        journal_payload['readonly_files']=[v.strip() for v in readonly]
     import brain_requests
     existing = brain_requests.replay(context.project, context.binding_key, 'dispatch',
                                      request_id, journal_payload)
@@ -625,6 +671,8 @@ def _dispatch(context, payload):
     body = {'prompt': prompt, 'kind': kind, 'files': [item.strip() for item in files],
             'project': context.project, 'route_mode': 'manual',
             'routing': {'acceptance': acceptance}, 'source': 'brain'}
+    for key in ('write_scope','readonly_files'):
+        if key in journal_payload:body[key]=journal_payload[key]
     if not _settings().get('enabled'):
         raise BrokerError('协作总开关已关闭，主脑接口不会派发新任务')
     if model_id:
@@ -654,6 +702,152 @@ def _dispatch(context, payload):
             'next': '用 brain_status / brain_delivery 读取，不等待模型。'}
 
 
+def _integrate(context, payload):
+    _keys(payload, ('request_id','task_ids','checks','enqueue'), required=('request_id','task_ids','checks'))
+    import hashlib
+    import brain_requests
+    import task_integration
+    request_id=brain_context.clean_request_id(payload['request_id'])
+    task_ids=_string_list(payload['task_ids'],'集成任务',1,8)
+    queued=payload.get('enqueue',False)
+    if type(queued) is not bool:raise BrokerError('enqueue 需要布尔值')
+    checks=payload['checks']
+    if (not isinstance(checks,list) or not 1 <= len(checks) <= 8
+            or any(not isinstance(command,list) or not 1 <= len(command) <= 40
+                   or any(not isinstance(part,str) or not part or len(part)>4000 for part in command) for command in checks)):
+        raise BrokerError('集成检查需要 1 到 8 个非空命令参数数组')
+    journal_payload={'task_ids':task_ids,'checks':checks}
+    if queued:journal_payload['enqueue']=True
+    reference=brain_requests.reference(context.binding_key,request_id)
+    name='batch-'+hashlib.sha256(reference.encode()).hexdigest()[:24]
+    def recover():
+        result=task_integration.latest(context.project,name)
+        return result if result and result.get('request_reference')==reference else None
+    existing=brain_requests.replay(context.project,context.binding_key,'integrate',request_id,journal_payload)
+    for task_id in task_ids:
+        _task(context,task_id)
+    if queued:
+        import integration_queue
+        import panel_server as panel
+        authority=brain_context.issue_authority(context)
+        if existing is None:
+            def enqueue_effect():
+                return integration_queue.enqueue(context.project,task_ids,checks,request_id=request_id,
+                    name=name,authority=authority,request_reference=reference)
+            existing=brain_requests.run_once(context.project,context.binding_key,'integrate',request_id,
+                journal_payload,enqueue_effect,recover=recover)
+        current=integration_queue.get(context.project,name)
+        if current is None:raise BrokerError('原集成意图缺失，不能重新创建或重发')
+        if integration_queue.state(current)=='queued':
+            integration_queue.schedule(context.project,name,panel.EXECUTOR.submit,authority=authority)
+        return {'operation':OP_INTEGRATE,'request_id':request_id,'reused':bool(existing.get('reused')),
+                'integration':current,'enqueued':True}
+    if existing is not None:
+        return {'operation':OP_INTEGRATE,'request_id':request_id,'reused':True,'integration':existing.get('receipt') or {}}
+    def effect():
+        return task_integration.integrate_tasks(context.project,task_ids,name=name,checks=checks,
+                    authority=brain_context.issue_authority(context),request_reference=reference)
+    row=brain_requests.run_once(context.project,context.binding_key,'integrate',request_id,journal_payload,effect,recover=recover)
+    return {'operation':OP_INTEGRATE,'request_id':request_id,'reused':bool(row.get('reused')),
+            'integration':row.get('receipt') or {}}
+
+
+def _accept_integration(context, payload):
+    """Accept one reviewed integration, never rerun merge/check/model work."""
+    _keys(payload, ('request_id', 'name', 'criteria'),
+          required=('request_id', 'name', 'criteria'))
+    import brain_requests
+    import task_integration
+    import task_workspace
+    request_id = brain_context.clean_request_id(payload['request_id'])
+    name = payload['name']
+    if not isinstance(name, str) or not task_workspace.NAME.fullmatch(name):
+        raise BrokerError('集成名称不合法')
+    criteria = payload['criteria']
+    if not isinstance(criteria, list) or not criteria or len(criteria) > 20:
+        raise BrokerError('集成验收需要 1 到 20 条独立 criteria 结论与证据')
+    import delegation_policy
+    rows = delegation_policy._decision_rows(criteria)
+    if (not all(row['status'] == 'pass' for row in rows)
+            or any(not any(e['source'] in delegation_policy.INDEPENDENT_SOURCES
+                           for e in row['evidence']) for row in rows)):
+        raise BrokerError('每条集成验收条件都需要通过结论和主脑独立证据')
+    record = task_integration.latest(context.project, name)
+    if not isinstance(record, dict) or not record.get('task_ids'):
+        raise BrokerError('集成记录不存在或缺少任务清单')
+    for task_id in record['task_ids']:
+        _task(context, task_id)  # Authorize reads and mutations before replay.
+    journal_payload = {'name': name, 'criteria': criteria}
+    reference = brain_requests.reference(context.binding_key, request_id)
+    existing = brain_requests.replay(context.project, context.binding_key,
+                                     OP_ACCEPT_INTEGRATION, request_id, journal_payload)
+    if existing is not None:
+        return {'operation': OP_ACCEPT_INTEGRATION, 'request_id': request_id,
+                'reused': True, 'integration': existing.get('receipt') or {}}
+
+    def recover():
+        current = task_integration.latest(context.project, name)
+        return current if (current and current.get('accepted')
+                           and current.get('acceptance_request_reference') == reference) else None
+
+    def effect():
+        return task_integration.accept_integration(
+            context.project, name, criteria, authority=brain_context.issue_authority(context),
+            request_reference=reference)
+
+    row = brain_requests.run_once(context.project, context.binding_key,
+                                  OP_ACCEPT_INTEGRATION, request_id, journal_payload,
+                                  effect, recover=recover)
+    return {'operation': OP_ACCEPT_INTEGRATION, 'request_id': request_id,
+            'reused': bool(row.get('reused')), 'integration': row.get('receipt') or {}}
+
+
+def _finalize(context, payload):
+    _keys(payload,('request_id','task_id'),required=('request_id','task_id'))
+    import brain_requests
+    import panel_server as panel
+    import task_finalization
+    import model_registry as registry
+    request_id=brain_context.clean_request_id(payload['request_id'])
+    task_id=brain_context.clean_task_id(payload['task_id'])
+    run,_row=_task(context,task_id)
+    reference=brain_requests.reference(context.binding_key,request_id)
+    def recover():
+        task=registry.read_task(run)
+        if ((task.get('controller_reconciliation') or {}).get('request_reference')==reference
+                and task_finalization.view(task)['state']=='settled'):
+            return {'task_id':task_id,'controller_finalization':task_finalization.view(task),'executor_replayed':False}
+        return None
+    def effect():
+        return panel.reconcile_task_finalization(task_id,{'confirm':True},authority=brain_context.issue_authority(context),request_reference=reference)
+    row=brain_requests.run_once(context.project,context.binding_key,'finalize',request_id,{'task_id':task_id},effect,recover=recover)
+    return {'operation':OP_FINALIZE,'request_id':request_id,'reused':bool(row.get('reused')),'result':row.get('receipt') or {}}
+
+
+def _reconcile_integration(context, payload):
+    """Explicit original-owner recovery; no dispatch, checks or acceptance."""
+    _keys(payload,('request_id','name'),required=('request_id','name'))
+    import brain_requests
+    import integration_queue
+    request_id=brain_context.clean_request_id(payload['request_id'])
+    name=payload['name']
+    record=integration_queue.get(context.project,name)
+    if record is None or not record.get('queue') or not record.get('task_ids'):
+        raise BrokerError('原排队集成记录不存在或缺少任务身份')
+    for task_id in record['task_ids']:_task(context,task_id)
+    reference=brain_requests.reference(context.binding_key,request_id)
+    def recover():
+        current=integration_queue.get(context.project,name)
+        if ((current.get('queue') or {}).get('reconciliation') or {}).get('request_reference')==reference:
+            return current
+        return None
+    row=brain_requests.run_once(context.project,context.binding_key,OP_RECONCILE_INTEGRATION,
+        request_id,{'name':name},lambda: integration_queue.reconcile(context.project,name,
+            authority=brain_context.issue_authority(context),request_reference=reference),recover=recover)
+    return {'operation':OP_RECONCILE_INTEGRATION,'request_id':request_id,
+            'reused':bool(row.get('reused')),'integration':row.get('receipt') or {},'executor_replayed':False}
+
+
 def _native_execution(task):
     if task.get('engine') not in ('workbuddy', 'zcode'):
         return None
@@ -674,18 +868,23 @@ def _status(context, payload):
     run, task = _task(context, payload.get('task_id'), read_only=True)
     record, error = delegation_policy.safe_load(run)
     import execution_result
-    review = delegation_policy.panel_summary(record)
+    import task_finalization
+    review = delegation_policy.panel_summary(record,task)
     return {'task_id': task.get('id'), 'status': task.get('status'), 'phase': task.get('phase'),
             'owner': task.get('owner'), 'request_id': task.get('request_id'),
             'access':_read_access(context, task),
             'project': task.get('project'), 'engine': task.get('engine'),
             'model_id': task.get('model_id'), 'model_name': task.get('model_name') or task.get('model'),
             'kind': task.get('kind'), 'files': task.get('files') or [],
+            'task_policy': __import__('endpoint_access').policy_view(task),
+            'readonly_files':task.get('readonly_files') or [],
             'created_at': task.get('created_at'), 'started_at': task.get('started_at'),
             'ended_at': task.get('ended_at'), 'error': _text(task.get('error'), 1500),
             'execution_error': _text(task.get('error'), 1500),
+            'controller_finalization': task_finalization.view(task),
             'native_execution': _native_execution(task),
-            'execution_result': execution_result.project(task, review, review_error=error),
+            'execution_result': execution_result.project_with_context(task, review, review_error=error,
+                                                                    context_project=context.project),
             'review': review,
             'review_error': _text(error, 500),
             'note': '状态读取不等待模型、不重复派发；工具超时不是任务总时限。'}
@@ -696,9 +895,10 @@ def _delivery(context, payload):
     import delegation_policy
     import task_handover
     import execution_result
+    import task_finalization
     run, task = _task(context, payload.get('task_id'), read_only=True)
     record, review_error = delegation_policy.safe_load(run)
-    review = delegation_policy.panel_summary(record)
+    review = delegation_policy.panel_summary(record,task)
     answer = ''
     for name in ('answer.txt', 'result.md'):
         path = run / name
@@ -716,8 +916,8 @@ def _delivery(context, payload):
     independent = 0
     if record is not None:
         accepted = (record.get('state') in delegation_policy.ACCEPTED_STATES
-                    and not delegation_policy.acceptance_problems(record))
-        problems = delegation_policy.acceptance_problems(record)
+                    and not delegation_policy.acceptance_problems(record,task))
+        problems = delegation_policy.acceptance_problems(record,task)
         for item in record.get('criteria') or []:
             independent += sum(1 for entry in item.get('evidence') or []
                                if entry.get('source') in delegation_policy.INDEPENDENT_SOURCES)
@@ -740,6 +940,11 @@ def _delivery(context, payload):
         state = 'executor_failed'
     else:
         state = 'not_ready'
+    settlement = task_finalization.view(task)
+    if settlement['state'] == 'attention' or (settlement['state'] == 'pending' and task.get('status') in task_finalization.TERMINAL):
+        accepted = False
+        state = 'controller_finalizing' if settlement['state'] == 'pending' else 'controller_needs_attention'
+        problems = [*problems, settlement['note']]
     return {'task_id': task.get('id'), 'status': task.get('status'), 'phase': task.get('phase'),
             'owner': task.get('owner'), 'request_id': task.get('request_id'),
             'executor': {'status': executor.get('status'),
@@ -747,15 +952,19 @@ def _delivery(context, payload):
                          'test': executor.get('test')},
             'answer': answer[:MAX_ANSWER], 'answer_truncated': truncated,
             'engine': task.get('engine'), 'model_id': task.get('model_id'),
+            'task_policy': __import__('endpoint_access').policy_view(task),
+            'readonly_files':task.get('readonly_files') or [],
             'native_execution': _native_execution(task),
             'execution_error': _text(task.get('error'), 1500),
-            'execution_result': execution_result.project(task, review, review_error=review_error),
+            'execution_result': execution_result.project_with_context(task, review, review_error=review_error,
+                                                                    context_project=context.project),
             'review_state': (record or {}).get('state'),
             'review': review,
             'review_error': _text(review_error, 500),
             'accepted': accepted, 'acceptance_problems': problems,
             'independent_evidence': independent,
             'delivery_state': state, 'handover': handover, 'access':_read_access(context, task),
+            'controller_finalization': settlement,
             'note': ('执行器完成不等于验收通过；主脑需要逐条独立证据。'
                      if state == 'executor_completed_unaccepted' else
                      '交付读取不等待模型、不重复派发。')}
@@ -770,6 +979,17 @@ def _review(context, payload):
     action = payload.get('action')
     if action not in ('accept', 'final_accept', 'return', 'block'):
         raise BrokerError('验收操作只能是 accept / final_accept / return / block')
+    # Shape errors refuse before the request journal reserves the id, so a
+    # malformed call never burns its request_id.
+    if action == 'return' and not (_text(payload.get('problems'), 2000)
+                                   and _text(payload.get('boundaries'), 1000)):
+        raise BrokerError('退回整改需要 problems（实际观察到的问题）与 boundaries（整改范围与边界）；'
+                          '缺失不会占用 request_id，补全后可用同一 request_id 重发')
+    if action == 'block' and not _text(payload.get('reason'), 2000):
+        raise BrokerError('受阻记录需要 reason；缺失不会占用 request_id，补全后可用同一 request_id 重发')
+    if action in ('accept', 'final_accept') and not (payload.get('criteria') or []):
+        raise BrokerError('验收通过需要逐条 criteria 结论与证据；缺失不会占用 request_id，'
+                          '补全后可用同一 request_id 重发')
     run, _task_row = _task(context, task_id)
     criteria = payload.get('criteria') or []
     if criteria and not isinstance(criteria, list):
@@ -821,14 +1041,17 @@ def _review(context, payload):
 
 
 def _rework(context, payload):
-    _keys(payload, ('request_id', 'parent_task_id'), required=('request_id', 'parent_task_id'))
+    _keys(payload, ('request_id', 'parent_task_id', 'instructions'),
+          required=('request_id', 'parent_task_id'))
     request_id = brain_context.clean_request_id(payload.get('request_id'))
     parent_id = brain_context.clean_task_id(payload.get('parent_task_id'))
+    instructions = _text(payload.get('instructions'), 2000)
     import delegation_policy
     run, parent = _task(context, parent_id)
     journal_payload = {'parent_task_id': parent_id, 'model_id': parent.get('model_id'),
                        'kind': parent.get('kind') or 'edit',
-                       'files': parent.get('files') or [], 'engine': parent.get('engine')}
+                       'files': parent.get('files') or [], 'engine': parent.get('engine'),
+                       'instructions': instructions}
 
     def effect():
         # State/claim checks live inside the effect so an identical completed
@@ -847,7 +1070,7 @@ def _rework(context, payload):
         executor = record.get('executor') or {}
         deliverable = {'summary': _delivery_answer(run),
                        'changed_files': executor.get('changed_files') or []}
-        prompt = delegation_policy.rework_prompt(record, deliverable)
+        prompt = delegation_policy.rework_prompt(record, deliverable, extra_instructions=instructions)
         body = {'prompt': prompt, 'kind': parent.get('kind') or 'edit',
                 'files': parent.get('files') or [], 'model_id': parent.get('model_id'),
                 'route_mode': 'manual', 'project': context.project,

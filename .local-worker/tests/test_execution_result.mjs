@@ -787,6 +787,57 @@ test('样式不定义交互控件、外链或网络资源', () => {
 });
 
 /* ---------- 汇总 ---------- */
+test('控制器未收尾时显示提示且不显示确认通过，提示文本转义', () => {
+  const html=render({schema_version:1,execution:{status:'completed'},
+    controller_finalization:{state:'pending',note:'<img src=x onerror=alert(1)>'},
+    review:{state:'accepted',accepted:true}});
+  assert.ok(html.includes('正在提交成果与释放资源'));
+  assert.ok(html.includes('data-controller-state="pending"'));
+  assert.ok(html.includes('data-review-confirmed="false"'));
+  assert.ok(!html.includes('<img'));
+});
+
+test('面板验收标识拒绝未收尾或损坏标记，兼容历史记录',()=>{
+  const app=fs.readFileSync(path.join(HERE,'../panel/app.js'),'utf8');
+  const begin=app.indexOf('function taskAccepted(task)');
+  const end=app.indexOf('function taskDisplayStatus(task)',begin);
+  const accepted=vm.runInNewContext(app.slice(begin,end)+';taskAccepted');
+  const task={review:{state:'accepted',acceptance_valid:true}};
+  assert.equal(accepted(task),true);
+  for(const marker of [null,{}, {schema:true,state:'settled'},{schema:1,state:'pending'},{schema:1,state:'attention'}]){
+    assert.equal(accepted({...task,controller_finalization:marker}),false);
+  }
+  assert.equal(accepted({...task,controller_finalization:{schema:1,state:'settled'}}),true);
+});
+
+test('固定问题类型清楚区分验证、权限与收尾，原始失败状态不改写', () => {
+  for (const [kind, label] of [['verification_unconfirmed', '验证证据不足'], ['permission_denied', '权限或保护规则拒绝'], ['cleanup_unconfirmed', '会话收尾未确认'], ['outcome_unknown', '原生操作结果未知']]) {
+    const html = render({schema_version: 1, execution: {status: 'failed'},
+      failure: {stage: 'verify', code: 'FIXTURE', kind, kind_label: '<script>forged</script>'},
+      artifacts: {state: 'changed', files: ['a.py']}, review: {state: 'executor_failed', accepted: false}});
+    assert.ok(html.includes(label));
+    assert.ok(html.includes('执行失败'));
+    assert.ok(html.includes('a.py'));
+    assert.ok(html.includes('data-problem-kind="' + kind + '"'));
+    assert.ok(!html.includes('forged'));
+    assert.ok(html.includes('data-review-confirmed="false"'));
+  }
+  const unknown = render({schema_version: 1, execution: {status: 'failed'}, failure: {code: 'NEW', kind: '<script>bad</script>'}});
+  assert.ok(!unknown.includes('<script>'));
+  assert.ok(unknown.includes('data-problem-kind=""'));
+});
+
+test('执行完成但指定自测证据不足时分别显示，不冒充执行失败或自测通过',()=>{
+  const html=render({schema_version:1,execution:{status:'completed',engine:'zcode'},
+    failure:{stage:'verify',code:'TEST_UNCONFIRMED',kind:'verification_unconfirmed'},
+    verification:{state:'unknown',source:'zcode-native-tools',exit_code:null},
+    review:{state:'executor_completed',accepted:false}});
+  assert.ok(html.includes('需关注'));
+  assert.ok(html.includes('验证证据不足'));
+  assert.ok(!html.includes('执行失败'));
+  assert.ok(!html.includes('自测通过'));
+  assert.ok(html.includes('执行器完成，待主脑验收'));
+});
 
 console.log('\n' + '-'.repeat(56));
 console.log('通过 ' + passed + ' 项，失败 ' + failures.length + ' 项');

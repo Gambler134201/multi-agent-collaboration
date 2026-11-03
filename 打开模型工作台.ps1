@@ -1,25 +1,14 @@
 #Requires -Version 7.0
-param([switch]$NoBrowser, [ValidateRange(1,65535)][int]$Port = 8765)
+param([switch]$NoBrowser, [ValidateRange(1,65535)][int]$Port = 8765,
+      [ValidateRange(1,27)][int]$StartupTimeoutSeconds = 26)
 
 $ErrorActionPreference = 'Stop'
 try {
     $panelLauncher = Join-Path $PSScriptRoot '启动模型面板.ps1'
     # Call the PowerShell script in this process. Capturing a nested native pwsh
     # can leave its output pipe inherited by the long-running background server.
-    & $panelLauncher -Port $Port | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw '面板启动脚本未成功完成。'
-    }
-    $panelRuntimePath = Join-Path $PSScriptRoot '.local-worker\panel-runtime.json'
-    $panelRuntimeRecord = Get-Content -LiteralPath $panelRuntimePath -Raw | ConvertFrom-Json
-    $panelAddress = [uri]$panelRuntimeRecord.url
-    if ($panelAddress.Scheme -ne 'http' -or $panelAddress.Host -ne '127.0.0.1') {
-        throw '面板地址异常，请检查本地服务配置。'
-    }
-    $panelState = Invoke-RestMethod -Uri ($panelAddress.AbsoluteUri.TrimEnd('/') + '/api/state') -NoProxy -TimeoutSec 3
-    if ($panelState.workspace -ne $PSScriptRoot) {
-        throw '当前端口上的服务不是这个模型工作台。'
-    }
+    & $panelLauncher -Port $Port -StartupTimeoutSeconds $StartupTimeoutSeconds | Out-Null
+    $panelAddress = [uri]('http://127.0.0.1:' + $Port)
     if (-not $NoBrowser) {
         Start-Process -FilePath $panelAddress.AbsoluteUri
     }

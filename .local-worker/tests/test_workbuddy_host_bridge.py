@@ -151,12 +151,16 @@ class HostBridgeTests(unittest.TestCase):
         _, second, _ = self.client()
         self.assertNotEqual(first.requests[0]['params']['sessionId'], second.requests[0]['params']['sessionId'])
 
-    def test_reviewed_583_uses_the_same_owned_lease_and_product_identity(self):
-        self.info['version'] = '5.8.3'
-        client, control, data = self.client()
-        self.assertEqual(client.connect()['current_model_id'], 'deepseek-v4.1-flash')
-        self.assertEqual(control.requests[0]['params']['env']['CLIENT_INFO_PRODUCT_VERSION'], '5.8.3')
-        self.assertEqual([x['method'] for x in data.requests], ['initialize', 'session/new'])
+    def test_reviewed_updates_use_the_same_owned_lease_and_product_identity(self):
+        for version in ('5.8.3', '5.9.2', '5.9.3'):
+            with self.subTest(version=version):
+                self.info['version'] = version
+                client, control, data = self.client()
+                self.assertEqual(client.connect()['current_model_id'], 'deepseek-v4.1-flash')
+                self.assertEqual(control.requests[0]['params']['env']['CLIENT_INFO_PRODUCT_VERSION'], version)
+                self.assertEqual([x['method'] for x in data.requests], ['initialize', 'session/new'])
+                client.close()
+                self.assertEqual([x['method'] for x in control.requests], ['session.create'])
 
     def test_local_only_still_blocks_before_any_prompt(self):
         client, _, data = self.client()

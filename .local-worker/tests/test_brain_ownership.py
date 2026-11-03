@@ -68,6 +68,8 @@ class BrainOwnershipTests(unittest.TestCase):
         registry.patch_task(run, status='completed', ended_at=registry.now())
         policy.record_executor(run, {'completed': True, 'changed_files': ['a.py'],
                                      'test': {'exit_code': 0}})
+        import task_finalization
+        task_finalization.settle(run)
         return run
 
     def return_task(self, task_id, owner='main-a'):

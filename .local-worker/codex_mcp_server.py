@@ -40,6 +40,8 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 import project_scope
 from codex_usage import find_codex
+import panel_startup
+from panel_service import startup_environment
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -60,7 +62,7 @@ TOOL_MAP = "query_project_map"
 
 MAX_BODY_BYTES = 200_000
 HTTP_TIMEOUT = 15
-STARTUP_TIMEOUT = 25
+STARTUP_TIMEOUT = panel_startup.STARTUP_BUDGET
 DEFAULT_DUMMY_TOKEN = "mcp-bridge"
 
 
@@ -86,21 +88,24 @@ _SAFE_PATH = re.compile(r"/api/[A-Za-z0-9_./-]+")
 _GET_EXACT = frozenset({"/api/state", "/api/workflow", "/api/codex-usage", "/api/session", "/api/reviews",
                         "/api/goals", "/api/stages", "/api/recovery", "/api/executor/capabilities",
                         "/api/tree", "/api/observability", "/api/projects", "/api/task-records",
-                        "/api/db/space"})
-_GET_GOAL = re.compile(rf"^/api/goals/{_SAFE_SEGMENT}$")
+                        "/api/db/space", "/api/integrations"})
+_INTEGRATION_NAME = r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
+_GET_INTEGRATION = re.compile(rf"^/api/integrations/{_INTEGRATION_NAME}$")
+_GET_GOAL = re.compile(rf"^/api/goals/{_SAFE_SEGMENT}(?:/plan)?$")
 _GET_STAGE = re.compile(rf"^/api/stages/{_SAFE_SEGMENT}$")
 _GET_TASK = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}(/log|/review|/handover|/observability)?$")
 _GET_PICK = re.compile(r'^/api/projects/pick/[0-9a-f]{32}$')
 _POST_EXACT = frozenset({"/api/workflow", "/api/codex-usage/refresh", "/api/route-preview",
                          "/api/models", "/api/discover", "/api/tasks", "/api/goals", "/api/stages", "/api/projects/pick",
                          "/api/task-records/preview", "/api/task-records/delete", "/api/projects/remember",
-                         "/api/db/compact", "/api/project-map"})
+                         "/api/db/compact", "/api/project-map", "/api/integrations"})
+_POST_INTEGRATION = re.compile(rf"^/api/integrations/{_INTEGRATION_NAME}/(resume|cancel|reconcile)$")
 _POST_MODEL = re.compile(rf"^/api/models/{_SAFE_SEGMENT}/(save|delete|test|default|balance|thinking)$")
 _POST_ENDPOINT = re.compile(r'^/api/execution-endpoints/(pi|dsh|workbuddy|zcode)$')
 _POST_CANCEL = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}/cancel$")
 _POST_RECOVER = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}/recover$")
 _POST_REVIEW = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}/review$")
-_POST_GOAL = re.compile(rf"^/api/goals/{_SAFE_SEGMENT}/status$")
+_POST_GOAL = re.compile(rf"^/api/goals/{_SAFE_SEGMENT}/(?:status|plan/(?:view|preview|approve|pause|resume|revoke|signal))$")
 _POST_STAGE = re.compile(rf"^/api/stages/{_SAFE_SEGMENT}/(dispatch|cancel|requeue|sync)$")
 _POST_TASK_EXTRA = re.compile(rf"^/api/tasks/{_SAFE_SEGMENT}/(handover|reference)$")
 
@@ -126,7 +131,7 @@ def validate_request(path, method) -> str:
     if method.upper() == "GET":
         allowed = (path in _GET_EXACT or bool(_GET_TASK.fullmatch(path))
                    or bool(_GET_GOAL.fullmatch(path)) or bool(_GET_STAGE.fullmatch(path))
-                   or bool(_GET_PICK.fullmatch(path)))
+                   or bool(_GET_PICK.fullmatch(path)) or bool(_GET_INTEGRATION.fullmatch(path)))
     else:
         allowed = (path in _POST_EXACT
                    or bool(_POST_ENDPOINT.fullmatch(path))
@@ -136,7 +141,7 @@ def validate_request(path, method) -> str:
                    or bool(_POST_REVIEW.fullmatch(path))
                    or bool(_POST_GOAL.fullmatch(path))
                    or bool(_POST_STAGE.fullmatch(path))
-                   or bool(_POST_TASK_EXTRA.fullmatch(path)))
+                   or bool(_POST_TASK_EXTRA.fullmatch(path)) or bool(_POST_INTEGRATION.fullmatch(path)))
     if not allowed:
         raise PanelError("该接口不在工作台允许范围内。")
     return path
@@ -207,54 +212,26 @@ def panel_token(force: bool = False, rejected_token: str | None = None) -> str:
         return token
 
 
-def service_workspace(timeout: int = 3):
-    """Return the workspace reported by the loopback service, or None."""
-    try:
-        status, data = http_call("GET", "/api/state", timeout=timeout)
-    except PanelError:
-        return None
-    if status == 200 and isinstance(data, dict):
-        return data.get("workspace")
-    return None
+def service_workspace(timeout=panel_startup.PROBE_BUDGET):
+    return panel_startup.workspace(API_BASE, timeout=timeout)
 
 
 _STARTUP_LOCK = threading.Lock()
 
 
-def _start_service() -> None:
+def _start_service(timeout=panel_startup.LAUNCH_BUDGET) -> None:
     """Run the existing launcher once, without an external browser."""
-    launcher = str(LAUNCHER)
-    if not Path(launcher).is_file():
-        raise PanelError("找不到模型工作台启动脚本。")
-    command = [find_pwsh(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", launcher, "-NoBrowser"]
-    creation = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    with tempfile.TemporaryFile() as sink:
-        try:
-            completed = subprocess.run(command, cwd=str(ROOT), stdin=subprocess.DEVNULL,
-                                       stdout=sink, stderr=sink, timeout=STARTUP_TIMEOUT,
-                                       creationflags=creation)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise PanelError("模型工作台启动超时或失败，请手动运行启动脚本检查。") from error
-        if completed.returncode == 0:
-            return
-        sink.seek(0)
-        detail = sink.read(4096).decode("utf-8", "replace").strip().replace("\n", " ")
-    raise PanelError(f"模型工作台启动脚本未成功：{detail[-300:] or '无输出'}")
+    panel_startup.launch(ROOT, find_pwsh(), LAUNCHER, API_BASE, timeout, startup_environment())
 
 
 def ensure_service(timeout: int | None = None) -> bool:
     """Reuse a running panel for this workspace, otherwise start it explicitly."""
-    limit = STARTUP_TIMEOUT if timeout is None else timeout
-    with _STARTUP_LOCK:
-        if service_workspace() == str(ROOT):
-            return True
-        _start_service()
-        deadline = time.monotonic() + limit
-        while time.monotonic() <= deadline:
-            if service_workspace() == str(ROOT):
-                return True
-            time.sleep(0.3)
-        return False
+    try:
+        panel_startup.ensure(ROOT, _STARTUP_LOCK, service_workspace, _start_service,
+            STARTUP_TIMEOUT if timeout is None else timeout)
+        return True
+    except panel_startup.StartupError as error:
+        raise PanelError(str(error)) from None
 
 
 def panel_call(path, method, body=None, view=None) -> dict:

@@ -21,6 +21,21 @@ PROJECT = None
 
 
 class BrokerTests(unittest.TestCase):
+    def test_both_hosts_share_task_policy_and_request_identity(self):
+        (self.project/'b.py').write_text('readonly fixture',encoding='utf-8')
+        for host in ('codex','dsh'):
+            cap=self.capability(host=host,owner='owner-'+host,session='session-'+host)
+            reply=self.dispatch(cap,request_id='scope-'+host,write_scope='declared_files',readonly_files=['b.py'])
+            task_id=reply['task']['task_id']
+            for operation in ('status','delivery'):
+                result=brain_gateway.handle(operation,{'task_id':task_id},cap)
+                self.assertEqual(result['task_policy']['write_scope'],'declared_files')
+                self.assertEqual(result['task_policy']['state'],'valid')
+                self.assertEqual(result['task_policy']['schema'],3)
+                self.assertEqual(result['readonly_files'],['b.py'])
+            with self.assertRaisesRegex(brain_gateway.BrokerError,'request_id'):
+                self.dispatch(cap,request_id='scope-'+host,write_scope='workspace',readonly_files=['b.py'])
+
     def setUp(self):
         global PROJECT
         self.tmp = tempfile.TemporaryDirectory()
@@ -76,6 +91,8 @@ class BrokerTests(unittest.TestCase):
         (run / 'answer.txt').write_text('mock deliverable', encoding='utf-8')
         policy.record_executor(run, {'completed': True, 'changed_files': ['a.py'],
                                      'test': {'exit_code': 0, 'output': 'ok'}})
+        import task_finalization
+        task_finalization.settle(run)
         return run
 
     def evidence(self):
@@ -86,6 +103,45 @@ class BrokerTests(unittest.TestCase):
                  'evidence': [{'source': 'reviewer_file', 'detail': 'inspected a.py'}]}]
 
     # ------------------------------------------------------------------ tests
+
+    def test_both_hosts_expose_controller_finalization_before_review(self):
+        import task_finalization
+        for host in ('codex','dsh'):
+            capability=self.capability(host=host,owner='settle-'+host,session='settle-'+host)
+            task_id=self.dispatch(capability,request_id='settle-dispatch-'+host)['task']['task_id']
+            run=self.complete(task_id)
+            registry.patch_task(run,controller_finalization=task_finalization.pending())
+            status=brain_gateway.handle('status',{'task_id':task_id},capability)
+            delivery=brain_gateway.handle('delivery',{'task_id':task_id},capability)
+            self.assertEqual(status['controller_finalization']['state'],'pending')
+            self.assertEqual(delivery['delivery_state'],'controller_finalizing')
+            self.assertFalse(delivery['accepted'])
+            with self.assertRaisesRegex(brain_gateway.BrokerError,'收尾尚未确认'):
+                brain_gateway.handle('review',{'request_id':'settle-review-'+host,'task_id':task_id,
+                    'action':'accept','criteria':self.evidence()},capability)
+
+    def test_both_hosts_finalize_only_their_own_task_once_without_dispatch(self):
+        import task_finalization
+        for host in ('codex','dsh'):
+            capability=self.capability(host=host,owner='finalize-'+host,session='finalize-'+host)
+            task_id=self.dispatch(capability,request_id='finalize-dispatch-'+host)['task']['task_id']
+            run=self.complete(task_id)
+            registry.patch_task(run,controller_finalization={'schema':1,'state':'attention','note':'fixture interruption'})
+            before=(run/'task.json').read_bytes()
+            with self.assertRaisesRegex(ValueError,'同一拥有者'):
+                panel.recover_task(task_id,{'confirm':True,'finalize_only':True})
+            self.assertEqual((run/'task.json').read_bytes(),before)
+            payload={'request_id':'finalize-once-'+host,'task_id':task_id}
+            with mock.patch.object(panel.EXECUTOR,'submit') as submit:
+                result=brain_gateway.handle('finalize',payload,capability)
+                replay=brain_gateway.handle('finalize',payload,capability)
+            submit.assert_not_called()
+            self.assertEqual(result['result']['controller_finalization']['state'],'settled')
+            self.assertFalse(result['result']['executor_replayed'])
+            self.assertTrue(replay['reused'])
+            recovered=brain_gateway.handle('request_status',{'request_id':payload['request_id']},capability)
+            self.assertEqual(recovered['request_state'],'completed')
+            self.assertEqual(recovered['finalization'],result['result'])
 
     def test_both_hosts_and_panel_share_failed_result_without_mutating_history(self):
         for host in ('codex', 'dsh'):
@@ -105,8 +161,15 @@ class BrokerTests(unittest.TestCase):
             row = next(r for r in panel.public_tasks() if r['id'] == task_id)
             self.assertEqual(status['execution_result'], delivery['execution_result'])
             self.assertEqual(row['execution_result'], status['execution_result'])
+            import workflow_assist
+            packet = workflow_assist.delivery_packet(task_id, project=str(self.project))
+            self.assertEqual(packet['execution_result']['summary'], status['execution_result']['summary'])
             result = status['execution_result']
+            # Executor failure and controller finalization are separate facts.
+            self.assertEqual(result['summary']['code'], 'finalizing')
+            self.assertEqual(result['summary']['raw_status'], 'failed')
             self.assertEqual(result['failure']['stage'], 'session_close')
+            self.assertEqual(result['failure']['kind'], 'cleanup_unconfirmed')
             self.assertEqual(result['artifacts']['files'], ['a.py'])
             self.assertEqual(result['verification']['state'], 'passed')
             self.assertFalse(result['review']['accepted'])
@@ -306,7 +369,8 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(history['owner'],'main-a')
         with self.assertRaisesRegex(brain_gateway.BrokerError, '另一个主脑'):
             brain_gateway.handle('review', {'task_id':task_id,'request_id':'foreign-review',
-                                          'action':'block','notes':'forbidden'},other_owner)
+                                          'action':'block','reason':'fixture block reason',
+                                          'notes':'forbidden'},other_owner)
         other_project = self.capability(owner='main-a', project=self.other_project, session='s-c')
         with self.assertRaisesRegex(brain_gateway.BrokerError, '不属于当前项目'):
             brain_gateway.handle('status', {'task_id': task_id}, other_project)
@@ -354,6 +418,21 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(record['last_request_id'], 'review-2')
         self.assertTrue(any(row.get('request_id') == 'review-2' for row in record['decisions']))
 
+    def test_malformed_review_does_not_burn_request_id(self):
+        task_id = self.dispatch(self.capability())['task']['task_id']
+        self.complete(task_id)
+        with self.assertRaises(brain_gateway.BrokerError):
+            brain_gateway.handle('review', {
+                'request_id': 'review-shape', 'task_id': task_id, 'action': 'return',
+                'failed_criteria': ['c1']}, self.capability())
+        retried = brain_gateway.handle('review', {
+            'request_id': 'review-shape', 'task_id': task_id, 'action': 'return',
+            'failed_criteria': ['c1'],
+            'problems': 'fixture problem', 'boundaries': 'same task, same files only'},
+            self.capability())
+        self.assertFalse(retried.get('reused'))
+        self.assertEqual(retried['receipt']['summary']['state'], policy.RETURNED)
+
     def test_plain_panel_review_route_cannot_approve_a_brain_task(self):
         task_id = self.dispatch(self.capability())['task']['task_id']
         self.complete(task_id)
@@ -386,6 +465,23 @@ class BrokerTests(unittest.TestCase):
             'request_id': 'rework-1', 'parent_task_id': task_id}, capability)
         self.assertTrue(again['reused'])
         self.assertEqual(again['task']['task_id'], child_id)
+
+    def test_rework_instructions_reach_the_corrective_prompt(self):
+        capability = self.capability()
+        task_id = self.dispatch(capability)['task']['task_id']
+        self.complete(task_id)
+        brain_gateway.handle('review', {
+            'request_id': 'return-i', 'task_id': task_id, 'action': 'return',
+            'failed_criteria': ['c1'], 'problems': 'observed wrong result',
+            'boundaries': 'a.py only'}, capability)
+        note = 'Do not cd into the original project path; report your own copy cwd.'
+        child = brain_gateway.handle('rework', {
+            'request_id': 'rework-i', 'parent_task_id': task_id, 'instructions': note},
+            capability)
+        child_id = child['task']['task_id']
+        prompt = (registry.task_dir(child_id, str(self.project)) / 'prompt.txt').read_text(encoding='utf-8')
+        self.assertIn('主脑补充指令', prompt)
+        self.assertIn(note, prompt)
         # A new request id is refused because the single slot is already used.
         with self.assertRaises(brain_gateway.BrokerError):
             brain_gateway.handle('rework', {

@@ -80,8 +80,15 @@ function apply(ctx, config) {
   if (expected !== actual) throw new Error('Model Desk 记录保护内容指纹不一致，已拒绝装载');
 
   const accessMode = settings.access_mode || 'full';
-  const decide = require('./endpoint-access.cjs').createGuard({ root, access_mode: accessMode });
-  const guard = (exec) => decide(exec && exec.name, exec && exec.arguments);
+  const decide = require('./endpoint-access.cjs').createGuard({ ...settings, root, access_mode: accessMode });
+  const guard = (exec) => {
+    const reason=decide(exec && exec.name,exec && exec.arguments);
+    if(reason&&exec?.name!==policy.PROBE_TOOL){
+      const current=readProof(file);
+      if(!current.guard_denial)writeProof(file,{...current,guard_denial:policy.guardDenial(exec?.name,reason)});
+    }
+    return reason;
+  };
 
   const dispose = ctx.tools.guard(guard);
   if (typeof dispose !== 'function') {
@@ -108,6 +115,8 @@ function apply(ctx, config) {
     at: new Date().toISOString(),
     session_id: null,
   };
+  if(settings.task_policy)base.task_policy=settings.task_policy;
+  if(settings.record_project){base.record_project=path.resolve(settings.record_project);base.context_root=path.resolve(settings.context_root);}
   writeProof(file, base);
 
   ctx.on('agent/created', ({ agent }) => {

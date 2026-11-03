@@ -31,7 +31,7 @@ class ParityTests(integration.ZCodeTests):
         self.config['auto_connect']=True
         data=worker.catalog();data.update(installation='fixture',connection=self.config)
         registry.write_json(Path(registry.HERE)/worker.CATALOG,data)
-        with patch.object(worker,'bridge_connected',return_value=False),patch.object(worker,'desktop_running',return_value=False),patch.object(worker,'launch') as launch:
+        with patch.object(worker,'bridge_connected',return_value=False),patch.object(worker,'desktop_state',return_value='absent'),patch.object(worker,'launch') as launch:
             info=worker.availability()
         launch.assert_not_called()
         self.assertTrue(info['ready']);self.assertFalse(info['connected']);self.assertTrue(info['auto_connect_pending'])
@@ -45,13 +45,13 @@ class ParityTests(integration.ZCodeTests):
         launch.assert_not_called()
 
     def test_explicit_connect_loads_catalog_without_model(self):
-        with patch.object(worker,'bridge_connected',return_value=True),patch.object(worker,'refresh_catalog',return_value={'model_called':False}) as refresh,patch.object(worker,'launch') as launch:
+        with patch.object(worker,'bridge_connected',return_value=True),patch.object(worker,'native_services_ready',return_value=True),patch.object(worker,'refresh_catalog',return_value={'model_called':False}) as refresh,patch.object(worker,'launch') as launch:
             result=worker.connect()
         self.assertFalse(result['model_called']);launch.assert_not_called();refresh.assert_called_once()
 
     def test_task_auto_connect_launches_once_only_when_closed(self):
         self.config['auto_connect']=True
-        with patch.object(worker,'bridge_connected',side_effect=[False,False,True]),patch.object(worker,'desktop_running',return_value=False),patch.object(worker,'launch') as launch,patch.object(worker.time,'sleep'):
+        with patch.object(worker,'bridge_connected',side_effect=[False,False,True]),patch.object(worker,'native_services_ready',return_value=True),patch.object(worker,'desktop_running',return_value=False),patch.object(worker,'launch') as launch,patch.object(worker.time,'sleep'):
             _ensure_connection()
         launch.assert_called_once()
         with patch.object(worker,'bridge_connected',return_value=False),patch.object(worker,'desktop_running',return_value=True),patch.object(worker,'launch') as launch:
@@ -62,6 +62,22 @@ class ParityTests(integration.ZCodeTests):
         flag=self.project/'cancelled.flag';flag.touch()
         with patch.object(worker,'launch') as launch:
             with self.assertRaisesRegex(ValueError,'已取消'):_ensure_connection(cancel_file=flag)
+        launch.assert_not_called()
+
+    def test_bridge_page_without_ready_services_keeps_waiting_and_never_sends_prompt(self):
+        # f196f65 contract: a debugger page can exist before the renderer has
+        # published the native agent/model services. Connection is only done
+        # when both are observable; waiting never relaunches a live instance.
+        class FastTime:
+            def __init__(self):self.value=0.0
+            def monotonic(self):self.value+=.5;return self.value
+            def sleep(self,_):pass
+        with patch.object(worker,'bridge_connected',return_value=True),patch.object(worker,'native_services_ready',return_value=False),patch.object(worker,'launch') as launch,patch.object(worker,'time',FastTime()):
+            with self.assertRaisesRegex(ValueError,'尚未就绪'):worker.connect()
+        launch.assert_not_called()
+        self.config['auto_connect']=True
+        with patch.object(worker,'bridge_connected',return_value=True),patch.object(worker,'native_services_ready',return_value=False),patch.object(worker,'launch') as launch,patch.object(worker,'time',FastTime()):
+            with self.assertRaisesRegex(ValueError,'桥接尚未就绪'):_ensure_connection()
         launch.assert_not_called()
 
     def test_old_task_cannot_gain_auto_launch_from_new_setting(self):

@@ -1,5 +1,6 @@
 """Offline native hooks, permissions and real mock-ACP subprocess tests."""
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,12 +15,119 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import workbuddy_native_tools as native
 import workbuddy_executor as wb
 import model_registry as registry
+import task_workspace
 
 NODE = os.environ.get('MODEL_DESK_TEST_NODE') or shutil.which('node')
 
 
 @unittest.skipUnless(NODE, 'Node is required for native hook subprocess checks')
 class NativeToolsTests(unittest.TestCase):
+    def test_v3_hook_preserves_native_input_and_denial_boundary(self):
+        self.run=self.root/'.model-desk/runs/direct-contract'
+        contract={'schema':3,'write_scope':'workspace','home':str(self.root/'synthetic-home'),'deny_paths':[]}
+        registry.write_json(self.run/'task.json',{'id':'direct-contract','kind':'edit','task_policy':contract})
+        self.job=native.prepare(self.run,self.root,'direct-contract',['a.py'],[],'edit')
+        self.hook('SessionStart')
+        command="$d='.'; Get-ChildItem -Exclude '.git' $d | Where-Object { $_.Name -ne '.model-desk' }"
+        _,result=self.hook('PreToolUse','PowerShell',{'command':command})
+        self.assertNotEqual(result.get('hookSpecificOutput',{}).get('permissionDecision'),'deny')
+        self.assertNotIn('updatedInput',result.get('hookSpecificOutput',{}))
+        row=json.loads((self.run/'workbuddy-native-events.jsonl').read_text(encoding='utf-8').splitlines()[-1])
+        self.assertEqual(row['command_hash'],hashlib.sha256(command.encode()).hexdigest())
+        _,result=self.hook('PreToolUse','Bash',{'command':'cat .git/config'},call='denied')
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+        _,result=self.hook('PreToolUse','Write',{'file_path':'a.py','content':'no retry'},call='after')
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+        data=registry.read_json(self.job);data['task_policy']['schema']=2;registry.write_json(self.job,data)
+        with self.assertRaisesRegex(ValueError,'写入范围与任务快照'):
+            native.load(self.job)
+
+    def test_declared_private_paths_use_native_hooks_and_cannot_be_removed(self):
+        self.run=self.root/'.model-desk/runs/path-contract'
+        private=self.root/'private-account'
+        contract={'schema':2,'write_scope':'workspace','home':str(self.root/'synthetic-home'),
+                  'deny_paths':[str(private)]}
+        registry.write_json(self.run/'task.json',{'id':'path-contract','kind':'edit','task_policy':contract})
+        self.job=native.prepare(self.run,self.root,'path-contract',[],[],'edit')
+        self.hook('SessionStart')
+        for name,args in [('Read',{'file_path':'tokens.json'}),('Bash',{'command':'node auth-token.test.js'})]:
+            code,result=self.hook('PreToolUse',name,args)
+            self.assertEqual(code,0)
+            self.assertNotEqual(result.get('hookSpecificOutput',{}).get('permissionDecision'),'deny')
+        code,result=self.hook('PreToolUse','Read',{'file_path':str(private/'auth.json')})
+        self.assertEqual(code,0)
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+        data=registry.read_json(self.job)
+        data['task_policy']['deny_paths']=[]
+        registry.write_json(self.job,data)
+        with self.assertRaisesRegex(ValueError,'写入范围与任务快照'):
+            native.load(self.job)
+
+    def test_task_contract_allows_helper_and_cannot_be_removed_from_job(self):
+        self.run=self.root/'.model-desk/runs/contract'
+        contract={'schema':1,'write_scope':'workspace'}
+        registry.write_json(self.run/'task.json',{'id':'contract','kind':'edit','task_policy':contract})
+        self.job=native.prepare(self.run,self.root,'contract',['a.py'],[],'edit')
+        self.hook('SessionStart')
+        code,result=self.hook('PreToolUse','Write',{'file_path':'helper.py','content':'fixture'})
+        self.assertEqual(code,0)
+        self.assertNotEqual(result.get('hookSpecificOutput',{}).get('permissionDecision'),'deny')
+        self.assertEqual(native.load(self.job)['task_policy'],contract)
+        data=registry.read_json(self.job);data.pop('task_policy');registry.write_json(self.job,data)
+        with self.assertRaisesRegex(ValueError,'写入范围与任务快照'):
+            native.load(self.job)
+
+    def test_literal_output_does_not_pause_or_rewrite_native_command(self):
+        command = 'Write-Output "git commit; rm -rf .model-desk"'
+        code, result = self.hook('PreToolUse', 'PowerShell', {'command': command})
+        self.assertEqual(code, 0)
+        self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+        self.assertNotIn('updatedInput', result.get('hookSpecificOutput', {}))
+        self.hook('PostToolUse', 'PowerShell', {'command': command}, response={'rawResponse': {'exitCode': 0}})
+        proof = native.verify(self.job, self.sid)
+        self.assertFalse(proof['writes_paused'])
+        self.assertTrue(proof['events'][-1]['ok'])
+        self.assertEqual(proof['events'][-1]['command_hash'], hashlib.sha256(command.encode()).hexdigest())
+        code, result = self.hook('PreToolUse', 'Write', {'file_path': 'a.py', 'content': 'fixture'})
+        self.assertEqual(code, 0)
+        self.assertNotEqual(result.get('hookSpecificOutput', {}).get('permissionDecision'), 'deny')
+
+    def test_missing_search_path_is_a_native_error_not_a_policy_denial(self):
+        code, result = self.hook('PreToolUse', 'Grep', {'path': 'missing/path', 'pattern': 'fixture'})
+        self.assertEqual(code, 0)
+        self.assertNotIn('permissionDecision', result.get('hookSpecificOutput', {}))
+        self.hook('PostToolUseFailure', 'Grep', {'path': 'missing/path'}, response={'isError': True})
+        (self.root/'a.py').write_text('fixture', encoding='utf-8')
+        code, result = self.hook('PreToolUse', 'Grep', {'path': 'a.py', 'pattern': 'fixture'}, call='corrected')
+        self.assertEqual(code, 0)
+        self.assertNotIn('permissionDecision', result.get('hookSpecificOutput', {}))
+        self.assertFalse(native.verify(self.job, self.sid)['writes_paused'])
+        _, result = self.hook('PreToolUse', 'Read', {'file_path': '.model-desk/records.db'}, call='protected')
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+        _, result = self.hook('PreToolUse', 'Read', {'file_path': 'a.py'}, call='after-denial')
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(native.verify(self.job, self.sid)['events'][-1]['denial_rule'], 'prior_denial')
+
+    def test_native_nonzero_exit_is_a_tool_failure_without_sticky_denial(self):
+        self.hook('PreToolUse', 'PowerShell', {'command': 'fixture test'})
+        self.hook('PostToolUse', 'PowerShell', {'command': 'fixture test'}, response={'rawResponse': {'exitCode': 7}})
+        proof = native.verify(self.job, self.sid)
+        self.assertFalse(proof['events'][-1]['ok'])
+        self.assertEqual(native.public_calls(proof)[-1]['status'], 'failed')
+        self.assertFalse(proof['writes_paused'])
+        code, result = self.hook('PreToolUse', 'PowerShell', {'command': 'echo corrected'}, call='corrected')
+        self.assertEqual(code, 0)
+        self.assertNotIn('permissionDecision', result.get('hookSpecificOutput', {}))
+
+    def test_literal_source_search_keeps_native_bash_and_private_path_boundaries(self):
+        (self.root/'a.py').write_text('source fixture\n',encoding='utf-8')
+        code,result=self.hook('PreToolUse','Bash',{'command':"rg -n '.zcode/config' a.py"},call='query')
+        self.assertEqual(code,0)
+        self.assertNotEqual(result.get('hookSpecificOutput',{}).get('permissionDecision'),'deny')
+        private=self.root/'.model-desk/records.db';private.write_text('private fixture')
+        _,result=self.hook('PreToolUse','Bash',{'command':"rg -n '.zcode' .model-desk/records.db"},call='private-target')
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'],'deny')
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -407,6 +515,47 @@ class NativeToolsTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             native.prepare(self.run, self.root, 'native-fixture', ['a.py'], [], 'edit')
 
+    def test_protection_plan_is_pinned_inside_revision(self):
+        file = native.prepare(self.root / '.model-desk/runs/plan-pin', self.root, 'plan-pin', ['a.py'], [], 'edit')
+        job = native.load(file)
+        self.assertEqual(job['revision'], native.revision())
+        self.assertEqual(job['guard_revision'], native.guard_revision())
+        self.assertNotEqual(job['guard_revision'], job['revision'])
+        cases = [('TOOLS', native, native.TOOLS + ('FutureTool',)),
+                 ('READS', native, native.READS + ('FutureRead',)),
+                 ('ACCESS_MODES', native, native.ACCESS_MODES + ('write-all',)),
+                 ('TASK_TEMP_DIR', task_workspace, task_workspace.TASK_TEMP_DIR + '-elsewhere')]
+        for attr, module, value in cases:
+            before = native.revision()
+            with self.subTest(binding=attr), patch.object(module, attr, value):
+                self.assertNotEqual(native.revision(), before)
+                with self.assertRaisesRegex(ValueError, '身份或代码已变化'):
+                    native.load(file)
+            self.assertEqual(native.load(file)['revision'], before)
+
+    def test_direct_project_tasks_declare_no_scratch_directory(self):
+        # A task running directly in the user's own tree gets no declared temp
+        # directory, and a forged declaration on such a job is refused.
+        self.assertNotIn('temp_dir', native.load(self.job))
+        data = json.loads(self.job.read_text(encoding='utf-8'))
+        data['temp_dir'] = task_workspace.TASK_TEMP_DIR
+        self.job.write_text(json.dumps(data), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '身份或代码已变化'):
+            native.load(self.job)
+
+    def test_guard_rejects_jobs_frozen_before_the_plan_revision(self):
+        # Old-style jobs carry only the bare guard digest as revision: the real
+        # guard refuses them before any session binding is written.
+        run = self.root / '.model-desk/runs/pre-plan-job'
+        self.job = native.prepare(run, self.root, 'pre-plan-job', ['a.py'], [], 'edit')
+        data = json.loads(self.job.read_text(encoding='utf-8'))
+        data['revision'] = data.pop('guard_revision')
+        self.job.write_text(json.dumps(data), encoding='utf-8')
+        code, result = self.hook('SessionStart')
+        self.assertEqual(code, 2)
+        self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertFalse((run / 'workbuddy-native-proof.json').exists())
+
     def test_real_mock_acp_wire_runs_hooks_permission_and_shell_exit(self):
         # Python stands in for ACP only. The hooks are the real Node guard;
         # the local command is harmless and no native host/model is contacted.
@@ -460,6 +609,45 @@ for line in sys.stdin:
             self.assertFalse(result['accepted'])
         finally:
             client.close()
+
+
+class ScratchWorkerTests(unittest.TestCase):
+    def test_isolated_worker_explains_scratch_and_counts_only_business_files(self):
+        import test_workbuddy_integration as integration
+        import panel_server as panel
+        import workbuddy_worker as worker
+        from test_task_workspace import git
+        fixture=integration.IntegrationTests('test_successful_native_worker_records_real_files_without_auto_acceptance')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.addCleanup(fixture.tearDown)
+        git(fixture.project,'init','-b','main')
+        git(fixture.project,'config','user.name','fixture')
+        git(fixture.project,'config','user.email','fixture@example.com')
+        git(fixture.project,'add','a.py','b.py')
+        git(fixture.project,'commit','-m','baseline')
+        original=(fixture.project/'a.py').read_bytes()
+        state,run=fixture.dispatch()
+        plan=panel.prepare_workspace_for_run(run,state)
+        state=registry.read_task(run)
+        parent=fixture.client()
+        class Client(parent):
+            def chat(self,*args,**kwargs):
+                result=super().chat(*args,**kwargs)
+                data=native.load(self.native_job)
+                self.scratch=self.project/data['temp_dir']/'check.cjs'
+                self.scratch.write_text('fixture script\n',encoding='utf-8')
+                return result
+        self.assertEqual(worker.run_task(run,state,registry.get_model(state['model_id']),client_factory=Client),0)
+        self.assertIn('任务临时目录：'+task_workspace.TASK_TEMP_DIR,fixture.last_prompt)
+        self.assertIn('长期维护的回归测试属于业务成果',fixture.last_prompt)
+        self.assertTrue(fixture.native.scratch.is_file())
+        result=registry.read_task(run)
+        self.assertEqual(result['changed_files'],['a.py'])
+        self.assertEqual(result['workbuddy']['cleanup'],'closed')
+        self.assertEqual((fixture.project/'a.py').read_bytes(),original)
+        self.assertEqual(fixture.prompts,1)
+        self.assertTrue(fixture.native.scratch.is_relative_to(Path(plan['path'])))
 
 
 if __name__ == '__main__':

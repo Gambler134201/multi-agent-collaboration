@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from urllib.request import build_opener, ProxyHandler, HTTPRedirectHandler
 
 import brain_transport
+import panel_startup
 from powershell_runtime import find_pwsh
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,47 +30,17 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def workspace(base_url):
-    request = build_opener(ProxyHandler({}), NoRedirect())
-    try:
-        with request.open(base_url + '/api/state', timeout=2) as response:
-            data = json.loads(response.read(2 * 1024 * 1024).decode('utf-8'))
-    except HTTPError as error:
-        raise ValueError('端口返回异常 HTTP 状态；不会替换已有服务') from error
-    except (URLError, TimeoutError, OSError):
-        return None
-    except (ValueError, UnicodeError) as error:
-        raise ValueError('端口响应无法核实；不会替换已有服务') from error
-    if not isinstance(data, dict) or not isinstance(data.get('workspace'), str):
-        raise ValueError('端口没有可信的工作台安装目录声明')
-    return data['workspace']
+def workspace(base_url, timeout=panel_startup.PROBE_BUDGET):
+    return panel_startup.workspace(base_url, timeout)
 
 
 def ensure_service(base_url):
     base_url = brain_transport.normalize_base_url(base_url)
-    port = urlparse(base_url).port
-    with _LOCK:
-        found = workspace(base_url)
-        if found is not None:
-            if os.path.normcase(os.path.realpath(found)) != os.path.normcase(str(ROOT.resolve())):
-                raise ValueError('端口属于另一份工作台；保留原服务，不重启、不替换')
-            return {'ready': True, 'started': False, 'url': base_url}
-        pwsh = find_pwsh()
-        launcher = ROOT / '打开模型工作台.ps1'
-        if not launcher.is_file():
-            raise ValueError('工作台启动脚本不存在')
-        try:
-            result = subprocess.run([pwsh, '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                '-File', str(launcher), '-NoBrowser', '-Port', str(port)],
-                cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, timeout=45,
-                env=startup_environment(),
-                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise ValueError('启动未确认；没有停止服务或自动重试，请查看本机启动日志') from error
-        if result.returncode != 0 or workspace(base_url) != str(ROOT):
-            raise ValueError('工作台启动结果未确认；保留已有进程，不自动重试')
-        return {'ready': True, 'started': True, 'url': base_url}
+    started = panel_startup.ensure(ROOT, _LOCK,
+        lambda timeout: workspace(base_url, timeout),
+        lambda timeout: panel_startup.launch(ROOT, find_pwsh(), ROOT / '打开模型工作台.ps1',
+                                            base_url, timeout, startup_environment()))
+    return {'ready': True, 'started': started, 'url': base_url}
 
 
 def main(argv=None):

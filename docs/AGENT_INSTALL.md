@@ -1,6 +1,6 @@
 # 给你的 Agent：下载、安装与首次验收指南
 
-更新日期：2026-10-22。仓库：[Gambler134201/multi-agent-collaboration](https://github.com/Gambler134201/multi-agent-collaboration)。
+更新日期：2026-11-03。仓库：[Gambler134201/multi-agent-collaboration](https://github.com/Gambler134201/multi-agent-collaboration)。
 
 这是一份交给使用者自己的 Agent 阅读并执行的安装说明。安装位置、账号、模型和授权来自使用者；不要照抄维护者机器的路径或把维护者的验收当成当前机器已通过。
 
@@ -11,7 +11,7 @@
 https://github.com/Gambler134201/multi-agent-collaboration
 
 先阅读仓库 AGENTS.md、docs/AGENT_INSTALL.md 和 docs/INSTALL.md，再按实际代码确认命令。
-先检查本机环境并询问我希望使用的主脑（Codex 或 DSH）、执行端（Pi、DSH、WorkBuddy，可多选）及安装目录；已有明确答案就沿用。
+先检查本机环境并询问我希望使用的主脑（Codex 或 DSH）、执行端（Pi、DSH、WorkBuddy、ZCode，可多选）及安装目录；已有明确答案就沿用。
 在我选择的目录下载源码，记录提交号，使用 PowerShell 7 和项目自己的 Python venv 安装依赖。
 不要覆盖已有目录、模型配置、账号、MCP 条目或安装收据；不要读取或输出认证文件、Token 和密钥。
 按我选择的主脑和执行端完成配置。只安装我需要的集成；不要把执行端装成主脑，不要默认安装所有第三方应用。
@@ -26,11 +26,13 @@ https://github.com/Gambler134201/multi-agent-collaboration
 | 主脑 | Codex；DSH 原生主脑插件 | 已安装的宿主、选定项目目录；DSH 还需自己的 profile 和插件安装资料目录 |
 | Pi 执行端 | 已适配 Pi 1.3.0，连接使用者自己的 API 或本地服务 | 完整 Pi 安装目录、模型连接；本地模型需要独立推理服务 |
 | DSH 执行端 | 经适配的 DSH 安装，ACP/acpx 通道 | DSH 可执行文件、工作台中的模型连接 |
-| WorkBuddy 执行端 | 登录账户内置模型；当前适配 5.8.2 / 5.8.3 | 完整安装目录、当前用户配置目录、已登录并可用的桌面宿主 |
+| WorkBuddy 执行端 | 登录账户内置模型；当前适配 5.8.2 / 5.8.3 / 5.9.2 / 5.9.3 | 完整安装目录、当前用户配置目录、已登录并可用的桌面宿主 |
+
+ZCode 执行端需已登录的 3.16.3 桌面与明确的原生模型选择；安装、桥接及权限边界按 [ZCode 指南](ZCODE_EXECUTOR.md) 核对，不复制认证或修改安装包。
 
 WorkBuddy **作为主脑尚未完成适配**。DSH 登录余额、DeepSeek API 余额和 WorkBuddy 积分属于不同账户来源，不互通。WorkBuddy 积分目前显示未同步，未知费用不能记成零。
 
-建议首次只配一个执行端，通过最小任务后再增加。当前仍是串行执行队列；整批完成通知不等于多模型并行。
+建议首次只配一个执行端，通过最小任务后再增加。已支持有限并行，默认并发为 1；同账户/后端互斥。先用最小任务核对隔离、资源和独立验收，再明确调整并发，整批通知本身不是并发证据。
 
 ## 2. 下载与环境检查
 
@@ -126,7 +128,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -RegisterMcp -InstallR
 
 ### DSH 主脑
 
-完整步骤见 [DSH 使用指南](DSH_USAGE.md)。当前插件源码版本 **0.2.11**，必须匹配完整工作台源码，不能把单独插件包替代工作台。
+完整步骤见 [DSH 使用指南](DSH_USAGE.md)。当前插件源码版本 **0.2.19**，必须匹配完整工作台源码，不能把单独插件包替代工作台。
 
 使用者先初始化自己的 DSH profile；等任务结束并完全退出 DSH 后，在一个**新的**安装资料目录执行 `dsh_brain_desktop.py prepare`，再显式启动匹配后台，执行 `check → install`。所需绝对路径和全部参数见 DSH 指南。保留本机生成的 plan/config/receipt，用于升级和卸载；这些文件不要上传。
 

@@ -15,6 +15,11 @@ Rules enforced here:
   out-of-scope.
 * Digests are computed from the real files at write time, so a human-written
   summary is stored as a *claim* and can never be mistaken for verification.
+* Isolated tasks bind authoritative task identity, actual worktree/branch HEAD
+  and a frozen commit. Hashes describe real files (including CRLF bytes), after
+  Git confirms their content matches that commit. Missing copies or drift
+  refuse; they never fall back to the original tree or object database alone.
+  Legacy non-isolated tasks retain their original project-file semantics.
 * ``verify`` re-hashes the files and reports staleness; a changed file is never
   silently trusted.
 * ``resolve_reference`` reads identity from the real task/handover records: a
@@ -44,10 +49,14 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
+import subprocess
 import sys
 
 import delegation_policy
 import model_registry as registry
+import task_finalization
+import task_workspace
 
 SCHEMA = 1
 HANDOVER_NAME = 'handover.json'
@@ -66,6 +75,8 @@ CLAIM_SOURCES = {'summary', 'claim', 'human', 'caller', 'executor', 'self',
 
 HANDOVER_NOTE = ('交接文件摘要与 SHA-256 由本模块在写入时从真实文件计算；'
                  '调用者手写摘要只是说明，不计为验证证据。文件改动后引用会标记失效。')
+WORKSPACE_NOTE = ('隔离任务的 SHA-256 取自已绑定成果提交的真实工作区文件；'
+                  '原项目树只是记录归属，不计为成果。')
 
 
 class HandoverError(ValueError):
@@ -108,6 +119,8 @@ def safe_load(run):
 def save(run, record):
     record['updated_at'] = registry.now()
     registry.write_json(handover_path(run), record)
+    import approved_plan
+    approved_plan.notify_task(run)
     return record
 
 
@@ -141,10 +154,12 @@ def _task(run):
 
 def digest_files(project, files):
     """Real SHA-256 evidence for each file, computed at call time."""
-    project = Path(project)
+    project = Path(project).resolve()
     rows = []
     for name in files:
         target = (project / name).resolve()
+        if not target.is_relative_to(project):
+            raise HandoverError('交接文件路径越出项目')
         entry = {'path': name, 'exists': target.is_file()}
         if entry['exists']:
             raw = target.read_bytes()
@@ -157,12 +172,116 @@ def digest_files(project, files):
     return rows
 
 
+# ---------------------------------------------------- isolated workspace evidence
+
+COMMIT_RE = re.compile(r'^[0-9a-fA-F]{40,64}$')
+
+
+def _git(root, *args, binary=False):
+    """Quiet git object-database probe; never touches a working tree or index."""
+    try:
+        return subprocess.run(['git', *args], cwd=str(root), capture_output=True,
+                              text=not binary, encoding=None if binary else 'utf-8',
+                              errors=None if binary else 'replace', timeout=60,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _git_common_dir(root):
+    """Absolute git common dir of a repo or one of its worktrees, else None."""
+    result = _git(root, 'rev-parse', '--git-common-dir')
+    if result is None or result.returncode != 0 or not result.stdout.strip():
+        return None
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = Path(root) / path
+    try:
+        return path.resolve()
+    except OSError:
+        return None
+
+
+def _commit_resolves(root, commit):
+    result = _git(root, 'rev-parse', '--verify', '--quiet', commit + '^{commit}')
+    return result is not None and result.returncode == 0
+
+
+def _commit_blob(root, commit, name):
+    rel = str(name).replace('\\', '/')
+    result = _git(root, 'cat-file', 'blob', commit + ':' + rel, binary=True)
+    if result is None or result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _digest_commit_files(root, commit, files):
+    """SHA-256 rows read from the deliverable commit tree, not the project tree."""
+    rows = []
+    for name in files:
+        raw = _commit_blob(root, commit, name)
+        if raw is None:
+            rows.append({'path': name, 'exists': False, 'sha256': None, 'bytes': None})
+        else:
+            rows.append({'path': name, 'exists': True,
+                         'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)})
+    return rows
+
+
+def _workspace_plan(task):
+    plan = (task or {}).get('workspace')
+    return plan if isinstance(plan, dict) and plan.get('created') else None
+
+
+def _workspace_evidence(run, task, project):
+    """Resolve the isolated execution root and deliverable commit from records.
+
+    The plan is controller-owned task state; no caller can name a workspace
+    path here.  A missing worktree, an uncommitted deliverable, an
+    unresolvable commit, or a worktree from another repository is refused
+    instead of silently re-hashing the original project tree.
+    """
+    plan = _workspace_plan(task)
+    if plan is None:
+        return None
+    try:
+        import task_workspace
+    except Exception as error:
+        raise HandoverError('任务工作区模块不可用，无法建立隔离成果证据：' + str(error)) from error
+    try:
+        _record, execution = task_workspace.native_roots(run, task)
+    except ValueError as error:
+        raise HandoverError(str(error)) from error
+    task_id = _clean(task.get('id'), 120)
+    branch = _clean(plan.get('branch'), 200)
+    if not task_id or branch != task_workspace.BRANCH_PREFIX + task_id:
+        raise HandoverError('任务工作区分支与任务身份不匹配，已拒绝：' + (branch or '（未记录）'))
+    commit = _clean(plan.get('commit'), 100)
+    if not COMMIT_RE.match(commit or ''):
+        raise HandoverError('隔离任务缺少可核实的成果提交，无法建立交接证据；'
+                            '不回退原项目树（请先完成控制器的成果提交）')
+    if not _commit_resolves(execution, commit):
+        raise HandoverError('成果提交不可解析，已拒绝建立交接证据：' + commit[:12])
+    if _git_common_dir(execution) != _git_common_dir(Path(project)):
+        raise HandoverError('任务工作区不属于原项目仓库，身份不匹配，已拒绝')
+    head = _git(execution, 'rev-parse', 'HEAD')
+    if head is None or head.returncode or head.stdout.strip() != commit:
+        raise HandoverError('成果提交与任务工作区当前 HEAD 不一致，已拒绝过时锚点')
+    return {'path': str(execution), 'branch': branch,
+            'baseline': _clean(plan.get('baseline'), 100), 'commit': commit}
+
+
 def _scope(task):
     scope = []
     for name in list(task.get('files') or []) + list(task.get('changed_files') or []):
         value = _clean(name, 300)
         if value and value not in scope:
             scope.append(value)
+    if _workspace_plan(task):
+        try:
+            return task_workspace.execution_files({**task, 'files': scope})
+        except ValueError as error:
+            raise HandoverError(str(error)) from error
     return scope
 
 
@@ -216,16 +335,21 @@ def _normalize_evidence(test_evidence):
 
 def create(run, summary='', interfaces=(), decisions=(), remaining_issues=(),
            test_evidence=(), context=(), files=None, actor='main', stage_id=None,
-           goal_id=None):
+           goal_id=None,request_reference=None):
     """Persist a compact, hash-verified handover for one accepted task."""
     run = Path(run)
     task = _task(run)
+    task_finalization.require_settled(task)
     record = delegation_policy.load(run)
-    if record is None or record.get('state') not in ACCEPTED_STATES:
+    if record is None or delegation_policy.acceptance_problems(record):
         raise HandoverError('交接必须在执行器成果独立验收通过后创建；未完成验收的来源被明确拒绝')
+    delegation_policy.require_result_binding(task,record)
     project = _clean(task.get('project'), 500)
     if not project or not Path(project).is_dir():
         raise HandoverError('任务缺少可用的项目目录，无法做文件验证')
+    # Evidence source first: an isolated task must anchor its digests on the
+    # controller-recorded deliverable commit, never on the original tree.
+    workspace = _workspace_evidence(run, task, project)
     # Identity comes from the real task metadata; a caller may restate it but
     # never widen or relabel it.
     task_stage, task_goal = _binding(task)
@@ -235,19 +359,29 @@ def create(run, summary='', interfaces=(), decisions=(), remaining_issues=(),
         raise HandoverError('交接目标与任务记录不一致，已拒绝（不能自选目标身份）')
     scope = _scope(task)
     requested = _items(files, limit=MAX_FILES, item_limit=300) if files is not None else scope
+    if workspace and files is not None:
+        requested = task_workspace.execution_files({**task, 'files': requested})
     out_of_scope = [name for name in requested if name not in scope]
     if out_of_scope:
         raise HandoverError('交接文件超出任务文件范围，已拒绝：' + '、'.join(out_of_scope))
     entries = _normalize_evidence(test_evidence)
     independent = [entry for entry in entries if entry['counts_as_evidence']]
     claims = [entry for entry in entries if not entry['counts_as_evidence']]
-    digests = digest_files(project, requested)
+    if workspace is None:
+        digests = digest_files(project, requested)
+    else:
+        # Git's clean/smudge filters (including Windows CRLF) can make blob
+        # bytes differ from real file bytes. Verify the live copy belongs to
+        # the frozen commit, then hash real bytes rather than mixing formats.
+        _require_committed_files(workspace, requested)
+        digests = digest_files(workspace['path'], requested)
     payload = {
         'schema': SCHEMA,
         'task_id': task.get('id') or run.name,
         'stage_id': task_stage,
         'goal_id': task_goal,
         'project': project,
+        'workspace': workspace,
         'model_id': task.get('model_id'),
         'model': task.get('model'),
         'dsh_session_id': task.get('dsh_session_id'),
@@ -279,6 +413,16 @@ def create(run, summary='', interfaces=(), decisions=(), remaining_issues=(),
         'actor': _clean(actor, 40).lower(),
         'note': HANDOVER_NOTE,
     }
+    if workspace is None:
+        # Legacy/non-isolated tasks keep the exact historical record shape.
+        payload.pop('workspace', None)
+    else:
+        payload['verification']['evidence_tree'] = 'workspace'
+        payload['verification']['deliverable_commit'] = workspace['commit']
+        payload['note'] = HANDOVER_NOTE + ' ' + WORKSPACE_NOTE
+    if request_reference is not None:
+        if not isinstance(request_reference,str) or not 1<=len(request_reference)<=256:raise HandoverError('原请求引用无效')
+        payload['request_reference']=request_reference
     return save(run, payload)
 
 
@@ -288,6 +432,35 @@ def verify(run, record=None):
     record = record if record is not None else load(run)
     if record is None:
         raise HandoverError('没有可验证的交接记录')
+    task = _task(run)
+    task_finalization.require_settled(task)
+    review=delegation_policy.load(run)
+    try:
+        delegation_policy.require_result_binding(task,review)
+    except ValueError as error:
+        return _invalid(str(error))
+    stage, goal = _binding(task)
+    if (record.get('task_id') != task.get('id') or record.get('project') != task.get('project')
+            or record.get('stage_id') != stage or record.get('goal_id') != goal):
+        return _invalid('交接记录与真实任务、项目或阶段身份不匹配')
+    try:
+        scope=_scope(task)
+    except (OSError,ValueError) as error:
+        return _invalid(str(error))
+    if any(not isinstance(item,dict) or item.get('path') not in scope for item in record.get('files') or []):
+        return _invalid('交接文件越出真实任务范围')
+    anchor = record.get('workspace') if isinstance(record.get('workspace'), dict) else None
+    if anchor or _workspace_plan(task):
+        try:
+            expected = _workspace_evidence(run, task, task['project'])
+            if not expected or anchor != expected:
+                raise HandoverError('交接工作区锚点与真实任务记录不一致；不回退原项目树')
+            names = [item.get('path') for item in record.get('files') or []]
+            if any(not isinstance(name, str) or name not in _scope(task) for name in names):
+                raise HandoverError('交接文件越出真实任务范围')
+        except (OSError, ValueError) as error:
+            return _invalid(str(error))
+        return _verify_workspace(record, expected)
     project = record.get('project') or ''
     changed, missing = [], []
     if not project or not Path(project).is_dir():
@@ -295,6 +468,8 @@ def verify(run, record=None):
                 'checked_at': registry.now(), 'message': '项目目录不可用，无法复核交接文件'}
     for item in record.get('files') or []:
         target = (Path(project) / str(item.get('path'))).resolve()
+        if not target.is_relative_to(Path(project).resolve()):
+            return _invalid('交接文件路径越出项目')
         if not target.is_file():
             missing.append(item.get('path'))
             continue
@@ -308,9 +483,58 @@ def verify(run, record=None):
                         '、'.join(changed + missing)) if stale else '交接文件与记录一致'}
 
 
+def _invalid(message):
+    return {'valid': False, 'stale': True, 'changed': [], 'missing': [],
+            'checked_at': registry.now(), 'message': message}
+
+
+def _require_committed_files(anchor, names):
+    result = _git(anchor['path'], 'diff', '--quiet', anchor['commit'], '--', *names) if names else None
+    if result is not None and result.returncode:
+        raise HandoverError('交接文件已改动，不能悄悄沿用旧摘要：成果提交与真实文件不一致')
+    for name in names:
+        target = (Path(anchor['path']) / name).resolve()
+        if not target.is_relative_to(Path(anchor['path']).resolve()):
+            raise HandoverError('交接文件路径越出任务工作区')
+        if target.is_file() and _commit_blob(anchor['path'], anchor['commit'], name) is None:
+            raise HandoverError('交接文件不在成果提交中')
+
+
+def _verify_workspace(record, anchor):
+    """Re-hash evidence for an isolated task; never fall back to the project tree.
+
+    Authoritative record/branch binding has already been checked. Re-hash live
+    bytes so post-handover changes (including line endings) are visible. Missing
+    worktrees are stale even when a Git object still exists.
+    """
+    files = record.get('files') or []
+    base = {'valid': False, 'stale': True, 'changed': [], 'missing': [],
+            'checked_at': registry.now()}
+    execution = _clean(anchor.get('path'), 500)
+    commit = _clean(anchor.get('commit'), 100)
+    project = _clean(record.get('project'), 500)
+    if execution and Path(execution).is_dir():
+        changed, missing = [], []
+        for item in files:
+            target = (Path(execution) / str(item.get('path'))).resolve()
+            if not target.is_file():
+                missing.append(item.get('path'))
+                continue
+            if hashlib.sha256(target.read_bytes()).hexdigest() != item.get('sha256'):
+                changed.append(item.get('path'))
+        stale = bool(changed or missing)
+        base.update(valid=not stale, stale=stale, changed=changed, missing=missing)
+        base['message'] = (('交接文件已改动或缺失，不能悄悄沿用旧摘要：' +
+                            '、'.join(changed + missing)) if stale else '交接文件与记录一致')
+        return base
+    base['missing'] = [item.get('path') for item in files]
+    base['message'] = '任务工作区缺失；不回退原项目树或仅凭成果提交替代真实文件'
+    return base
+
+
 def _review_accepted(run):
     record = delegation_policy.load(run)
-    if record is None or record.get('state') not in ACCEPTED_STATES:
+    if record is None or delegation_policy.acceptance_problems(record):
         return None
     return record
 
@@ -444,6 +668,7 @@ def _prereq_delivery(stage, project=None):
                                 (stage.get('title') or stage.get('id') or '') +
                                 '（' + freshness['message'] + '）')
         return {'task_id': task_id, 'stage_id': stage.get('id'),
+                'workspace':record.get('workspace'),
                 'title': stage.get('title') or stage.get('id') or '',
                 'summary': record.get('summary') or '',
                 'files': record.get('files') or [], 'interfaces': record.get('interfaces') or [],
@@ -485,14 +710,37 @@ def prerequisite_handovers(stage_id, project=None):
     return [_prereq_delivery(row, project) for row in order]
 
 
-def prerequisite_prompt(stage_id, limit=MAX_PREREQ_CHARS, project=None):
+def prerequisite_baseline(handovers, project):
+    """A frozen ancestor-complete result, or a refusal requiring integration.
+
+    A dependent stage must execute against real prerequisite code, not merely
+    receive its summary while starting from the untouched original HEAD.
+    Independent prerequisite branches need deliberate integrated acceptance;
+    an integration the main brain has independently accepted (task_integration
+    record) satisfies the requirement through its pinned integrated commit.
+    """
+    commits=list(dict.fromkeys(row['workspace']['commit'] for row in handovers if row.get('workspace')))
+    if not commits:return None
+    head=_git(project,'rev-parse','HEAD')
+    candidates=([head.stdout.strip()] if head is not None and head.returncode==0 else [])+commits
+    for candidate in candidates:
+        if all((result:=_git(project,'merge-base','--is-ancestor',commit,candidate)) is not None
+               and result.returncode==0 for commit in commits):
+            return candidate
+    import task_integration
+    integrated=task_integration.integration_baseline(project,commits)
+    if integrated:return integrated
+    raise HandoverError('前置成果位于独立分支，尚无包含全部成果的执行基线；请先受控集成并独立验收，不会只凭摘要派发')
+
+
+def prerequisite_prompt(stage_id, limit=MAX_PREREQ_CHARS, project=None, *, handovers=None):
     """Compact prompt section carrying validated prerequisite handovers.
 
     Only short structured fields and file digests are included; no whole
     messages, transcripts or logs, so the consumer starts a new session with
     the essential context instead of asking for the full history again.
     """
-    blocks = prerequisite_handovers(stage_id, project)
+    blocks = prerequisite_handovers(stage_id, project) if handovers is None else handovers
     if not blocks:
         return ''
     lines = ['## 前置阶段成果交接（写入时按真实文件 SHA-256 核验，已独立验收）',

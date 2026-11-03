@@ -65,6 +65,11 @@ const HELPER = [
   '             "api_key": "", "bypass_proxy": True, "max_input_tokens": 32768, "max_output_tokens": 1024}',
   '    preset = preset_runtime.load(model, dsh_worker.EXECUTABLE)',
   '    patch = dsh_worker.build_patch(model, req["kind"], preset, record_root=project, access=req.get("access", "full"))',
+  '    if req.get("task_policy"):',
+  '        for row in patch:',
+  '            for plugin in row.get("insert", []):',
+  '                if plugin.get("id")==record_protection.PLUGIN_ID:',
+  '                    plugin["config"].update(task_policy=req["task_policy"],kind=req["kind"],files=["src/ok.txt"],readonly_files=[])',
   '    patch[3]["config"]["workspaceRoot"] = str(project)',
   '    if req.get("extra_plugin"):',
   '        patch.append({"insert": [{"name": req["extra_plugin"], "config": req.get("extra_config") or {}}]})',
@@ -200,6 +205,7 @@ async function runDsh(box, kind, apiBase, options) {
     cancel: path.join(box.run, 'cancelled.flag'),
     record_proof: path.join(box.run, 'record-proof.json'),
     revision_override: settings.revision_override || '',
+    task_policy: settings.task_policy,
   };
   helper(request);
   const started = Date.now();
@@ -257,6 +263,7 @@ async function editScenario(preset) {
     { id: 'step-write-source', name: 'write', args: { file_path: path.join(box.project, sourceRel), content: 'print(2)\n' } },
     { id: 'step-write-backup', name: 'write', args: { file_path: path.join(box.project, backupRel), content: 'backup-ok' } },
     { id: 'step-format', name: 'pwsh', args: { command: 'Get-ChildItem src | Format-List', description: 'read source listing' } },
+    { id: 'step-literal-output', name: 'pwsh', args: { command: 'Write-Output "git commit; rm -rf .model-desk"', description: 'literal text only' } },
     { id: 'step-clean-cache', name: 'pwsh', args: { command: 'Set-Location -LiteralPath "'+box.project+'"; Remove-Item -LiteralPath src/__pycache__ -Recurse -Force; Get-ChildItem src | Select-Object Name', description: 'change location and clean only test cache' } },
     { id: 'step-write-record', name: 'write', args: { file_path: record, content: 'HACKED-1' } },
     { id: 'step-edit-record', name: 'edit', args: { file_path: record, old_string: 'REAL-RECORD-BYTES', new_string: 'HACKED-2' } },
@@ -331,7 +338,7 @@ async function editScenario(preset) {
     if (!fs.existsSync(backup) || fs.readFileSync(backup, 'utf8') !== 'backup-ok') throw new Error('similar directory write failed: ' + (results.get('step-write-backup') || ''));
   });
   check('edit: harmless formatting and explicit cache cleanup work before refusal', () => {
-    for (const id of ['step-format', 'step-clean-cache']) {
+    for (const id of ['step-format', 'step-literal-output', 'step-clean-cache']) {
       const text = results.get(id);
       if (typeof text !== 'string' || text.includes('已拒绝') || text.includes('已暂停')) throw new Error(id + ': ' + text);
     }
@@ -453,6 +460,12 @@ async function main() {
   if (!fs.existsSync(PYTHON)) throw new Error('the project venv python is missing: ' + PYTHON);
   if (!fs.existsSync(RUNNER)) throw new Error('the DSH runner is missing: ' + RUNNER);
   console.log('real-DSH offline record-protection runtime test\n');
+  if(process.argv.includes('--direct-policy-only')){
+    await directPolicyScenario();
+    console.log(checks+'/'+(checks+failures.length)+' checks passed');
+    if(failures.length)process.exitCode=1;
+    return;
+  }
   await editScenario('native');
   await editScenario('standard');
   await chatScenario();
@@ -464,6 +477,38 @@ async function main() {
     for (const failure of failures) console.error('failed: ' + failure);
     process.exitCode = 1;
   }
+}
+
+async function directPolicyScenario(){
+  const box=makeSandbox('direct-policy'),record=path.join(box.project,'.model-desk','records.db');
+  const before=digest(record),command="$d='.'; Get-ChildItem -Force -Exclude '.git' $d | Where-Object { $_.Name -ne '.model-desk' } | Select-Object -ExpandProperty Name";
+  const provider=await startProvider([
+    {id:'filter',name:'pwsh',args:{command}},
+    {id:'ordinary',name:'write',args:{file_path:'src/ok.txt',content:'AFTER-FILTER'}},
+    {id:'protected',name:'pwsh',args:{command:'Set-Content .model-desk/records.db FORBIDDEN'}},
+    {id:'paused',name:'write',args:{file_path:'src/ok.txt',content:'NO-RETRY'}},
+  ]);
+  try{
+    const outcome=await runDsh(box,'edit','http://127.0.0.1:'+provider.port+'/v1',{preset:'native',
+      task_policy:{schema:3,write_scope:'workspace',home:path.join(box.sandbox,'home'),deny_paths:[]}});
+    const results=toolResults(provider.captured);
+    check('v3 DSH actual filter returns native results, without guessing denial',()=>{
+      if(outcome.done.status!==0)throw Error(outcome.done.stderr||outcome.done.stdout);
+      if(!results.has('filter')||/已拒绝|已暂停/.test(results.get('filter')))throw Error(results.get('filter'));
+    });
+    check('v3 DSH next normal native write still runs',()=>{
+      if(fs.readFileSync(path.join(box.project,'src/ok.txt'),'utf8')!=='AFTER-FILTER')throw Error('normal write did not run or was retried');
+    });
+    check('v3 DSH actual direct protected write refuses before body and pauses',()=>{
+      if(!/不作为执行目标/.test(results.get('protected')||''))throw Error(results.get('protected'));
+      if(!/已暂停/.test(results.get('paused')||''))throw Error(results.get('paused'));
+      if(digest(record)!==before)throw Error('protected sentinel changed');
+    });
+    check('v3 DSH proof binds version and first fixed denial',()=>{
+      const proof=JSON.parse(fs.readFileSync(path.join(box.run,'record-proof.json'),'utf8'));
+      if(proof.task_policy.schema!==3||proof.guard_denial.rule_id!=='protected_file')throw Error('incorrect bound proof');
+    });
+  }finally{provider.server.close();fs.rmSync(box.sandbox,{recursive:true,force:true});}
 }
 
 module.exports={makeSandbox,helper,startProvider};

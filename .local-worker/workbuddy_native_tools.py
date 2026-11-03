@@ -7,6 +7,8 @@ import uuid
 
 import record_protection
 import model_registry as registry
+import task_workspace
+import endpoint_access
 
 MODE = 'native-development-v1'
 LEGACY = 'scoped-files-v1'
@@ -27,6 +29,8 @@ DENIAL_LABELS = {
     'guard_denied': '原生工具范围或权限保护拒绝',
     'unknown': '旧事件未记录拒绝分类'}
 DENIAL_RULES = {
+    'protected_path': '目标位于本任务冻结声明的受保护路径内',
+    'workspace_isolation': '隔离任务不能访问原项目或其他任务的执行副本',
     'native_profile': '触及 WorkBuddy 原生配置目录',
     'shell_protected_reference': '命令文本提及工作台记录或认证数据',
     'record_ancestor': '删除或修改范围覆盖工作台记录的上级目录',
@@ -78,10 +82,32 @@ def set_access_mode(value):
     return {'ok': True, 'endpoint': 'workbuddy', 'access_mode': value}
 
 
+def guard_revision():
+    """Digest of the three guard modules only; verified again inside the Node guard."""
+    digest = hashlib.sha256()
+    for file in (GUARD, POLICY, GUARD.with_name('endpoint-access.cjs')):
+        digest.update(file.read_bytes())
+    return digest.hexdigest()
+
+
+def _plan():
+    """Task-visible protection contract hashed into revision().
+
+    Every element is re-validated by load() against the job, so the fingerprint
+    cannot drift from the enforced contract: the tool/permission lists, the
+    access modes and the fixed scratch directory name that isolated edit jobs
+    declare. A policy change therefore always moves the fingerprint, and tasks
+    frozen on an older fingerprint are refused instead of silently gaining the
+    new authority.
+    """
+    return [list(TOOLS), list(READS), list(ACCESS_MODES), task_workspace.TASK_TEMP_DIR]
+
+
 def revision():
     digest = hashlib.sha256()
-    for file in (GUARD, POLICY):
+    for file in (GUARD, POLICY, GUARD.with_name('endpoint-access.cjs')):
         digest.update(file.read_bytes())
+    digest.update(json.dumps(_plan(), ensure_ascii=False).encode('utf-8'))
     return digest.hexdigest()
 
 
@@ -92,9 +118,27 @@ def mode(state):
     return value
 
 
-def prepare(run, project, task_id, files, readonly_files, kind, *, access='project', protected_roots=()):
+def task_temp_dir(state):
+    """Declared scratch directory for an isolated native edit task, else ``None``.
+
+    Mirrors the ZCode adapter policy: only native-development tasks on a real
+    task worktree declare the fixed directory. Chat tasks have no write
+    authority, legacy scoped-file tasks and tasks running directly in the
+    user's own tree get none, so nothing else gains scratch writes.
+    """
+    if (state.get('workbuddy_tool_mode') != MODE or
+            state.get('workbuddy_tool_revision') != revision()):
+        return None
+    record, project = task_workspace.execution_roots(state)
+    if record == project or state.get('kind') != 'edit':
+        return None
+    return task_workspace.TASK_TEMP_DIR
+
+
+def prepare(run, project, task_id, files, readonly_files, kind, *, access='project', protected_roots=(), record_project=None):
     run, project = Path(run).resolve(), Path(project).resolve()
-    if run.parent != project / '.model-desk/runs' or run.name != task_id or kind not in ('chat', 'edit'):
+    record = Path(record_project).resolve() if record_project is not None else project
+    if run.parent != record / '.model-desk/runs' or run.name != task_id or kind not in ('chat', 'edit'):
         raise ValueError('WorkBuddy 原生工具必须绑定当前项目与任务')
     if access not in ACCESS_MODES:
         raise ValueError('WorkBuddy 任务访问权限无效')
@@ -108,8 +152,26 @@ def prepare(run, project, task_id, files, readonly_files, kind, *, access='proje
     data = {'schema': 1, 'mode': MODE, 'task_id': task_id, 'project': str(project),
             'kind': kind, 'files': list(files), 'readonly_files': list(readonly_files),
             'access_mode': access, 'protected_roots': [str(Path(p).resolve()) for p in protected_roots],
-            'nonce': uuid.uuid4().hex, 'revision': revision(),
+            'nonce': uuid.uuid4().hex, 'revision': revision(), 'guard_revision': guard_revision(),
             'tools': list(TOOLS if kind == 'edit' else READS + ('WebFetch', 'WebSearch'))}
+    state = registry.read_task(run) if (run / 'task.json').exists() else {}
+    contract = endpoint_access.task_policy(state)
+    if contract is not None:
+        if state.get('kind') != kind:
+            raise ValueError('任务类型与权限契约不符')
+        data[endpoint_access.POLICY_FIELD] = contract
+    if record != project:
+        data['record_project'] = str(record)
+        data['protected_roots'].append(str(record))
+    task_workspace.validate_native_job(run, data)
+    if record != project and task_temp_dir(registry.read_task(run)) == task_workspace.TASK_TEMP_DIR:
+        # Isolated edit tasks declare the fixed scratch directory, derived from
+        # the real task record. prepare and load both anchor it to the real
+        # execution root, so a swapped link cannot retarget the allowance.
+        temp_path = task_workspace.task_temp_path(project)
+        temp_path.mkdir(exist_ok=True)
+        task_workspace.task_temp_path(project)
+        data['temp_dir'] = task_workspace.TASK_TEMP_DIR
     run.mkdir(parents=True, exist_ok=True)
     job = run / 'workbuddy-native-job.json'
     with job.open('x', encoding='utf-8') as stream:
@@ -121,14 +183,29 @@ def load(job):
     path = Path(job)
     data = json.loads(path.read_text(encoding='utf-8'))
     project = Path(data['project']).resolve()
-    if (not path.is_absolute() or path.resolve().parent != project / '.model-desk/runs' / data['task_id'] or
+    record, project = task_workspace.validate_native_job(path.parent, data)
+    state = registry.read_task(path.parent) if (path.parent / 'task.json').exists() else {}
+    if endpoint_access.task_policy(data) != endpoint_access.task_policy(state):
+        raise ValueError('原生工具写入范围与任务快照不符')
+    # The scratch declaration is pinned in both directions: only an isolated
+    # edit task may carry it, and then only under the fixed name anchored to
+    # the real execution root. Anything else declares nothing and is refused.
+    expect_temp = record != project and data.get('kind') == 'edit'
+    if (not path.is_absolute() or path.resolve().parent != record / '.model-desk/runs' / data['task_id'] or
             data.get('schema') != 1 or data.get('mode') != MODE or data.get('revision') != revision() or
+            data.get('guard_revision') != guard_revision() or
             data.get('kind') not in ('edit', 'chat') or
             data.get('access_mode') not in ACCESS_MODES or
+            ('temp_dir' in data) != expect_temp or
+            ('temp_dir' in data and data['temp_dir'] != task_workspace.TASK_TEMP_DIR) or
             not isinstance(data.get('protected_roots'), list) or
             any(not isinstance(p, str) or not Path(p).is_absolute() for p in data['protected_roots']) or
             data.get('tools') != list(TOOLS if data.get('kind') == 'edit' else READS + ('WebFetch', 'WebSearch'))):
         raise ValueError('WorkBuddy 原生工具身份或代码已变化；拒绝继续')
+    if expect_temp and task_temp_dir(registry.read_task(path.parent)) != task_workspace.TASK_TEMP_DIR:
+        raise ValueError('任务未声明当前原生模式与保护版本；不追加临时目录权限')
+    if 'temp_dir' in data and not task_workspace.task_temp_path(project).is_dir():
+        raise ValueError('任务临时目录缺失，未自动重建')
     return data
 
 
@@ -150,6 +227,8 @@ def verify(job, session_id):
     run = Path(job).parent
     proof = json.loads((run / 'workbuddy-native-proof.json').read_text(encoding='utf-8'))
     expected = {key: data[key] for key in ('task_id', 'project', 'nonce', 'revision', 'mode')}
+    if 'record_project' in data:
+        expected['record_project'] = data['record_project']
     expected.update(access_mode=data['access_mode'], job_hash=hashlib.sha256(Path(job).read_bytes()).hexdigest())
     if (any(proof.get(key) != value for key, value in expected.items()) or
             proof.get('session_id') != session_id or proof.get('probe') != 'ok'):

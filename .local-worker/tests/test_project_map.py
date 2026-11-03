@@ -73,7 +73,7 @@ class MapTests(unittest.TestCase):
 
     def test_exclusions_and_links_are_never_read(self):
         self.write('safe.py', 'def safe(): pass')
-        for path in ('node_modules/a.py', '.git/a.py', '.model-desk/a.py', '.workbuddy/a.py', '.GIT/hidden.py',
+        for path in ('node_modules/a.py', '.git/a.py', '.model-desk/a.py', '.workbuddy/a.py', '.zcode/a.py', '.GIT/hidden.py',
                      '.local-worker/tasks/a.py', '.local-worker/desktop-integrations/a.py',
                      'credentials.py', '.env.py', 'secrets/a.py'):
             self.write(path, 'TOP_SECRET = "fixture"')

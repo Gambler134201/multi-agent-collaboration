@@ -17,7 +17,7 @@ const directory=path.resolve(__dirname,'../panel');
       const zcode={...model,id:'zcode-fixture',name:'ZCode · GLM-5.3-Flash',provider:'zcode',model:'account:zai-start-plan/GLM-5.3-Flash',default_agent:'zcode',native_selection:{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash',options:{reasoningLevel:'max'}}};
       agents.zcode={name:'ZCode',ready:true,version:'3.16.3',access_mode:'project',configuration:{model_fields:[]},
         configuration_values:{home:'C:\\zcode-fixture',port:19765,auto_connect:false},connection_state:'connected',native_catalog:{models:[{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash',reasoning:['low','high','max']}]},
-        usage:{'account:zai-start-plan':{fetched_at:Date.now()/1000,limits:[{label:'Flash fixture',unit:'token',remaining:42,models:['glm-5.3-flash']},{label:'Other fixture',unit:'credits',remaining:999,models:['other-model']}]}}};
+        usage:{'account:zai-start-plan':{fetched_at:Date.now()/1000,limits:[{label:'Flash fixture',unit:'token',remaining:42,total:100,models:['glm-5.3-flash']},{label:'Other fixture',unit:'credits',remaining:999,models:['other-model']}]}}};
       const fixture={models:[model,paid,zcode],default_model:'home',tasks:[],view:{mode:'project',project:'C:\\fixture'},
         execution_agents:agents,workflow:{enabled:true,execution_agent:'pi',model_scope:'all',paid_allowed:true,
           enforce_paid_budget:false,enforce_model_call_limit:false,daily:{}},
@@ -58,7 +58,8 @@ const directory=path.resolve(__dirname,'../panel');
       await page.locator('.endpoint-card').first().waitFor();
       assert.equal(await page.locator('.endpoint-card').count(),4);
       assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/ZCode 原生额度/);
-      assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/42 token/);
+      assert.match(await page.locator('[data-endpoint-id="zcode"]').textContent(),/42%/);
+      assert.equal(Number(await page.locator('[data-endpoint-id="zcode"] progress').getAttribute('value')),42);
       assert.doesNotMatch(await page.locator('[data-endpoint-id="zcode"]').textContent(),/999/);
       assert.equal(await page.locator('#model-agent-entry').isVisible(),false);
       assert.match(await page.locator('[data-endpoint-id="dsh"]').textContent(),/12\.33/);

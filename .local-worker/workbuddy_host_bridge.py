@@ -1,4 +1,4 @@
-"""Reviewed 5.8.2/5.8.3 native-host lease transport for task-owned sessions.
+"""Reviewed 5.8.2/5.8.3/5.9.2 native-host lease transport for task-owned sessions.
 
 Only an already running, same-profile WorkBuddy sidecar is used. No PID/auth
 files, ping/userinfo endpoints, existing-session lists or bootstrap keys are

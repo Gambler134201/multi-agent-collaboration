@@ -23,6 +23,28 @@ try{
   const guard=createGuard({root,access_mode:'project'});
   guard('read',{path:'../outside'});
   assert.match(guard('bash',{command:'echo retry'}),/不要换工具/);
+  const execution=path.join(box,'project-task-workspaces','task-a');fs.mkdirSync(execution,{recursive:true});
+  const isolated=()=>createGuard({root:execution,record_project:root,access_mode:'full'});
+  const context=path.join(root,'.model-desk','runs','task-a','context');
+  for(const mode of ['project','full']){
+    const own=()=>createGuard({root:execution,record_project:root,context_root:context,access_mode:mode});
+    assert.equal(own()('read',{path:path.join(context,'project-index.json')}),undefined);
+    assert.match(own()('read',{path:path.join(context,'..','..','task-b','context','project-index.json')}),/任务隔离/);
+    assert.match(own()('write',{path:path.join(context,'project-index.json')}),/工作台|任务隔离/);
+    assert.match(own()('bash',{command:'cat "'+path.join(context,'project-index.json')+'"'}),/任务隔离|工作台/);
+  }
+  for(const name of ['read','write','edit','grep','find','ls']){
+    assert.equal(isolated()(name,{path:'own.txt'}),undefined);
+    assert.match(isolated()(name,{path:path.join(root,'ordinary.txt')}),/任务隔离/);
+    assert.match(isolated()(name,{path:'../task-b/delivery.txt'}),/任务隔离/);
+    assert.equal(isolated()(name,{path:path.join(box,'temporary.png')}),undefined);
+  }
+  for(const name of ['bash','pwsh','powershell']){
+    assert.match(isolated()(name,{command:'cat "'+path.join(root,'ordinary.txt')+'"'}),/任务隔离/);
+    assert.match(isolated()(name,{command:'cat ../task-b/delivery.txt'}),/任务隔离/);
+    assert.match(isolated()(name,{command:'cd ../task-b && cat delivery.txt'}),/任务隔离/);
+    assert.equal(isolated()(name,{command:'python -m unittest'}),undefined);
+  }
   fs.mkdirSync(path.join(box,'outside'));
   fs.symlinkSync(path.join(box,'outside'),path.join(root,'alias'),'junction');
   assert.match(createGuard({root,access_mode:'project'})('read',{path:'alias/file.txt'}),/项目外/);

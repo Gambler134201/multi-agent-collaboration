@@ -21,6 +21,10 @@ import model_registry as registry
 import deepseek_billing
 import dsh_worker
 import pi_worker
+import task_workspace
+import task_leases
+import task_finalization
+import execution_resources
 import execution_engines
 import model_agent_defaults
 import workflow_settings
@@ -44,6 +48,8 @@ import folder_picker
 import task_history
 import task_timing
 import record_protection
+import endpoint_access
+import integration_queue
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "panel"
@@ -67,14 +73,16 @@ class DispatchRefused(ValueError):
     """A proven refusal before task creation/queue submission, never mid-effect."""
 
 
-EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="model-task")
+# Pool capacity is not execution permission: every attempt must first acquire
+# its entire resource bundle. The preserved default setting allows one task.
+EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="model-task")
 ACTIVE = {}
 ACTIVE_LOCK = threading.Lock()
 
 
 def history_idle_guard():
     with ACTIVE_LOCK:
-        if ACTIVE:raise ValueError('执行器尚未退出，请等待队列空闲后删除记录')
+        if ACTIVE or MANAGED:raise ValueError('执行器尚未退出，请等待队列空闲后删除记录')
     import psutil
     worker_scripts=[str(registry.HERE / name).replace('/', '\\').casefold()
                     for name in ('dsh_worker.py','pi_worker.py','chat_worker.py','run_worker.py')]
@@ -521,7 +529,7 @@ def review_facts(task_id, attached=None):
         return None
     record, error = delegation_policy.safe_load(run)
     if record is not None:
-        return delegation_policy.panel_summary(record)
+        return delegation_policy.panel_summary(record,registry.read_task(run))
     if error:
         return {"state": "unreadable", "label": "验收记录无法读取", "error": error,
                 "rework_count": None, "max_auto_rework": delegation_policy.MAX_AUTO_REWORK}
@@ -560,6 +568,7 @@ def observability_view(task):
         "review_label": (review or {}).get("label"),
         "file_scope": {
             "mode": ("readonly_context" if (task.get("kind") == "chat" and readonly_files)
+                     else "deliverables" if endpoint_access.policy_view(task).get('write_scope')=='workspace'
                      else "modifiable" if task.get("kind") == "edit" else "none"),
             "files": scope_files,
             "readonly_files": readonly_files,
@@ -684,6 +693,24 @@ def tree_view(project_view=None):
 
 
 
+def integration_action(view, body, name=None, action=None):
+    project=project_views.explicit_project(view)
+    if not project:raise ValueError('集成操作需要明确项目，不支持全部项目或未知项目')
+    if not isinstance(body,dict):raise ValueError('集成参数需要对象')
+    if name is None:
+        if set(body)!={'request_id','task_ids','checks'}:raise ValueError('集成参数仅允许原请求标识、任务和检查计划')
+        result=integration_queue.enqueue(project,body['task_ids'],body['checks'],request_id=body['request_id'])
+    else:
+        if body:raise ValueError('原集成操作不能覆盖项目、任务、权限或检查计划')
+        if action=='cancel':return integration_queue.cancel(project,name)
+        if action=='reconcile':return integration_queue.reconcile(project,name)
+        result=integration_queue.get(project,name)
+        if result is None:raise ValueError('原集成作业不存在，不能重新创建')
+        if integration_queue.state(result)!='queued':raise ValueError('仅未开始的原作业可以继续；未知结果不得重跑')
+    integration_queue.schedule(project,result['name'],EXECUTOR.submit)
+    return result
+
+
 def public_daily_cost(settings):
     """Retired estimates stay on disk, never in a live UI response.
 
@@ -722,6 +749,7 @@ def public_tasks(view=None):
     # own store (plus its unmigrated legacy records), so the global locator is
     # never a precondition for showing the project's history.
     rows = []
+    integration_cache = {}  # Per-read snapshot, never a persistent status ledger.
     for entry in project_storage.iter_task_dirs(view):
         folder = entry['run']
         if not folder.is_dir():
@@ -758,7 +786,9 @@ def public_tasks(view=None):
             else:
                 row["review"] = None
             import execution_result
-            row['execution_result'] = execution_result.project(row, row['review'])
+            row['execution_result'] = execution_result.project_with_context(
+                row, row['review'], integration_cache=integration_cache,
+                context_project=entry.get('project') or '', run=folder)
             rows.append(public_task_cost(row))
         except (OSError, ValueError, IndexError):
             continue
@@ -938,14 +968,306 @@ def discover(body):
         raise ValueError("读取模型列表失败，可以手动填写模型 ID。" + safe_error(exc, model.get("api_key", "")))
 
 
+def workspace_plan_for(engine, kind, project, files, link_parent=None, test_command=None):
+    """Read-only workspace isolation plan, recorded with the task at creation.
+
+    Execution stays serial for this batch: the plan only freezes the baseline
+    and the eligibility decision.  Declared files with uncommitted user
+    changes block isolation, because the baseline would silently miss them.
+    A continuation or rework builds on the parent's deliverable commit when
+    one exists, not on the untouched user baseline.
+    """
+    if engine not in ('dsh', 'pi', 'workbuddy', 'zcode') or kind != 'edit':
+        return None
+    if isinstance(link_parent, dict) and engine in ('workbuddy', 'zcode'):
+        import importlib
+        native = importlib.import_module(engine + '_native_tools')
+        if link_parent.get(engine + '_tool_mode') != native.MODE:
+            return None
+    info = task_workspace.inspect(project)
+    plan = {'eligible': info['eligible'], 'reason': info['reason'], 'baseline': info['baseline']}
+    if not info['eligible']:
+        return plan
+    if task_workspace.test_command_uses_original(project, test_command):
+        plan.update(eligible=False, reason='指定测试命令引用原项目绝对路径；保持串行，未改写命令')
+        return plan
+    dirty = task_workspace.files_dirty(project, files)
+    if dirty:
+        plan.update(eligible=False, dirty=dirty[:10],
+                    reason='声明的文件存在未提交改动；隔离基线缺少这些改动，保持串行')
+        return plan
+    parent_plan = link_parent.get('workspace') if isinstance(link_parent, dict) else None
+    if isinstance(parent_plan, dict) and parent_plan.get('created') and parent_plan.get('commit'):
+        plan.update(baseline=parent_plan['commit'], based_on=parent_plan.get('branch'))
+    return plan
+
+
+def prepare_workspace_for_run(run, state):
+    """Create the task worktree when the task leaves the queue.
+
+    The baseline frozen at creation is authoritative; a stale branch from a
+    crashed attempt is an error, never a silent reuse.
+    """
+    if not (state.get('engine') in ('dsh', 'pi', 'workbuddy', 'zcode') and state.get('kind') == 'edit'
+            and (state.get('workspace') or {}).get('eligible')):
+        return None
+    if state.get('engine') in ('workbuddy', 'zcode'):
+        import importlib
+        native = importlib.import_module(state['engine'] + '_native_tools')
+        if state.get(state['engine'] + '_tool_mode') != native.MODE:
+            return None
+    if task_workspace.test_command_uses_original(state['project'], state.get('test_command')):
+        raise ValueError('隔离任务的测试命令仍引用原项目；请明确使用相对路径后新建任务，未改写命令')
+    prepared = task_workspace.prepare(state['project'], state['id'],
+                                      baseline=state['workspace'].get('baseline'))
+    plan = {**state['workspace'], 'created': True, 'path': prepared['path'], 'branch': prepared['branch']}
+    registry.patch_task(run, workspace=plan)
+    return plan
+
+
+def commit_workspace_for_run(run, current, *, freeze_failed=False):
+    """Controller-owned deliverable commit after a completed workspace task.
+
+    The executor never touches git history.  A commit failure does not flip a
+    completed task: the worktree stays for review and the error is recorded.
+    """
+    plan = (current or {}).get('workspace') or {}
+    if ((current or {}).get('status') != "completed" and not freeze_failed) or not plan.get('created'):
+        return None
+    try:
+        task_workspace.native_roots(run, current)
+        committed = task_workspace.commit_task_results(plan['path'], current['id'])
+        if not committed.get('committed') and committed.get('reason') == 'no_relevant_changes':
+            head = task_workspace._git(plan['path'], 'rev-parse', 'HEAD')
+            if head.returncode != 0:
+                raise ValueError('无改动任务的成果提交无法核实')
+            registry.patch_task(run, workspace={**plan, 'commit': head.stdout.strip(), 'no_changes': True})
+    except (OSError, ValueError) as exc:
+        registry.patch_task(run, workspace_commit_error=str(exc)[:300])
+        return None
+    if committed.get('committed'):
+        registry.patch_task(run, workspace={**plan, 'commit': committed['commit']})
+        if endpoint_access.task_policy(current) is not None:
+            try:
+                manifest=task_workspace.deliverable_manifest(plan['path'],plan['baseline'],committed['commit'])
+                registry.patch_task(run,**manifest)
+            except (OSError,ValueError) as exc:
+                registry.patch_task(run,artifact_manifest_error=str(exc)[:300])
+    return committed
+
+
+LEASE_WAIT_BACKOFF = 30.0
+LEASE_WAITING = 'waiting-for-lease'
+# Tasks are managed from their queue claim (before their worker
+# process exists), so a conflicting task waits instead of misjudging the
+# holder as unmanaged execution.  Guarded by ACTIVE_LOCK.
+MANAGED = set()
+
+
+def reschedule_for_lease(run, state, holder_id, *, phase=None, backoff=None):
+    """Put a lease-blocked task back in the queue instead of failing it.
+
+    Only holders owned by this controller's queue justify waiting; anything
+    else is unmanaged execution that stays visible for a human.  No model call
+    has happened here, so this is queue-level waiting - the task record shows
+    a queued state with the blocking holder, the completion listener keeps
+    seeing it as queued, and cancellation works through the usual flag.
+    """
+    with ACTIVE_LOCK:
+        managed = state.get('id') != holder_id and (holder_id in MANAGED or holder_id in ACTIVE)
+    if not managed:
+        return False
+    wait = state.get('lease_wait') or {}
+    registry.patch_task(run, status='queued', phase=phase or '等待模型占用（任务 ' + holder_id + '）',
+                        lease_wait={'count': int(wait.get('count') or 0) + 1,
+                                    'last_at': registry.now(), 'holder': holder_id})
+
+    def requeue():
+        if not run.exists() or (run / 'cancelled.flag').exists():
+            return
+        if registry.read_task(run).get('status') != 'queued':
+            return
+        with ACTIVE_LOCK:
+            finishing = state['id'] in MANAGED
+        if finishing:
+            # A short backoff may expire before the previous attempt releases
+            # its leases. Never lose the waiter by racing its own finalizer.
+            start_timer()
+            return
+        EXECUTOR.submit(execute_task, state['id'])
+
+    def start_timer():
+        timer = threading.Timer(LEASE_WAIT_BACKOFF if backoff is None else backoff, requeue)
+        timer.daemon = True
+        timer.start()
+
+    start_timer()
+    return True
+
+
+def _acquire_lease_with_recovery(run, state, kind, name, *, refuse_message, _retry=True):
+    """Shared lease path: acquire, recover a provably terminal holder, or wait.
+
+    Recovery holds the holder's record lock through lease transfer, and never
+    takes a lease from an attempt still managed by this controller. A
+    holder managed by this queue yields LEASE_WAITING (the task re-queues
+    instead of failing); an unmanaged holder refuses with `refuse_message`.
+    """
+    try:
+        lease = task_leases.acquire(kind, name, state['id'],
+                                    model_id=state.get('model_id'), project=state.get('project'))
+    except task_leases.LeaseConflict as exc:
+        held = exc.lease
+        holder_id = held.get('task_id')
+        recovered = False
+        if holder_id:
+            try:
+                # The lease stores the holder's record project; a stale locator
+                # or a relocated record falls back to the global locator index.
+                holder_run = registry.task_dir(holder_id, project=held.get('project'))
+                if not holder_run.is_dir():
+                    holder_run = registry.task_dir(holder_id)
+                if not (holder_run / 'task.json').is_file():
+                    raise ValueError('持有者任务记录不存在；不能证明租约已失效')
+                # Lock order: task record -> ACTIVE_LOCK -> lease registry.
+                # Queue claims/recovery also need the record lock, so a terminal
+                # snapshot cannot become runnable before this transfer commits.
+                with registry.file_lock(holder_run / 'task.lock'):
+                    holder = registry.read_json(holder_run / 'task.json')
+                    with ACTIVE_LOCK:
+                        managed = holder_id in MANAGED or holder_id in ACTIVE
+                        if (not managed and holder.get('id') == holder_id
+                                and holder.get('status') in ('completed', 'failed', 'cancelled')
+                                and recorded_worker_alive(holder) is False):
+                            lease = task_leases.recover(
+                                kind, name, state['id'], from_task=holder_id,
+                                reason='stale_holder_terminal:' + holder['status'],
+                                model_id=state.get('model_id'), project=state.get('project'))
+                            recovered = True
+            except (OSError, ValueError):
+                recovered = False
+        if recovered:
+            pass
+        elif reschedule_for_lease(run, state, holder_id):
+            return LEASE_WAITING
+        elif _retry:
+            # The observed holder may have released between acquire and the
+            # managed check. One fresh atomic attempt resolves that window;
+            # never interpret an empty later snapshot as an unmanaged holder.
+            return _acquire_lease_with_recovery(
+                run, state, kind, name, refuse_message=refuse_message, _retry=False)
+        else:
+            raise ValueError(refuse_message.format(holder=holder_id or '未知')) from exc
+    registry.patch_task(run, **{kind + '_lease': {'resource': lease['resource'],
+                                                  'recovered_from': (lease.get('lease') or {}).get('recovered_from')}})
+    return lease
+
+
+def acquire_execution_resources(run, state, model, settings, *, fresh=True):
+    identity = execution_resources.backend_identity(state, model)
+    if state.get('resource_backend') is not None and state['resource_backend'] != identity:
+        raise ValueError('排队任务的执行资源已变化；未切换后端或模型，请核对后新建任务')
+    requests = execution_resources.requests_for(state, model, settings)
+    try:
+        result = execution_resources.acquire(state['id'], state['project'], requests,
+                                               capacity=settings.get('max_parallel_tasks', 1))
+    except execution_resources.ResourceBusy as conflict:
+        for holder in conflict.holders:
+            if reschedule_for_lease(run, state, holder, phase='等待执行资源释放', backoff=min(1.0, LEASE_WAIT_BACKOFF)):
+                return LEASE_WAITING
+        if fresh:
+            # An owner can finish between the atomic conflict snapshot and the
+            # managed check. This retries only reservation, never inference.
+            return acquire_execution_resources(run, state, model, settings, fresh=False)
+        raise ValueError('执行资源由未确认结束的外部任务占用；未重发或清除其他任务的资源') from conflict
+    registry.patch_task(run, resource_reservation={'requests': requests, 'capacity': settings.get('max_parallel_tasks', 1)})
+    return result
+
+
+def acquire_model_lease(run, state):
+    """One running task per model, taken when the task leaves the queue.
+
+    Every engine that executes a model holds this lease, so the rule survives
+    a future `max_workers` increase.  The queue is still single-worker, so
+    conflicts today mean a stale registry or unmanaged execution - both stay
+    visible, never silent.
+    """
+    if not state.get('model_id'):
+        return None
+    return _acquire_lease_with_recovery(
+        run, state, 'model', str(state['model_id']),
+        refuse_message='模型 ' + str(state.get('model') or state['model_id'])
+                       + ' 正被任务 {holder} 占用；本任务不并行启动')
+
+
+def acquire_budget_lease(run, state, model, settings):
+    """Serialized paid execution while an enforced money cap is enabled.
+
+    The ledger's per-request gate (budget.lock) already refuses a second
+    billable request while one is unresolved; under parallel tasks that
+    refusal would fail the second task at its first request instead of
+    letting it wait its turn, so a paid task holds `budget:paid` for its
+    whole run under an enforced cap.  When the user's settings keep the cap
+    disabled this holds no lease and changes nothing (the code default is
+    fail-safe enabled; this install's settings disable it).  Unknown-cost
+    native tasks keep their existing static refusal, and local models are
+    never billable.
+    """
+    if not settings.get('enforce_paid_budget') or not model_router.is_paid(model):
+        return None
+    return _acquire_lease_with_recovery(
+        run, state, 'budget', 'paid',
+        refuse_message='已开启金额上限；付费任务 {holder} 正在执行，本任务不并行启动')
+
+
+def release_task_leases(state):
+    """Owner-only, idempotent lease release at terminal handling.
+
+    Both releases are safe for a task that never held them: the owner-only
+    release returns not_held, and a foreign holder is never touched.
+    """
+    if state.get('model_id') and state.get('id'):
+        return [task_leases.release('model', str(state['model_id']), state['id']),
+                task_leases.release('budget', 'paid', state['id'])]
+    return []
+
+
+def claim_queued_execution(run):
+    """One queued attempt wins, including across concurrent queue deliveries.
+
+    Terminal/running records are never implicitly replayed. Only explicit
+    recovery or lease waiting can put an existing task back into queued.
+    """
+    if not (run / 'task.json').is_file():
+        return None
+    with registry.file_lock(run / 'task.lock'):
+        state = registry.read_json(run / 'task.json')
+        if (run / 'cancelled.flag').exists() or state.get('status') != 'queued':
+            return None
+        with ACTIVE_LOCK:
+            if state['id'] in MANAGED or state['id'] in ACTIVE:
+                return None
+            MANAGED.add(state['id'])
+        try:
+            state.update(status='running', phase='准备执行', updated_at=registry.now())
+            state[task_finalization.FIELD] = task_finalization.pending()
+            registry.write_json(run / 'task.json', state)
+        except Exception:
+            with ACTIVE_LOCK:
+                MANAGED.discard(state['id'])
+            raise
+        return state
+
+
 def execute_task(task_id):
     run = registry.task_dir(task_id)
-    state = json.loads((run / "task.json").read_text(encoding="utf-8"))
-    if (run / "cancelled.flag").exists():
+    state = claim_queued_execution(run)
+    if state is None:
         return
     import execution_result
     tracker = execution_result.Tracker(state.get('engine') or 'unknown')
     tracker.mark('prepare', 'running', '控制器派发前校验')
+    process_started = worker_joined = False
     try:
         registry.patch_task(run, execution_evidence=tracker.snapshot())
         settings = workflow_settings.snapshot()
@@ -956,6 +1278,19 @@ def execute_task(task_id):
         # before its worker starts.  An out-of-scope model is recorded and refused;
         # no provider is called and nothing is re-routed or re-dispatched.
         scope_gate(model, settings, task_id=task_id, engine=state.get('engine'))
+        if acquire_execution_resources(run, state, model, settings) == LEASE_WAITING:
+            return
+        lease = acquire_model_lease(run, state)
+        if lease == LEASE_WAITING:
+            # The task is queued again with the blocking holder recorded; the
+            # reschedule timer owns the next attempt.
+            return
+        if acquire_budget_lease(run, state, model, settings) == LEASE_WAITING:
+            return
+        if (run / 'cancelled.flag').exists():
+            registry.patch_task(run, status='cancelled', ended_at=registry.now())
+            return
+        prepare_workspace_for_run(run, state)
         if state.get("engine") == "dsh":
             command = [str(PYTHON), str(HERE / "dsh_worker.py"), "--run-id", task_id]
         elif state.get("engine") == "pi":
@@ -977,22 +1312,33 @@ def execute_task(task_id):
         with (run / "launcher.log").open("w", encoding="utf-8") as output:
             process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
                                        stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+            process_started = True
             with ACTIVE_LOCK:
                 ACTIVE[task_id] = process
             registry.patch_task(run, launcher_pid=process.pid)
-            if (run / "cancelled.flag").exists():
+            if (run / "cancelled.flag").exists() and state.get('engine') not in ('workbuddy', 'zcode', 'dsh', 'pi'):
                 subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
             process.wait()
+            worker_joined = True
         current = json.loads((run / "task.json").read_text(encoding="utf-8"))
         if current["status"] in {"queued", "running"}:
             message = (run / "launcher.log").read_text(encoding="utf-8", errors="replace")[-1500:]
             # A crashed child did not publish a definitive stage. Retain its
             # existing evidence when present instead of guessing from log prose.
             evidence = current.get('execution_evidence') or tracker.snapshot()
-            registry.patch_task(run, status="failed", phase="执行失败", ended_at=registry.now(), error=message,
+            cancelled = (run / 'cancelled.flag').exists()
+            registry.patch_task(run, status='cancelled' if cancelled else 'failed',
+                                phase='已停止执行' if cancelled else '执行失败', ended_at=registry.now(), error=message,
                                 execution_evidence=evidence)
+        else:
+            commit_workspace_for_run(run, current)
     except Exception as exc:
-        if not (run / "cancelled.flag").exists():
+        if process_started and not worker_joined:
+            registry.patch_task(run, launcher_pid=process.pid, controller_process_unconfirmed=True)
+        if (run / 'cancelled.flag').exists():
+            registry.patch_task(run, status='cancelled', phase='已停止执行', ended_at=registry.now(),
+                                controller_error=safe_error(exc))
+        else:
             tracker.fail('prepare', 'STARTUP_FAILED', '控制器启动执行端失败；原始原因见任务错误')
             current = registry.read_task(run)
             registry.patch_task(run, status="failed", phase="执行失败", ended_at=registry.now(),
@@ -1001,8 +1347,44 @@ def execute_task(task_id):
                                 (current.get('execution_evidence') or {}).get('stages', {}).get('execute', {}).get('state') not in (None, 'not_run')
                                 else tracker.snapshot())
     finally:
-        with ACTIVE_LOCK:
-            ACTIVE.pop(task_id, None)
+        cleanup_problem = ''
+        release_safe = not process_started or worker_joined
+        if process_started and worker_joined:
+            try:
+                current = registry.read_task(run)
+                release_safe = recorded_worker_alive(current) is False
+                if state.get('engine') in ('workbuddy', 'zcode'):
+                    release_safe = release_safe and (current.get(state['engine']) or {}).get('cleanup') in ('closed', 'not_created')
+            except (OSError, ValueError):
+                release_safe = False
+        if not release_safe:
+            cleanup_problem = '执行进程或原生会话关闭未确认；保留本任务资源，需显式核对收尾，不自动重发'
+        try:
+            if release_safe:
+                release_task_leases(state)
+        except (OSError, ValueError, RuntimeError):
+            # A lease that outlives its terminal task is recovered by the next
+            # dispatch after the holder record proves the terminal state;
+            # RuntimeError covers file-lock contention timeouts.
+            try:
+                if task_leases.occupancy(task_id):
+                    cleanup_problem = '本任务仍持有未释放资源；请核对控制器收尾'
+            except (OSError, ValueError, RuntimeError):
+                cleanup_problem = '资源释放状态无法核实；请核对控制器收尾'
+        finally:
+            try:
+                try:
+                    if release_safe:
+                        execution_resources.release(task_id)
+                except (OSError, ValueError, RuntimeError):
+                    cleanup_problem = '本任务执行资源释放未确认；请核对控制器收尾'
+                task_finalization.settle(run, note=cleanup_problem)
+            finally:
+                with ACTIVE_LOCK:
+                    ACTIVE.pop(task_id, None)
+                    MANAGED.discard(task_id)
+                import approved_plan
+                approved_plan.notify_task(run)
 
 
 def run_chat(run, state, model):
@@ -1089,7 +1471,7 @@ def _clean_readonly_files(project_path, requested):
 
 
 @task_history.serialized
-def submit_task(body, trusted=None, authority=None, request_id=''):
+def submit_task(body, trusted=None, authority=None, request_id='', *, prerequisite_baseline=None):
     prompt = str(body.get("prompt", "")).strip()
     if not prompt or len(prompt) > 50000:
         raise ValueError("请填写任务，最多 50000 个字符")
@@ -1098,6 +1480,8 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         raise ValueError("任务类型不正确")
     settings = workflow_settings.snapshot()
     body = dict(body)
+    if endpoint_access.POLICY_FIELD in body:
+        raise ValueError('task_policy 由控制器生成；调用方请使用 write_scope')
     # The main-brain broker passes its immutable context internally.  A model
     # tool body can never provide this argument, and the trusted branch refuses
     # any attempt to override project/owner/role/executor here.
@@ -1123,7 +1507,10 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         if execution_engines.requested_engine(body) is not None:
             raise ValueError('主脑接口不能指定执行器；请使用模型已保存的默认 Agent')
         if body.get('stage_id') or body.get('goal_id'):
-            raise ValueError('阶段 A 主脑接口不提供阶段/目标派发')
+            if not body.get('stage_id') or not isinstance(body.get('plan_dispatch'),dict):
+                raise ValueError('直接主脑派发不提供阶段/目标覆盖；请使用已批准计划的专用入口')
+            import brain_plan
+            brain_plan.require_owner(trusted,body.get('goal_id') or '',approved_only=True)
         body['project'] = trusted.project
         body['source'] = 'brain'
         if brain_authority is None:
@@ -1186,6 +1573,7 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
                 "model_id": rework_parent["model_id"],
                 "project": rework_parent.get("project") or body.get("project") or "",
                 "files": rework_parent.get("files") or [],
+                "readonly_files": rework_parent.get("readonly_files") or [],
                 "route_mode": "manual", 'routing': rework_routing,
                 'stage_id': rework_parent.get('stage_id'), 'goal_id': rework_parent.get('goal_id')}
         kind = body["kind"]
@@ -1236,14 +1624,16 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     native_access_mode = None
     zcode_snapshot = {}
     if engine == 'zcode':
-        import zcode_worker, zcode_tools
+        import zcode_worker
         zcode_worker.validate_task(body, settings)
         native_parent=rework_parent or (original if continue_id else None)
-        zcode_snapshot = ({key: native_parent.get(key) for key in ('zcode_connection', 'zcode_selection', 'zcode_tool_revision', 'zcode_access_mode')}
+        zcode_snapshot = ({**{key: native_parent.get(key) for key in ('zcode_connection', 'zcode_selection', 'zcode_tool_revision', 'zcode_access_mode')},
+                           'zcode_tool_mode':native_parent.get('zcode_tool_mode',zcode_worker.LEGACY_MODE)}
                           if native_parent else {'zcode_connection': zcode_worker.configuration(),
-                            'zcode_selection': model['native_selection'], 'zcode_tool_revision': zcode_tools.revision(),
+                            'zcode_selection': model['native_selection'], 'zcode_tool_revision': zcode_worker.tool_adapter().revision(),
+                            'zcode_tool_mode':zcode_worker.MODE,
                             'zcode_access_mode': zcode_worker.configuration()['access_mode']})
-        if native_parent and native_parent.get('zcode_tool_revision')!=zcode_tools.revision():raise ValueError('原 ZCode 任务保护版本已变化，请明确新建任务；不自动升级旧任务权限')
+        if native_parent and native_parent.get('zcode_tool_revision')!=zcode_worker.tool_adapter(native_parent).revision():raise ValueError('原 ZCode 任务保护版本已变化，请明确新建任务；不自动升级旧任务权限')
     if engine == 'workbuddy':
         import workbuddy_worker
         workbuddy_worker.validate_task(body, settings)
@@ -1299,8 +1689,10 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
             raise ValueError("项目文件夹需要使用绝对路径")
         project = str(project_path)
         files = body.get("files", [])
-        if not isinstance(files, list) or not 1 <= len(files) <= 30 or any(not isinstance(f, str) or not f.strip() for f in files):
-            raise ValueError("请填写 1 到 30 个待修改文件，每行一个")
+        if (not isinstance(files,list) or len(files)>30 or
+                any(not isinstance(f,str) or not f.strip() for f in files) or
+                (not files and engine not in execution_engines.AGENTS)):
+            raise ValueError('原生任务可填写 0 到 30 个预期交付文件；其他执行端仍需至少一个文件')
         for name in files:
             path = (project_path / name).resolve()
             if not path.is_relative_to(project_path) or (path.exists() and not path.is_file()):
@@ -1308,13 +1700,14 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         # The workbench record directory is control-plane evidence and is never a
         # writable dispatch target, even when a caller names it explicitly.
         record_protection.validate_files(files, project_path)
+        readonly_files = _clean_readonly_files(project_path, body.get('readonly_files') or [])
         running = [t for t in public_tasks()
                    if t.get('project') == project and t.get('status') == 'running']
         # The existing single-worker executor safely queues B behind A. Only
         # this controller's in-process ACTIVE map proves that a running task is
         # already owned by that queue. Unmanaged work must still block edits.
         with ACTIVE_LOCK:
-            unmanaged = any(t.get('id') not in ACTIVE for t in running)
+            unmanaged = any(t.get('id') not in ACTIVE and t.get('id') not in MANAGED for t in running)
         if unmanaged:
             raise DispatchRefused('这个项目有不属于当前工作台队列的运行任务，请等待结束后再分派；未创建新任务')
     parent = None
@@ -1328,6 +1721,11 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
             raise ValueError("继续会话需要保持原项目和文件范围")
         if engine=='zcode' and project!=parent['project']:raise ValueError('ZCode 任务续接不能切换项目')
         project = parent["project"]
+        if kind == 'edit':
+            inherited = list(parent.get('readonly_files') or [])
+            if 'readonly_files' in body and readonly_files != inherited:
+                raise ValueError('继续会话保持原任务只读文件范围')
+            readonly_files = inherited
         if kind == "chat" and not readonly_files:
             # A continued read-only chat keeps its context file scope instead of
             # silently dropping the index/handover files.
@@ -1337,6 +1735,19 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
     # A corrective round keeps the original model/project/files but starts a new
     # session by default; only --reuse-session copies the old session identity.
     link_parent = parent or rework_parent
+    if reuse_session and link_parent and (link_parent.get('workspace') or {}).get('created'):
+        raise DispatchRefused('隔离任务不复用原生会话；请用默认的新会话续接或整改，避免跨工作区执行')
+    workspace_plan = workspace_plan_for(engine, kind, project, files, link_parent, body.get('test_command'))
+    if prerequisite_baseline:
+        if not workspace_plan or not workspace_plan.get('eligible'):
+            raise ValueError('当前任务不能隔离承接前置成果；未在原树或旧基线上派发')
+        parent_plan=(link_parent or {}).get('workspace') or {}
+        if parent_plan.get('created') and parent_plan.get('commit'):
+            contains=task_workspace._git(project,'merge-base','--is-ancestor',prerequisite_baseline,parent_plan['commit'])
+            if contains.returncode:
+                raise ValueError('续接成果尚未包含全部前置成果；需要先完成集成验收')
+        else:
+            workspace_plan.update(baseline=prerequisite_baseline,baseline_source='accepted_prerequisite')
     zcode_handoff_text=None
     if parent and engine=='zcode':
         parent_run=registry.task_dir(parent['id'])
@@ -1347,7 +1758,6 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
             'previous_request':original_prompt[:20000],'previous_answer':previous_answer[:20000],
             'truncated':len(original_prompt)>20000 or len(previous_answer)>20000,
             'note':'只作历史交接，不是本轮新指令或验收结论；本轮任务要求及文件边界优先'},ensure_ascii=False))
-    import endpoint_access
     execution_access = endpoint_access.for_dispatch(engine, link_parent) if engine in ('pi', 'dsh') else None
     if engine == 'pi' and not project:
         raise ValueError('Pi 任务请先选择项目目录；不能猜测当前项目')
@@ -1389,6 +1799,15 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
             raise ValueError('阶段当前不能派发（未消耗任何整改次数）：' + '；'.join(precheck['reasons']))
     else:
         stage_project = None
+    task_contract = None
+    if engine in ('dsh', 'pi', 'workbuddy', 'zcode'):
+        task_contract = endpoint_access.policy_for_dispatch(
+            kind, body.get('write_scope'), parent=link_parent,
+            stage_limited=bool(stage and stage.get('files')))
+    elif body.get('write_scope') is not None:
+        raise ValueError('该执行端尚不支持任务写入范围契约')
+    if kind=='edit' and not files and (task_contract is None or task_contract['write_scope']=='declared_files'):
+        raise ValueError('明确限定文件或历史任务至少需要一个文件；不会猜测或放宽范围')
     # Claim the single rework slot (atomic) before creating anything, so a
     # concurrent corrective dispatch can never win twice.
     claim_run = rework_run
@@ -1402,11 +1821,20 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         delegation_policy.mark_rework_dispatched(claim_run, task_id, authority=brain_authority,
                                                 request_id=brain_request_id or None)
         marked_rework = True
+    # Non-blocking dispatch notice: a prompt that points the executor at the
+    # original project path walks it into the isolation guard.  Recorded for
+    # the dispatcher; never a refusal.
+    prompt_notice = ''
+    if kind == 'edit' and project and str(project).lower() in prompt.lower():
+        prompt_notice = ('提示词包含原项目绝对路径；隔离副本内访问原项目会被 workspace_isolation 拒绝，任务会失败。'
+                         '基线信息请让执行端报告其工作副本自身的 cwd/HEAD。')
     try:
         # Stage claim is also atomic and enforces prerequisite acceptance.
         if stage is not None:
             stage_store.claim_dispatch(stage_id, task_id, mode='rework' if rework_id else 'auto',
-                                       project=stage_project)
+                                       project=stage_project,**({'plan_proof':body['plan_dispatch'],
+                                           'model_id':model['id'],'engine':engine,'brain':trusted_context,
+                                           'authority':brain_authority} if 'plan_dispatch' in body else {}))
         if project:
             # Explicit first write for this project: it now owns its records.db/runs.
             run = registry.prepare_task_dir(task_id, project)
@@ -1454,7 +1882,7 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         'source': 'brain' if trusted_context is not None else (
             "codex" if body.get("source") == "codex" else "panel"),
         'project': project, 'files': files, 'created_at': registry.now(),
-        'readonly_files': (readonly_files or None), 'files_readonly': bool(readonly_files),
+        'readonly_files': (readonly_files or None), 'files_readonly': kind=='chat' and bool(readonly_files),
         'timeout': timeout, 'test_command': str(body.get("test_command", "")).strip() or None,
         'stage_id': stage_id or None, 'goal_id': goal_id or None,
         'request_output_tokens': request_output_tokens,
@@ -1462,6 +1890,8 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
         'workbuddy_tool_mode': native_tool_mode, 'workbuddy_tool_revision': native_tool_revision,
         'workbuddy_access_mode': native_access_mode,
         'execution_access_mode': execution_access,
+        'workspace': workspace_plan,
+        task_finalization.FIELD: task_finalization.pending(),
         'connectivity_check': {'source': 'pre_dispatch',
                                'rechecked': bool(connectivity['checked']),
                                'blocked': bool(connectivity['blocked']),
@@ -1469,11 +1899,16 @@ def submit_task(body, trusted=None, authority=None, request_id=''):
                                'verdict': connectivity['verdict'],
                                'check': connectivity['check']},
     }
+    first_fields['resource_backend'] = execution_resources.backend_identity(first_fields, model)
+    if task_contract is not None:
+        first_fields[endpoint_access.POLICY_FIELD] = task_contract
     if brain_meta is not None:
         # Public owner/request metadata is persisted before the task is queued.
         first_fields.update({'owner': trusted_context.owner,
                              'request_id': brain_request_id, 'brain': brain_meta})
     row = registry.patch_task(run, **first_fields)
+    if prompt_notice:
+        row = registry.patch_task(run, prompt_notice=prompt_notice)
     row = registry.patch_task(run, route=route, model_calls=0, budget_reserved_cny=0,
                               cost_settled_cny=0, cost_settled_calls=0, cost_unsettled_cny=0,
                               cost_unknown_calls=0, cost_legacy_unsettled_cny=0, cost_requests={}, cost_schema=2)
@@ -1522,6 +1957,10 @@ def cancel_task(task_id, reason="", actor="main"):
                                             "reason": str(reason or "")[:1000]})
     with ACTIVE_LOCK:
         process = ACTIVE.get(task_id)
+        managed = task_id in MANAGED
+    if state['status'] == 'queued' and process is None and not managed and task_finalization.FIELD in state:
+        registry.patch_task(run, status='cancelled', ended_at=registry.now())
+        task_finalization.settle(run)
     if state.get('engine') in ('workbuddy', 'zcode'):
         # The CLI is owned by WorkBuddy's host, not a child of this Python
         # process. The worker observes cancelled.flag and closes its exact lease.
@@ -1601,7 +2040,7 @@ def update_review(task_id, body, authority=None, request_id=''):
         if review_after == review_before:
             raise ReviewRefused(str(error)) from None
         raise
-    return {"task_id": task_id, "review": record, "summary": delegation_policy.panel_summary(record)}
+    return {"task_id": task_id, "review": record, "summary": delegation_policy.panel_summary(record,registry.read_task(run))}
 
 
 # ------------------------------------------------------- goals / stages / handover
@@ -1725,7 +2164,54 @@ def stage_dispatch_policy(stage, body):
     return routing, policy
 
 
-def dispatch_stage(stage_id, body, project=None):
+def _approved_stage_dispatch(stage,choice,proof):
+    # Local controller tasks only. The signed brain gateway still refuses
+    # staged dispatch; this path never impersonates a native brain owner.
+    try:
+        return dispatch_stage(stage['id'],{
+            'prompt':stage['objective']+'\n\n验收条件：\n'+'\n'.join(stage['acceptance']),
+            'model_id':choice['model_id'],'engine':choice['engine'],'route_mode':'auto',
+            'plan_dispatch':proof,'source':'approved_plan'},project=stage['project'])
+    except ValueError:
+        current=stage_store.get_stage(stage['id'],stage['project'])
+        if current['task_ids']==stage['task_ids'] and current['active_task_id']==stage['active_task_id']:
+            import approved_plan
+            raise approved_plan.NotSubmitted('派发条件拒绝，阶段未领取；需要检查后明确续接') from None
+        raise
+
+
+def _approved_integration(project,ids,checks,request_id):
+    result=integration_queue.enqueue(project,ids,checks,request_id=request_id)
+    integration_queue.schedule(project,result['name'],EXECUTOR.submit)
+    return result
+
+
+def approved_plan_action(view,goal,action,body):
+    import approved_plan
+    project=project_views.explicit_project(view)
+    if not project:raise ValueError('批准计划需要明确项目，不支持全部项目或未知项目')
+    if not isinstance(body,dict):raise ValueError('计划参数需要对象')
+    if action=='signal':
+        if set(body)!={'task_id'}:raise ValueError('通知只接受原任务标识')
+        return approved_plan.signal(goal,project,body['task_id'])
+    if action=='view':
+        if body:raise ValueError('查看原计划不接受参数')
+        return approved_plan.view(goal,project)
+    if action=='preview':
+        if set(body)-{'checks'}:raise ValueError('预览只接受联合检查计划')
+        return approved_plan.preview(goal,project,body.get('checks'))
+    if set(body)-{'digest','checks','confirm'} or body.get('confirm') is not True:
+        raise ValueError('计划操作需要明确确认及原版本摘要')
+    result=approved_plan.change(goal,project,action,expected=body.get('digest'),checks=body.get('checks'))
+    if action in ('approve','resume'):
+        responsibility=(result.get('plan') or {}).get('document',{}).get('definition',{}).get('responsibility',{})
+        if responsibility.get('mode')!='brain':
+            approved_plan.attach(goal,project,EXECUTOR.submit,_approved_stage_dispatch,
+                lambda ids,checks,request_id:_approved_integration(project,ids,checks,request_id))
+    return result
+
+
+def dispatch_stage(stage_id, body, project=None, *, trusted=None, authority=None, request_id=''):
     """Dispatch one stage task through the shared queue, routing and authorization."""
     stage = stage_store.get_stage(stage_id, project)
     if stage is None:
@@ -1791,14 +2277,19 @@ def dispatch_stage(stage_id, body, project=None):
     # A dependent stage receives its validated prerequisite handovers in the
     # fresh prompt; a missing, mismatched or stale required handover blocks the
     # dispatch instead of silently sending an under-contextualized request.
+    prerequisite_baseline=None
     if stage["depends_on"]:
         try:
-            context = task_handover.prerequisite_prompt(stage_id, project=project or None)
+            handovers=task_handover.prerequisite_handovers(stage_id,project=project or None)
+            context = task_handover.prerequisite_prompt(stage_id, project=project or None,handovers=handovers)
+            prerequisite_baseline=task_handover.prerequisite_baseline(handovers,stage.get('project') or project)
         except task_handover.HandoverError as error:
             raise ValueError(str(error)) from None
         if context:
             submit["prompt"] = (str(submit.get("prompt") or "") + "\n\n" + context).strip()
-    row = submit_task(submit)
+    internal={'trusted':trusted,'authority':authority,'request_id':request_id} if trusted is not None else {}
+    if prerequisite_baseline:internal['prerequisite_baseline']=prerequisite_baseline
+    row=submit_task(submit,**internal)
     # Durable, inspectable record of what the caller tried to change and what the
     # stage store overrode.  Never a silent replacement.
     if isinstance(row, dict) and row.get("id"):
@@ -1916,6 +2407,8 @@ def recover_task(task_id, body=None, actor="main"):
     click can never enqueue a duplicate.
     """
     body = body if isinstance(body, dict) else {}
+    if body.get('finalize_only') is True:
+        return reconcile_task_finalization(task_id, body, actor=actor)
     run = registry.task_dir(task_id)
     if not run.is_dir():
         raise ValueError("任务不存在")
@@ -1954,7 +2447,7 @@ def recover_task(task_id, body=None, actor="main"):
         # real identity check instead of risking a duplicate execution.
         raise ValueError("无法确认原执行进程状态（进程表不可读或被拒绝），已拒绝恢复以避免重复执行")
     with ACTIVE_LOCK:
-        active = task_id in ACTIVE
+        active = task_id in ACTIVE or task_id in MANAGED
     if active:
         raise ValueError("该任务已经在执行队列中，无需恢复")
     stage_id = state.get("stage_id")
@@ -2226,6 +2719,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.guard()
             path = urlparse(self.path).path
+            if path == "/api/ready":
+                return self.send_json({"service": "model-desk", "ready": True,
+                                       "workspace": str(HERE.parent),"approved_plan_notifications":1})
             if path == "/api/session":
                 return self.send_json({"token": TOKEN})
             if path == "/api/state":
@@ -2237,10 +2733,11 @@ class Handler(BaseHTTPRequestHandler):
                 agent_rows = execution_engines.public_agents()
                 endpoint_rows = execution_endpoints.public_rows(enriched['models'], settings, agent_rows)
                 return self.send_json({**enriched, "tasks": panel_snapshot_tasks(self.project_view), "server_time": registry.now(),
-                                      "workspace": str(HERE.parent), "execution": "任务按顺序执行", "agent": execution_engines.public_selection(settings)[1],
+                                      "workspace": str(HERE.parent), "execution": "任务并发上限：" + str(settings.get('max_parallel_tasks',1)), "agent": execution_engines.public_selection(settings)[1],
                                       "execution_agents": agent_rows,
                                       "execution_endpoints": endpoint_rows,
                                       'execution_activity':execution_activity(),
+                                      'integrations':integration_queue.snapshot(project_views.explicit_project(self.project_view)),
                                       'workflow': {**settings, 'daily': public_daily_cost(settings)}, 'codex_usage': codex_usage.usage_state(),
                                       'host_account': host_balance.state(),
                                       'delegation': delegation_policy.aggregate(),
@@ -2250,6 +2747,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(subagent_capabilities())
             if path == '/api/tree':
                 return self.send_json(tree_view(self.project_view))
+            if path == '/api/integrations':
+                return self.send_json(integration_queue.snapshot(project_views.explicit_project(self.project_view)))
+            match=re.fullmatch(r'/api/integrations/([A-Za-z0-9][A-Za-z0-9._-]{0,39})',path)
+            if match:
+                project=project_views.explicit_project(self.project_view)
+                if not project:raise ValueError('集成详情需要明确项目')
+                row=integration_queue.get(project,match.group(1))
+                if row is None:raise ValueError('当前项目没有这条集成记录')
+                return self.send_json({'integration':row,**integration_queue.observe(row),'read_only':True})
             if path == '/api/observability':
                 return self.send_json(observability_batch(view=self.project_view))
             if path == '/api/projects':
@@ -2270,6 +2776,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(recovery_report(self.project_view))
             if path.startswith('/api/goals/'):
                 parts = path.split('/')
+                if len(parts)==5 and parts[4]=='plan':
+                    import approved_plan
+                    return self.send_json(approved_plan.view(parts[3],project_views.explicit_project(self.project_view)))
                 if len(parts) == 4 and parts[3]:
                     return self.send_json(goal_detail(parts[3], self.project_view))
             if path.startswith('/api/stages/'):
@@ -2353,20 +2862,28 @@ class Handler(BaseHTTPRequestHandler):
                         row.pop("launcher_pid", None)
                         row['review'] = review_facts(parts[3])
                         import execution_result
-                        row['execution_result'] = execution_result.project(row, row['review'])
+                        row['execution_result'] = execution_result.project_with_context(row, row['review'], run=run)
                 if not isinstance(row, dict):
                     return self.send_json({"task": None, "transient": True,
                                            "error": "任务记录暂时不可读，请重试"}, 503)
                 return self.send_json({"task": public_task_cost(row), "prompt": prompt.read_text(encoding="utf-8") if prompt.exists() else ""})
             assets = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
                       '/project-map.js': 'project-map.js', '/project-map.css': 'project-map.css',
-                      '/execution-result.js': 'execution-result.js', '/execution-result.css': 'execution-result.css'}
+                      '/execution-result.js': 'execution-result.js', '/execution-result.css': 'execution-result.css',
+                      '/task-status.js': 'task-status.js', '/task-status.css': 'task-status.css',
+                      '/task-graph.js': 'task-graph.js', '/task-graph.css': 'task-graph.css',
+                      '/integration-queue.js':'integration-queue.js','/integration-queue.css':'integration-queue.css',
+                      '/approved-plan.js':'approved-plan.js'}
             if path not in assets:
                 return self.send_json({"error": "页面不存在"}, 404)
             raw = (WEB / assets[path]).read_bytes()
             mime = {"/": "text/html", "/app.js": "text/javascript", "/style.css": "text/css",
                     '/project-map.js': 'text/javascript', '/project-map.css': 'text/css',
-                    '/execution-result.js': 'text/javascript', '/execution-result.css': 'text/css'}[path]
+                    '/execution-result.js': 'text/javascript', '/execution-result.css': 'text/css',
+                    '/task-status.js': 'text/javascript', '/task-status.css': 'text/css',
+                    '/task-graph.js': 'text/javascript', '/task-graph.css': 'text/css',
+                    '/integration-queue.js':'text/javascript','/integration-queue.css':'text/css',
+                    '/approved-plan.js':'text/javascript'}[path]
             self.send_response(200)
             self.send_header("Content-Type", mime + "; charset=utf-8")
             self.send_header("Content-Length", str(len(raw)))
@@ -2474,10 +2991,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(discover(body))
             if path == "/api/tasks":
                 return self.send_json(submit_task(body), 202)
+            if path == '/api/integrations':
+                return self.send_json({'integration':integration_action(self.project_view,body)},202)
+            match=re.fullmatch(r'/api/integrations/([A-Za-z0-9][A-Za-z0-9._-]{0,39})/(resume|cancel|reconcile)',path)
+            if match:
+                return self.send_json({'integration':integration_action(self.project_view,body,*match.groups())})
             if path == "/api/goals":
                 return self.send_json(create_goal(body), 201)
             if path == "/api/stages":
                 return self.send_json(create_stage(body), 201)
+            match=re.fullmatch(r'/api/goals/([A-Za-z0-9_-]+)/plan/(view|preview|approve|pause|resume|revoke|signal)',path)
+            if match:
+                return self.send_json(approved_plan_action(self.project_view,*match.groups(),body))
             match = re.fullmatch(r"/api/goals/([A-Za-z0-9_-]+)/status", path)
             if match:
                 return self.send_json(set_goal_status(
@@ -2589,12 +3114,30 @@ def _recorded_process_verdict(pid, state):
     except psutil.Error:
         return WORKER_STATE_UNKNOWN
     try:
-        command = " ".join(process.cmdline())
+        arguments = process.cmdline()
+        command = " ".join(arguments)
         created = float(process.create_time())
     except psutil.NoSuchProcess:
         return False
     except psutil.Error:
         return WORKER_STATE_UNKNOWN
+    if str(pid) == str(state.get('child_pid')):
+        import process_identity
+        match = process_identity.matches(state.get('child_process_identity'), pid, created, arguments)
+        return WORKER_STATE_UNKNOWN if match is None else match
+    engine = state.get('engine') if isinstance(state, dict) else None
+    if engine in ('dsh', 'pi') and state.get('id') and str(pid) == str(state.get('process_pid')):
+        wrapper = HERE / 'agent-runtime' / ('run-' + engine + '.mjs')
+        def equal_path(value, expected):
+            try:
+                return Path(value).resolve() == Path(expected).resolve()
+            except (OSError, ValueError):
+                return False
+        if any(equal_path(arg, wrapper) for arg in arguments):
+            job = registry.task_dir(state['id'], project=state.get('project')) / (engine + '-job.json')
+            # Wrapper starts after started_at; its exact task-owned job path is
+            # positive identity evidence, unlike a generic Node process name.
+            return True if any(equal_path(arg, job) for arg in arguments) else WORKER_STATE_UNKNOWN
     if not any(str(HERE / script) in command for script in WORKER_SCRIPTS):
         # Foreign process or a reused PID: not ours, so not a live worker.
         return False
@@ -2633,6 +3176,78 @@ def recorded_worker_alive(state):
     return False
 
 
+def reconcile_task_finalization(task_id, body, actor='main', *, authority=None, request_reference=None):
+    """Explicit controller-only recovery: never enqueue or send a prompt.
+
+    Keep the record lock through resource release and settlement. A terminal
+    snapshot cannot race an explicit recovery claim. Unknown native closure or
+    process identity remains occupied for inspection rather than being guessed.
+    """
+    if body.get('confirm') is not True:
+        raise ValueError('核对收尾需要 confirm=true；不会重新发送模型请求')
+    run = registry.task_dir(task_id)
+    if not (run / 'task.json').is_file():
+        raise ValueError('任务不存在')
+    with registry.file_lock(run / 'finalize.lock'):
+        return _reconcile_task_finalization_locked(task_id, run, actor, authority, request_reference)
+
+
+def _reconcile_task_finalization_locked(task_id, run, actor, authority=None, request_reference=None):
+    with registry.file_lock(run / 'task.lock'):
+        state = registry.read_json(run / 'task.json')
+        delegation_policy._require_brain_authority(state, authority)
+        with ACTIVE_LOCK:
+            if task_id in MANAGED or task_id in ACTIVE:
+                raise ValueError('任务仍由控制器处理；不能重复收尾')
+            if task_finalization.view(state)['state'] not in ('pending', 'attention'):
+                raise ValueError('任务不需要重新收尾；已确认的成果不能重新提交')
+            review = delegation_policy.load(run)
+            if review and review.get('state') in ('accepted', 'final_accepted'):
+                raise ValueError('已验收成果不能通过重新收尾改写提交')
+            if state.get('id') != task_id or state.get('status') not in task_finalization.TERMINAL | {'recovery_pending'}:
+                raise ValueError('仅能核对已结束或中断待恢复任务的控制器收尾')
+            if recorded_worker_alive(state) is not False:
+                raise ValueError('原执行进程仍在运行或身份未知；保留资源')
+            if state.get('engine') in ('workbuddy', 'zcode'):
+                native = state.get(state['engine']) or {}
+                if native.get('cleanup') not in ('closed', 'not_created') and (native or state.get('launcher_pid')):
+                    raise ValueError('原生会话关闭未确认；保留资源，不能仅凭进程退出释放')
+            held = execution_resources.snapshot().get(task_id)
+            if held and held['project'] != (execution_resources._path(state['project']) if state.get('project') else None):
+                raise ValueError('执行资源与任务项目不匹配；未释放')
+            if held:
+                if {'resource':execution_resources._key('model',str(state.get('model_id') or 'unknown')),'mode':'exclusive'} not in held['requests']:
+                    raise ValueError('执行资源与任务模型不匹配；未释放')
+                saved=(state.get('resource_reservation') or {}).get('requests')
+                if saved is not None and saved != held['requests']:
+                    raise ValueError('执行资源与任务冻结快照不匹配；未释放')
+        # Mark manual ownership while holding the task lock; claims only accept
+        # queued records, and this remains terminal throughout finalization.
+        state['controller_reconciliation'] = {'at': registry.now(), 'actor': str(actor)[:40],
+                                               'executor_replayed': False,'request_reference':request_reference}
+        registry.write_json(run / 'task.json', state)
+        with ACTIVE_LOCK:
+            MANAGED.add(task_id)
+    try:
+        # Clear a previous commit diagnostic only by a verified fresh commit.
+        if (state.get('status') == 'completed' or state.get('workspace_commit_error')) and (state.get('workspace') or {}).get('created'):
+            registry.patch_task(run, workspace_commit_error=None)
+            commit_workspace_for_run(run, registry.read_task(run),freeze_failed=state.get('status')!='completed')
+        if held:
+            execution_resources.release(task_id, expected=held)
+        for kind, name in (('model', state.get('model_id')), ('budget', 'paid')):
+            if name and task_leases.holders().get(task_leases.key(kind, str(name)), {}).get('task_id') == task_id:
+                task_leases.release(kind, str(name), task_id)
+        value = task_finalization.settle(run,allow_recovery=True)
+        return {'task_id': task_id, 'controller_finalization': value, 'executor_replayed': False}
+    except Exception:
+        task_finalization.interrupt(run)
+        raise
+    finally:
+        with ACTIVE_LOCK:
+            MANAGED.discard(task_id)
+
+
 def recovery_record(kind, reason):
     return {"schema": 1, "kind": kind, "reason": reason, "at": registry.now(),
             "auto_resend": False,
@@ -2662,10 +3277,19 @@ def recover_pending_tasks(entries=None):
             state = json.loads(task_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        status = state.get("status")
+        if task_finalization.view(state)['state'] == 'pending' and (
+                status in task_finalization.TERMINAL or status == 'running'):
+            value = task_finalization.interrupt(run)
+            actions.append({'task_id': state.get('id') or run.name,
+                            'kind': 'controller_finalize_interrupted', 'reason': value['note']})
         if (run / "cancelled.flag").exists():
             # A real cancellation is never turned into a pending recovery.
+            if status in ('queued', 'running') and recorded_worker_alive(state) is False:
+                registry.patch_task(run, status='cancelled', phase='已停止执行', ended_at=registry.now())
+                if task_finalization.FIELD in state:
+                    task_finalization.interrupt(run)
             continue
-        status = state.get("status")
         try:
             if status == "queued" and (state.get("source") == "panel" or state.get("engine") in execution_engines.AGENTS):
                 reason = "面板重启时任务尚未开始执行"

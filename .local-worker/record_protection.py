@@ -182,4 +182,11 @@ def verify_proof(run, project, session_id=None):
         raise ValueError('DSH 工作台记录写入保护证据来自子会话而非父会话，父会话未被保护')
     if not proof_session:
         raise ValueError('DSH 工作台记录写入保护证据缺少写入会话身份，无法证明来自父会话')
+    if (Path(run) / 'task.json').exists():
+        import endpoint_access
+        state=json.loads((Path(run)/'task.json').read_text(encoding='utf-8'))
+        if data.get('task_policy') != endpoint_access.task_policy(state):
+            raise ValueError('DSH 保护证据与任务写入范围不符')
+    import execution_result
+    execution_result.guard_problem(data)
     return {**data, 'matched': 'parent'}

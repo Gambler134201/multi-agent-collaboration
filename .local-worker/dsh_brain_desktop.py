@@ -28,10 +28,16 @@ PACKAGE = 'model-desk-dsh-brain'
 ENV_NAME = 'MODEL_DESK_DSH_BRAIN_CONFIG'
 FILES = ('index.cjs', 'account.cjs', 'wakeup.cjs', 'client.mjs', 'package.json', 'cordis.patch.yml', 'README.md', 'LICENSE')
 RUNTIME_FILES = ('brain_mcp_server.py','brain_context.py','brain_transport.py','brain_gateway.py',
+                 'brain_plan.py','approved_plan.py','integration_queue.py',
                  'brain_requests.py','failure_classification.py','execution_result.py',
+                 'task_status.py','integration_status.py',
                  'project_map.py','context_manager.py',
                  'workflow_settings.py','host_balance.py','completion_wait.py','desktop_notify.py',
-                 'completion_host.py','dsh_notify.py','panel_service.py','powershell_runtime.py')
+                 'completion_host.py','dsh_notify.py','panel_service.py','panel_startup.py','powershell_runtime.py',
+                 'panel_server.py','execution_resources.py','task_finalization.py','process_identity.py',
+                 'task_workspace.py','task_integration.py','task_handover.py','task_leases.py',
+                 'delegation_policy.py','stage_store.py','model_registry.py','project_storage.py',
+                 'dsh_worker.py','pi_worker.py','workbuddy_worker.py','zcode_worker.py','workflow_assist.py')
 CLIENT_ORIGIN_MARKER = b'"__MODEL_DESK_PANEL_ORIGIN__"'
 CLI_RELATIVE = 'dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js'
 SUPPORTED_DSH = '0.2.1-rc.2'
@@ -133,18 +139,70 @@ def ours_matches(manifest, folder, home):
     return value.resolve() == folder / 'plugin.tgz'
 
 
-def probe_dsh(executable):
-    """Inspect the installed static runtime, not user configuration."""
+def _probe_entry(container, relative):
+    """Read one official entry from the asar or its unpacked resources/app form."""
     import preset_runtime
+    if container.suffix == '.asar':
+        return preset_runtime._asar_read(container, relative)
+    target = (container / relative).resolve(strict=True)
+    if not target.is_relative_to(container.resolve()):
+        raise ValueError('展开的 DSH 官方文件路径越界')
+    return target.read_bytes()
+
+
+def probe_dsh(executable):
+    """Inspect the installed static runtime, not user configuration.
+
+    DSH ships as resources/app.asar and may unpack it to resources/app with the
+    same files; the unpacked form is read directly, mirroring
+    preset_runtime._standard_sources. The recorded cli path follows whichever
+    container actually resolves.
+    """
     archive = Path(executable).parent / 'resources' / 'app.asar'
+    if not archive.is_file():
+        archive = archive.with_name('app')
     try:
-        manifest = json.loads(preset_runtime._asar_read(archive, 'dsh/node_modules/@deepseek-ai/dsh/package.json'))
-        preset_runtime._asar_read(archive, CLI_RELATIVE)
+        manifest = json.loads(_probe_entry(archive, 'dsh/node_modules/@deepseek-ai/dsh/package.json'))
+        _probe_entry(archive, CLI_RELATIVE)
     except (ValueError, OSError, KeyError):
         raise SetupError('无法确认该 DSH 安装的官方 desktop CLI') from None
     if manifest.get('version') != SUPPORTED_DSH:
         raise SetupError('该 DSH 版本尚未通过本安装器验证')
     return {'version': manifest['version'], 'cli': str(archive / CLI_RELATIVE)}
+
+
+def layout_drift(recorded, probe):
+    """Accept only the official app.asar → resources/app unpack of one install.
+
+    After such an unpack the receipt's recorded cli path no longer resolves.
+    Same version, same install root and same official entry mean the mutation
+    still targets the recorded installation; anything else stays rejected and
+    an accepted drift is written into the receipt instead of being silent.
+    """
+    relative = Path(CLI_RELATIVE)
+    try:
+        recorded_cli, resolved_cli = Path(recorded['cli']), Path(probe['cli'])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if probe.get('version') != recorded.get('version'):
+        return None
+
+    def container(path):
+        parts = path.parts
+        if 'resources' not in parts:
+            return None
+        index = parts.index('resources')
+        if len(parts) != index + 2 + len(relative.parts) or parts[index + 2:] != relative.parts:
+            return None
+        return parts[:index], parts[index + 1]
+
+    left, right = container(recorded_cli), container(resolved_cli)
+    if not left or not right or left[0] != right[0] or left[1] == right[1]:
+        return None
+    if {left[1], right[1]} - {'app.asar', 'app'}:
+        return None
+    return {'recorded_cli': str(recorded_cli), 'resolved_cli': str(resolved_cli),
+            'version': probe['version']}
 
 
 def controller_check(plan):
@@ -510,13 +568,21 @@ def uninstall(folder, *, environment=None, runner=None):
         record['state'] = 'removing'
         save_receipt(folder, record)
         try:
+            host = plan['host']
             if has_ours(before):
-                if probe_dsh(explicit_path(plan['dsh_exe'])) != plan['host']:
-                    raise SetupError('DSH 安装版本变化，需先核查')
+                probe = probe_dsh(explicit_path(plan['dsh_exe']))
+                if probe != host:
+                    drift = layout_drift(host, probe)
+                    if drift is None:
+                        raise SetupError('DSH 安装版本变化，需先核查')
+                    host = {**host, 'cli': drift['resolved_cli']}
+                    record['host_drift'] = drift
+                    save_receipt(folder, record)
                 record['effect_unknown'] = True
                 save_receipt(folder, record)
-                (runner or official_cli)(plan, ['remove', PACKAGE, '--config.ignore-scripts=true',
-                                              '--config.auto-install-peers=false', '--config.offline=true'])
+                (runner or official_cli)({**plan, 'host': host},
+                                         ['remove', PACKAGE, '--config.ignore-scripts=true',
+                                          '--config.auto-install-peers=false', '--config.offline=true'])
                 record['effect_unknown'] = False
                 save_receipt(folder, record)
             _, after = profile_manifest(plan['dsh_home'])
